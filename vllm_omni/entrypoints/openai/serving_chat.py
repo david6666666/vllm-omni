@@ -86,7 +86,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
 
     This class extends OpenAIServingChat to support:
     - Standard LLM chat completions
-    - Diffusion model image generation via chat interface
+    - Diffusion model image/video generation via chat interface
 
     For diffusion mode, use the `for_diffusion` class method to create an instance.
     """
@@ -133,7 +133,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
         for the API specification. This API mimics the OpenAI
         Chat Completion API.
 
-        For diffusion models, this generates images and returns them
+        For diffusion models, this generates images or videos and returns them
         in a chat completion response format.
         """
         # Handle diffusion mode
@@ -1007,6 +1007,174 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
 
         return choices
 
+    def _extract_diffusion_outputs(self, result: Any) -> list[Any]:
+        outputs: list[Any] = []
+        if result is None:
+            return outputs
+
+        if isinstance(result, OmniRequestOutput):
+            if result.images:
+                outputs.extend(result.images)
+            elif result.request_output is not None:
+                outputs.extend(self._extract_diffusion_outputs(result.request_output))
+            return outputs
+
+        if isinstance(result, dict):
+            if result.get("images"):
+                outputs.extend(result["images"])
+            return outputs
+
+        if hasattr(result, "images") and result.images:
+            outputs.extend(result.images)
+        elif hasattr(result, "request_output") and result.request_output is not None:
+            outputs.extend(self._extract_diffusion_outputs(result.request_output))
+
+        return outputs
+
+    def _is_pil_sequence(self, item: Any) -> bool:
+        return isinstance(item, (list, tuple)) and item and all(isinstance(x, Image.Image) for x in item)
+
+    def _is_array_like(self, item: Any) -> bool:
+        try:
+            import torch
+        except ImportError:
+            torch = None
+        import numpy as np
+
+        array_types = (np.ndarray,) if torch is None else (np.ndarray, torch.Tensor)
+        return isinstance(item, array_types)
+
+    def _get_array_ndim(self, item: Any) -> int | None:
+        import numpy as np
+
+        if isinstance(item, np.ndarray):
+            return item.ndim
+        try:
+            import torch
+        except ImportError:
+            return None
+        if isinstance(item, torch.Tensor):
+            return item.dim()
+        return None
+
+    def _split_video_batch(self, video: Any) -> list[Any]:
+        ndim = self._get_array_ndim(video)
+        if ndim == 5:
+            return [video[i] for i in range(video.shape[0])]
+        return [video]
+
+    def _split_video_sequence(self, items: list[Any]) -> list[Any]:
+        has_batched_videos = any((self._get_array_ndim(item) or 0) >= 4 for item in items)
+        if has_batched_videos:
+            videos = []
+            for item in items:
+                videos.extend(self._split_video_batch(item))
+            return videos
+        return [items]
+
+    def _split_diffusion_visual_outputs(self, outputs: list[Any]) -> tuple[list[Image.Image], list[Any]]:
+        images: list[Image.Image] = []
+        videos: list[Any] = []
+
+        for item in outputs:
+            if isinstance(item, Image.Image):
+                images.append(item)
+                continue
+            if self._is_pil_sequence(item):
+                images.extend(item)
+                continue
+            if isinstance(item, (list, tuple)) and item and all(self._is_array_like(x) for x in item):
+                videos.extend(self._split_video_sequence(list(item)))
+                continue
+            if self._is_array_like(item):
+                videos.extend(self._split_video_batch(item))
+                continue
+            logger.warning("Unsupported diffusion output type: %s", type(item))
+
+        return images, videos
+
+    def _normalize_video_frame(self, frame):
+        import numpy as np
+
+        if frame.dtype == np.uint8:
+            return frame.astype(np.float32) / 255.0
+
+        frame = frame.astype(np.float32)
+        if frame.min() < 0:
+            frame = np.clip(frame, -1.0, 1.0)
+            frame = frame * 0.5 + 0.5
+        elif frame.max() > 1.0:
+            frame = np.clip(frame, 0.0, 255.0) / 255.0
+        else:
+            frame = np.clip(frame, 0.0, 1.0)
+        return frame
+
+    def _ensure_frame_hwc(self, frame):
+        import numpy as np
+
+        if frame.ndim == 2:
+            return np.expand_dims(frame, axis=-1)
+        if frame.ndim == 3 and frame.shape[0] in (1, 3, 4) and frame.shape[-1] not in (1, 3, 4):
+            return np.transpose(frame, (1, 2, 0))
+        return frame
+
+    def _coerce_video_frames(self, video: Any) -> list[Any]:
+        import numpy as np
+
+        try:
+            import torch
+        except ImportError:
+            torch = None
+
+        def to_numpy(item):
+            if torch is not None and isinstance(item, torch.Tensor):
+                return item.detach().cpu().numpy()
+            if isinstance(item, np.ndarray):
+                return item
+            return np.asarray(item)
+
+        if isinstance(video, (list, tuple)):
+            frames = []
+            for frame in video:
+                frame_arr = self._ensure_frame_hwc(to_numpy(frame))
+                frames.append(self._normalize_video_frame(frame_arr))
+            return frames
+
+        arr = to_numpy(video)
+        if arr.ndim == 5:
+            arr = arr[0]
+
+        if arr.ndim == 4:
+            if arr.shape[0] in (1, 3, 4) and arr.shape[-1] not in (1, 3, 4):
+                arr = np.transpose(arr, (1, 2, 3, 0))
+            elif arr.shape[-1] not in (1, 3, 4) and arr.shape[1] in (1, 3, 4):
+                arr = np.transpose(arr, (0, 2, 3, 1))
+            return [self._normalize_video_frame(self._ensure_frame_hwc(arr[i])) for i in range(arr.shape[0])]
+
+        if arr.ndim == 3:
+            return [self._normalize_video_frame(self._ensure_frame_hwc(arr))]
+
+        raise ValueError(f"Unsupported video shape: {getattr(arr, 'shape', None)}")
+
+    def _encode_video_base64(self, video: Any, fps: int) -> str:
+        try:
+            from diffusers.utils import export_to_video
+        except ImportError as exc:
+            raise RuntimeError("diffusers is required for export_to_video.") from exc
+
+        frames = self._coerce_video_frames(video)
+        if not frames:
+            raise ValueError("No frames available for video export")
+
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            video_path = os.path.join(tmpdir, f"video_{uuid.uuid4().hex}.mp4")
+            export_to_video(frames, video_path, fps=fps)
+            with open(video_path, "rb") as f:
+                return base64.b64encode(f.read()).decode("utf-8")
+
     # ==================== Diffusion Mode Methods ====================
 
     async def _create_diffusion_chat_completion(
@@ -1014,7 +1182,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
         request: ChatCompletionRequest,
         raw_request: Request | None = None,
     ) -> ChatCompletionResponse | ErrorResponse:
-        """Generate images via chat completion interface for diffusion models.
+        """Generate images or videos via chat completion interface for diffusion models.
 
         Args:
             request: Chat completion request
@@ -1070,6 +1238,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
 
             # Text-to-video parameters (ref: text_to_video.py)
             num_frames = extra_body.get("num_frames")
+            fps = extra_body.get("fps")
             guidance_scale_2 = extra_body.get("guidance_scale_2")  # For video high-noise CFG
 
             logger.info(
@@ -1111,6 +1280,8 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             # Add video generation parameters if set
             if num_frames is not None:
                 gen_kwargs["num_frames"] = num_frames
+            if fps is not None:
+                gen_kwargs["fps"] = fps
             if guidance_scale_2 is not None:
                 gen_kwargs["guidance_scale_2"] = guidance_scale_2
 
@@ -1150,33 +1321,46 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             else:
                 # AsyncOmniDiffusion: direct call
                 result = await self._diffusion_engine.generate(**gen_kwargs)
-            # Extract images from result
-            # Handle nested OmniRequestOutput structure where images might be in request_output
-            images: list[Image.Image] = []
-            if result.request_output["images"]:
-                images = result.request_output["images"]
+            outputs = self._extract_diffusion_outputs(result)
+            images, videos = self._split_diffusion_visual_outputs(outputs)
 
-            # Convert images to base64 content
+            video_contents: list[dict[str, Any]] = []
+            if videos:
+                video_fps = int(fps) if fps is not None else 24
+                for video in videos:
+                    video_base64 = self._encode_video_base64(video, video_fps)
+                    video_contents.append(
+                        {
+                            "type": "video_url",
+                            "video_url": {
+                                "url": f"data:video/mp4;base64,{video_base64}",
+                            },
+                        }
+                    )
+
             image_contents: list[dict[str, Any]] = []
-            for img in images:
-                with BytesIO() as buffer:
-                    img.save(buffer, format="PNG")
-                    img_bytes = buffer.getvalue()
-                img_base64 = base64.b64encode(img_bytes).decode("utf-8")
-                image_contents.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{img_base64}",
-                        },
-                    }
-                )
+            if images and not video_contents:
+                for img in images:
+                    with BytesIO() as buffer:
+                        img.save(buffer, format="PNG")
+                        img_bytes = buffer.getvalue()
+                    img_base64 = base64.b64encode(img_bytes).decode("utf-8")
+                    image_contents.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{img_base64}",
+                            },
+                        }
+                    )
 
             # Build response
-            if not image_contents:
-                content = "Image generation completed but no images were produced."
-            else:
+            if video_contents:
+                content = video_contents
+            elif image_contents:
                 content = image_contents
+            else:
+                content = "Generation completed but no visual outputs were produced."
 
             # Use model_construct to bypass validation for multimodal content
             # (ChatMessage.content only accepts str, but we need list for images)
@@ -1211,9 +1395,10 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             )
 
             logger.info(
-                "Diffusion chat completed for request %s: %d images",
+                "Diffusion chat completed for request %s: %d images, %d videos",
                 request_id,
                 len(images),
+                len(video_contents),
             )
 
             return response
@@ -1221,7 +1406,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
         except Exception as e:
             logger.exception("Diffusion chat completion failed: %s", e)
             return self._create_error_response(
-                f"Image generation failed: {str(e)}",
+                f"Diffusion generation failed: {str(e)}",
                 status_code=500,
             )
 
