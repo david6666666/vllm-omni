@@ -21,9 +21,25 @@ def _pil_to_b64_png(img: Image.Image) -> str:
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
+def _get_upload_path(item: object) -> str | None:
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        for key in ("path", "name"):
+            val = item.get(key)
+            if isinstance(val, str):
+                return val
+        return None
+    for attr in ("path", "name"):
+        val = getattr(item, attr, None)
+        if isinstance(val, str):
+            return val
+    return None
+
+
 def edit_image(
     input_image: Image.Image,
-    extra_images: list[str] | None,
+    extra_images: list[object] | None,
     prompt: str,
     steps: int,
     guidance_scale: float,
@@ -37,11 +53,17 @@ def edit_image(
 
     images: list[Image.Image] = [input_image]
     if extra_images:
-        for p in extra_images:
+        for item in extra_images:
+            if item is None:
+                continue
             try:
-                images.append(Image.open(p).convert("RGB"))
+                path = _get_upload_path(item)
+                if path:
+                    images.append(Image.open(path).convert("RGB"))
+                else:
+                    images.append(Image.open(item).convert("RGB"))
             except Exception as e:
-                raise gr.Error(f"Failed to open image: {p}. Error: {e}") from e
+                raise gr.Error(f"Failed to open image: {path or item}. Error: {e}") from e
 
     # Build user message with text and image
     content: list[dict[str, object]] = [{"type": "text", "text": prompt}]
