@@ -27,6 +27,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int, default=720, help="Video height.")
     parser.add_argument("--width", type=int, default=1280, help="Video width.")
     parser.add_argument("--num_frames", type=int, default=81, help="Number of frames (Wan default is 81).")
+    parser.add_argument(
+        "--frame_rate",
+        type=float,
+        default=None,
+        help="Optional generation frame rate (used by models like LTX2). Defaults to --fps.",
+    )
     parser.add_argument("--num_inference_steps", type=int, default=40, help="Sampling steps.")
     parser.add_argument("--boundary_ratio", type=float, default=0.875, help="Boundary split ratio for low/high DiT.")
     parser.add_argument(
@@ -34,6 +40,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output", type=str, default="wan22_output.mp4", help="Path to save the video (mp4).")
     parser.add_argument("--fps", type=int, default=24, help="Frames per second for the output video.")
+    parser.add_argument(
+        "--audio_output",
+        type=str,
+        default=None,
+        help="Optional path to save audio (wav) when the pipeline returns audio (e.g., LTX2).",
+    )
+    parser.add_argument(
+        "--audio_sample_rate",
+        type=int,
+        default=24000,
+        help="Sample rate for audio output when saved (default: 24000 for LTX2).",
+    )
     return parser.parse_args()
 
 
@@ -41,6 +59,7 @@ def main():
     args = parse_args()
     device = detect_device_type()
     generator = torch.Generator(device=device).manual_seed(args.seed)
+    frame_rate = args.frame_rate if args.frame_rate is not None else float(args.fps)
 
     # Enable VAE memory optimizations on NPU
     vae_use_slicing = is_npu()
@@ -64,9 +83,11 @@ def main():
         guidance_scale_2=args.guidance_scale_high,
         num_inference_steps=args.num_inference_steps,
         num_frames=args.num_frames,
+        frame_rate=frame_rate,
     )
 
     # Extract video frames from OmniRequestOutput
+    audio = None
     if isinstance(frames, list) and len(frames) > 0:
         first_item = frames[0]
 
@@ -90,6 +111,12 @@ def main():
                 frames = first_item.images
             else:
                 raise ValueError("No video frames found in OmniRequestOutput.")
+
+    if isinstance(frames, tuple) and len(frames) == 2:
+        frames, audio = frames
+    elif isinstance(frames, dict):
+        audio = frames.get("audio")
+        frames = frames.get("frames") or frames.get("video")
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -125,6 +152,36 @@ def main():
 
     export_to_video(video_array, str(output_path), fps=args.fps)
     print(f"Saved generated video to {output_path}")
+
+    if audio is not None and args.audio_output:
+        audio_path = Path(args.audio_output)
+        audio_path.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(audio, torch.Tensor):
+            audio = audio.detach().cpu().float().numpy()
+        if isinstance(audio, np.ndarray) and audio.ndim == 3:
+            audio_data = audio[0].T
+        elif isinstance(audio, np.ndarray) and audio.ndim == 2:
+            audio_data = audio.T
+        else:
+            audio_data = audio
+        try:
+            import soundfile as sf
+
+            sf.write(str(audio_path), audio_data, args.audio_sample_rate)
+        except ImportError:
+            try:
+                import scipy.io.wavfile as wav
+
+                if isinstance(audio_data, np.ndarray) and np.issubdtype(audio_data.dtype, np.floating):
+                    audio_data = np.clip(audio_data, -1.0, 1.0)
+                    audio_data = (audio_data * 32767).astype(np.int16)
+                wav.write(str(audio_path), args.audio_sample_rate, audio_data)
+            except ImportError:
+                raise ImportError(
+                    "Either 'soundfile' or 'scipy' is required to save audio files. "
+                    "Install with: pip install soundfile or pip install scipy"
+                )
+        print(f"Saved generated audio to {audio_path}")
 
 
 if __name__ == "__main__":
