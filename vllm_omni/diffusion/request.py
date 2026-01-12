@@ -47,6 +47,7 @@ class OmniDiffusionRequest:
     # without extension
     output_file_name: str | None = None
     output_file_ext: str | None = None
+    output_type: str | None = None
     # Primary encoder embeddings
     prompt_embeds: list[torch.Tensor] | torch.Tensor = field(default_factory=list)
     negative_prompt_embeds: list[torch.Tensor] | None = None
@@ -85,6 +86,7 @@ class OmniDiffusionRequest:
 
     # Latent tensors
     latents: torch.Tensor | None = None
+    audio_latents: torch.Tensor | None = None
     raw_latent_shape: torch.Tensor | None = None
     noise_pred: torch.Tensor | None = None
     image_latent: torch.Tensor | None = None
@@ -99,6 +101,7 @@ class OmniDiffusionRequest:
     height: list[int] | int | None = None
     width: list[int] | int | None = None
     fps: list[int] | int | None = None
+    frame_rate: float | None = None
     height_not_provided: bool = False
     width_not_provided: bool = False
 
@@ -114,6 +117,8 @@ class OmniDiffusionRequest:
     guidance_scale_provided: bool = False
     guidance_scale_2: float | None = None
     guidance_rescale: float = 0.0
+    decode_timestep: float | list[float] | None = None
+    decode_noise_scale: float | list[float] | None = None
     eta: float = 0.0
     sigmas: list[float] | None = None
 
