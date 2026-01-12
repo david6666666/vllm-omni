@@ -13,6 +13,8 @@ from typing import Any
 import numpy as np
 import torch
 from diffusers import AutoencoderKLLTX2Audio, AutoencoderKLLTX2Video, FlowMatchEulerDiscreteScheduler
+from diffusers.pipelines.ltx2 import LTX2TextConnectors
+from diffusers.pipelines.ltx2.vocoder import LTX2Vocoder
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.video_processor import VideoProcessor
 from torch import nn
@@ -24,9 +26,7 @@ from vllm_omni.diffusion.distributed.utils import get_local_device
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 
-from .connectors import LTX2TextConnectors
 from .ltx2_transformer import LTX2VideoTransformer3DModel
-from .vocoder import LTX2Vocoder
 
 
 def load_transformer_config(model_path: str, subfolder: str = "transformer", local_files_only: bool = True) -> dict:
