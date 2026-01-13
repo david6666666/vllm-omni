@@ -230,9 +230,16 @@ class LTX2Pipeline(nn.Module):
         )
 
         self.video_processor = VideoProcessor(vae_scale_factor=self.vae_spatial_compression_ratio)
-        self.tokenizer_max_length = (
-            self.tokenizer.model_max_length if getattr(self, "tokenizer", None) is not None else 1024
-        )
+        tokenizer_max_length = 1024
+        if getattr(self, "tokenizer", None) is not None:
+            tokenizer_max_length = self.tokenizer.model_max_length
+            if tokenizer_max_length is None or tokenizer_max_length > 100000:
+                encoder_config = getattr(self.text_encoder, "config", None)
+                config_max_len = getattr(encoder_config, "max_position_embeddings", None)
+                if config_max_len is None:
+                    config_max_len = getattr(encoder_config, "max_seq_len", None)
+                tokenizer_max_length = config_max_len or 1024
+        self.tokenizer_max_length = int(tokenizer_max_length)
 
         self._guidance_scale = None
         self._guidance_rescale = None
