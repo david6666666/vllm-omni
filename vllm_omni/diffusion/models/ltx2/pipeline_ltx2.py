@@ -436,6 +436,20 @@ class LTX2Pipeline(nn.Module):
         if negative_prompt_embeds is not None and negative_prompt_attention_mask is None:
             raise ValueError("Must provide `negative_prompt_attention_mask` when specifying `negative_prompt_embeds`.")
 
+        if prompt_embeds is not None and negative_prompt_embeds is not None:
+            if prompt_embeds.shape != negative_prompt_embeds.shape:
+                raise ValueError(
+                    "`prompt_embeds` and `negative_prompt_embeds` must have the same shape when passed directly, but"
+                    f" got: `prompt_embeds` {prompt_embeds.shape} != `negative_prompt_embeds`"
+                    f" {negative_prompt_embeds.shape}."
+                )
+            if prompt_attention_mask.shape != negative_prompt_attention_mask.shape:
+                raise ValueError(
+                    "`prompt_attention_mask` and `negative_prompt_attention_mask` must have the same shape when passed directly, but"
+                    f" got: `prompt_attention_mask` {prompt_attention_mask.shape} != `negative_prompt_attention_mask`"
+                    f" {negative_prompt_attention_mask.shape}."
+                )
+
     @staticmethod
     def _pack_latents(latents: torch.Tensor, patch_size: int = 1, patch_size_t: int = 1) -> torch.Tensor:
         batch_size, num_channels, num_frames, height, width = latents.shape
@@ -485,8 +499,8 @@ class LTX2Pipeline(nn.Module):
     ) -> torch.Tensor:
         if patch_size is not None and patch_size_t is not None:
             batch_size, num_channels, latent_length, latent_mel_bins = latents.shape
-            post_patch_latent_length = latent_length // patch_size_t
-            post_patch_mel_bins = latent_mel_bins // patch_size
+            post_patch_latent_length = latent_length / patch_size_t
+            post_patch_mel_bins = latent_mel_bins / patch_size
             latents = latents.reshape(
                 batch_size, -1, post_patch_latent_length, patch_size_t, post_patch_mel_bins, patch_size
             )
