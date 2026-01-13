@@ -137,6 +137,7 @@ def main():
         num_inference_steps=args.num_inference_steps,
         num_frames=args.num_frames,
         frame_rate=frame_rate,
+        enable_cpu_offload=True,
     )
     generation_end = time.perf_counter()
     generation_time = generation_end - generation_start
@@ -275,7 +276,49 @@ def main():
 
     video_array = _ensure_frame_list(video_array)
 
-    export_to_video(video_array, str(output_path), fps=args.fps)
+    use_ltx2_export = False
+    if args.model and "ltx" in str(args.model).lower():
+        use_ltx2_export = True
+    if audio is not None:
+        use_ltx2_export = True
+
+    if use_ltx2_export:
+        try:
+            from diffusers.pipelines.ltx2.export_utils import encode_video
+        except ImportError:
+            raise ImportError("diffusers is required for LTX2 encode_video.")
+
+        if isinstance(video_array, list):
+            frames_np = np.stack(video_array, axis=0)
+        elif isinstance(video_array, np.ndarray):
+            frames_np = video_array
+        else:
+            frames_np = np.asarray(video_array)
+
+        frames_u8 = (frames_np * 255).round().clip(0, 255).astype("uint8")
+        video_tensor = torch.from_numpy(frames_u8)
+
+        audio_out = None
+        if audio is not None:
+            if isinstance(audio, list):
+                audio = audio[0] if audio else None
+            if isinstance(audio, np.ndarray):
+                audio = torch.from_numpy(audio)
+            if isinstance(audio, torch.Tensor):
+                audio_out = audio
+                if audio_out.dim() > 1:
+                    audio_out = audio_out[0]
+                audio_out = audio_out.float().cpu()
+
+        encode_video(
+            video_tensor,
+            fps=args.fps,
+            audio=audio_out,
+            audio_sample_rate=args.audio_sample_rate if audio_out is not None else None,
+            output_path=str(output_path),
+        )
+    else:
+        export_to_video(video_array, str(output_path), fps=args.fps)
     print(f"Saved generated video to {output_path}")
 
     if profiler_enabled:
