@@ -86,29 +86,30 @@ def main():
         frame_rate=frame_rate,
     )
 
-    # Extract video frames from OmniRequestOutput
     audio = None
-    if isinstance(frames, list) and len(frames) > 0:
-        first_item = frames[0]
+    if isinstance(frames, list):
+        frames = frames[0] if frames else None
 
-        # Check if it's an OmniRequestOutput
-        if hasattr(first_item, "final_output_type"):
-            if first_item.final_output_type != "image":
-                raise ValueError(
-                    f"Unexpected output type '{first_item.final_output_type}', expected 'image' for video generation."
-                )
-
-            # Pipeline mode: extract from nested request_output
-            if hasattr(first_item, "is_pipeline_output") and first_item.is_pipeline_output:
-                if isinstance(first_item.request_output, list) and len(first_item.request_output) > 0:
-                    inner_output = first_item.request_output[0]
-                    if isinstance(inner_output, OmniRequestOutput) and hasattr(inner_output, "images"):
-                        frames = inner_output.images[0] if inner_output.images else None
-                        if frames is None:
-                            raise ValueError("No video frames found in output.")
-            # Diffusion mode: use direct images field
-            elif hasattr(first_item, "images") and first_item.images:
-                frames = first_item.images
+    if isinstance(frames, OmniRequestOutput):
+        if frames.final_output_type != "image":
+            raise ValueError(
+                f"Unexpected output type '{frames.final_output_type}', expected 'image' for video generation."
+            )
+        if frames.is_pipeline_output and frames.request_output is not None:
+            inner_output = frames.request_output
+            if isinstance(inner_output, list):
+                inner_output = inner_output[0] if inner_output else None
+            if isinstance(inner_output, OmniRequestOutput):
+                frames = inner_output
+        if isinstance(frames, OmniRequestOutput):
+            if frames.images:
+                if len(frames.images) == 1 and isinstance(frames.images[0], tuple) and len(frames.images[0]) == 2:
+                    frames, audio = frames.images[0]
+                elif len(frames.images) == 1 and isinstance(frames.images[0], dict):
+                    audio = frames.images[0].get("audio")
+                    frames = frames.images[0].get("frames") or frames.images[0].get("video")
+                else:
+                    frames = frames.images
             else:
                 raise ValueError("No video frames found in OmniRequestOutput.")
 
@@ -118,6 +119,9 @@ def main():
         audio = frames.get("audio")
         frames = frames.get("frames") or frames.get("video")
 
+    if frames is None:
+        raise ValueError("No video frames found in output.")
+
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -125,30 +129,62 @@ def main():
     except ImportError:
         raise ImportError("diffusers is required for export_to_video.")
 
-    # frames may be np.ndarray (preferred) or torch.Tensor
+    # frames may be np.ndarray, torch.Tensor, or list of tensors/arrays/images
     # export_to_video expects a list of frames with values in [0, 1]
     if isinstance(frames, torch.Tensor):
         video_tensor = frames.detach().cpu()
         if video_tensor.dim() == 5:
-            # [B, C, F, H, W] or [B, F, H, W, C]
             if video_tensor.shape[1] in (3, 4):
                 video_tensor = video_tensor[0].permute(1, 2, 3, 0)
             else:
                 video_tensor = video_tensor[0]
         elif video_tensor.dim() == 4 and video_tensor.shape[0] in (3, 4):
             video_tensor = video_tensor.permute(1, 2, 3, 0)
-        # If float, assume [-1,1] and normalize to [0,1]
         if video_tensor.is_floating_point():
             video_tensor = video_tensor.clamp(-1, 1) * 0.5 + 0.5
         video_array = video_tensor.float().numpy()
+    elif isinstance(frames, np.ndarray):
+        video_array = frames
+        if video_array.ndim == 5:
+            video_array = video_array[0]
+        if np.issubdtype(video_array.dtype, np.integer):
+            video_array = video_array.astype(np.float32) / 255.0
+    elif isinstance(frames, list):
+        if len(frames) == 0:
+            raise ValueError("No video frames found in output.")
+        if isinstance(frames[0], torch.Tensor):
+            frame_list = []
+            for frame in frames:
+                frame_tensor = frame.detach().cpu()
+                if frame_tensor.dim() == 3 and frame_tensor.shape[0] in (3, 4):
+                    frame_tensor = frame_tensor.permute(1, 2, 0)
+                if frame_tensor.is_floating_point():
+                    frame_tensor = frame_tensor.clamp(-1, 1) * 0.5 + 0.5
+                frame_list.append(frame_tensor.float().numpy())
+            video_array = frame_list
+        elif isinstance(frames[0], np.ndarray):
+            frame_list = []
+            for frame in frames:
+                if np.issubdtype(frame.dtype, np.integer):
+                    frame = frame.astype(np.float32) / 255.0
+                frame_list.append(frame)
+            video_array = frame_list
+        else:
+            try:
+                from PIL import Image
+            except ImportError:
+                Image = None
+            if Image is not None and isinstance(frames[0], Image.Image):
+                video_array = [np.asarray(frame).astype(np.float32) / 255.0 for frame in frames]
+            else:
+                video_array = frames
     else:
         video_array = frames
-        if hasattr(video_array, "shape") and video_array.ndim == 5:
-            video_array = video_array[0]
 
-    # Convert 4D array (frames, H, W, C) to list of frames for export_to_video
     if isinstance(video_array, np.ndarray) and video_array.ndim == 4:
         video_array = list(video_array)
+    elif isinstance(video_array, np.ndarray) and video_array.ndim == 3:
+        video_array = [video_array]
 
     export_to_video(video_array, str(output_path), fps=args.fps)
     print(f"Saved generated video to {output_path}")
