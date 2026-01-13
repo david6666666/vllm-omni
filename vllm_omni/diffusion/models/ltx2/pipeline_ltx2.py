@@ -180,19 +180,19 @@ class LTX2Pipeline(nn.Module):
         self.vae = AutoencoderKLLTX2Video.from_pretrained(
             model,
             subfolder="vae",
-            torch_dtype=torch.float32,
+            torch_dtype=dtype,
             local_files_only=local_files_only,
         ).to(self.device)
         self.audio_vae = AutoencoderKLLTX2Audio.from_pretrained(
             model,
             subfolder="audio_vae",
-            torch_dtype=torch.float32,
+            torch_dtype=dtype,
             local_files_only=local_files_only,
         ).to(self.device)
         self.vocoder = LTX2Vocoder.from_pretrained(
             model,
             subfolder="vocoder",
-            torch_dtype=torch.float32,
+            torch_dtype=dtype,
             local_files_only=local_files_only,
         ).to(self.device)
 
