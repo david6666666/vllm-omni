@@ -164,6 +164,30 @@ def main():
             return np.asarray(frame).astype(np.float32) / 255.0
         return frame
 
+    def _ensure_frame_list(video_array):
+        if isinstance(video_array, list):
+            if len(video_array) == 0:
+                return video_array
+            first_item = video_array[0]
+            if isinstance(first_item, np.ndarray):
+                if first_item.ndim == 5:
+                    return list(first_item[0])
+                if first_item.ndim == 4:
+                    if len(video_array) == 1:
+                        return list(first_item)
+                    return list(first_item)
+                if first_item.ndim == 3:
+                    return video_array
+            return video_array
+        if isinstance(video_array, np.ndarray):
+            if video_array.ndim == 5:
+                return list(video_array[0])
+            if video_array.ndim == 4:
+                return list(video_array)
+            if video_array.ndim == 3:
+                return [video_array]
+        return video_array
+
     # frames may be np.ndarray, torch.Tensor, or list of tensors/arrays/images
     # export_to_video expects a list of frames with values in [0, 1]
     if isinstance(frames, torch.Tensor):
@@ -191,10 +215,7 @@ def main():
     else:
         video_array = frames
 
-    if isinstance(video_array, np.ndarray) and video_array.ndim == 4:
-        video_array = list(video_array)
-    elif isinstance(video_array, np.ndarray) and video_array.ndim == 3:
-        video_array = [video_array]
+    video_array = _ensure_frame_list(video_array)
 
     export_to_video(video_array, str(output_path), fps=args.fps)
     print(f"Saved generated video to {output_path}")
