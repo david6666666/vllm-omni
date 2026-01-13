@@ -197,6 +197,31 @@ def main():
     except ImportError:
         raise ImportError("diffusers is required for export_to_video.")
 
+    def _normalize_frame(frame):
+        if isinstance(frame, torch.Tensor):
+            frame_tensor = frame.detach().cpu()
+            if frame_tensor.dim() == 4 and frame_tensor.shape[0] == 1:
+                frame_tensor = frame_tensor[0]
+            if frame_tensor.dim() == 3 and frame_tensor.shape[0] in (3, 4):
+                frame_tensor = frame_tensor.permute(1, 2, 0)
+            if frame_tensor.is_floating_point():
+                frame_tensor = frame_tensor.clamp(-1, 1) * 0.5 + 0.5
+            return frame_tensor.float().numpy()
+        if isinstance(frame, np.ndarray):
+            frame_array = frame
+            if frame_array.ndim == 4 and frame_array.shape[0] == 1:
+                frame_array = frame_array[0]
+            if np.issubdtype(frame_array.dtype, np.integer):
+                frame_array = frame_array.astype(np.float32) / 255.0
+            return frame_array
+        try:
+            from PIL import Image
+        except ImportError:
+            Image = None
+        if Image is not None and isinstance(frame, Image.Image):
+            return np.asarray(frame).astype(np.float32) / 255.0
+        return frame
+
     # frames may be np.ndarray, torch.Tensor, or list of tensors/arrays/images
     # export_to_video expects a list of frames with values in [0, 1]
     if isinstance(frames, torch.Tensor):
@@ -220,32 +245,7 @@ def main():
     elif isinstance(frames, list):
         if len(frames) == 0:
             raise ValueError("No video frames found in output.")
-        if isinstance(frames[0], torch.Tensor):
-            frame_list = []
-            for frame in frames:
-                frame_tensor = frame.detach().cpu()
-                if frame_tensor.dim() == 3 and frame_tensor.shape[0] in (3, 4):
-                    frame_tensor = frame_tensor.permute(1, 2, 0)
-                if frame_tensor.is_floating_point():
-                    frame_tensor = frame_tensor.clamp(-1, 1) * 0.5 + 0.5
-                frame_list.append(frame_tensor.float().numpy())
-            video_array = frame_list
-        elif isinstance(frames[0], np.ndarray):
-            frame_list = []
-            for frame in frames:
-                if np.issubdtype(frame.dtype, np.integer):
-                    frame = frame.astype(np.float32) / 255.0
-                frame_list.append(frame)
-            video_array = frame_list
-        else:
-            try:
-                from PIL import Image
-            except ImportError:
-                Image = None
-            if Image is not None and isinstance(frames[0], Image.Image):
-                video_array = [np.asarray(frame).astype(np.float32) / 255.0 for frame in frames]
-            else:
-                video_array = frames
+        video_array = [_normalize_frame(frame) for frame in frames]
     else:
         video_array = frames
 
