@@ -171,6 +171,16 @@ def main():
             else:
                 raise ValueError("No video frames found in OmniRequestOutput.")
 
+    if isinstance(frames, list) and frames:
+        first_item = frames[0]
+        if isinstance(first_item, tuple) and len(first_item) == 2:
+            frames, audio = first_item
+        elif isinstance(first_item, dict):
+            audio = first_item.get("audio")
+            frames = first_item.get("frames") or first_item.get("video")
+        elif isinstance(first_item, list):
+            frames = first_item
+
     if isinstance(frames, tuple) and len(frames) == 2:
         frames, audio = frames
     elif isinstance(frames, dict):
