@@ -645,6 +645,10 @@ class LTX2Pipeline(nn.Module):
             req_fps = req_fps[0] if req_fps else None
         frame_rate = req.frame_rate or (float(req_fps) if req_fps is not None else None) or frame_rate or 24.0
         num_inference_steps = req.num_inference_steps or num_inference_steps or 40
+        if timesteps is None:
+            num_inference_steps = max(int(num_inference_steps), 2)
+        elif len(timesteps) < 2:
+            raise ValueError("`timesteps` must contain at least 2 values for FlowMatchEulerDiscreteScheduler.")
         num_videos_per_prompt = req.num_outputs_per_prompt or num_videos_per_prompt or 1
         max_sequence_length = req.max_sequence_length or max_sequence_length or self.tokenizer_max_length
 
