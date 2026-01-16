@@ -20,7 +20,7 @@ import json
 import math
 import os
 from collections.abc import Callable, Iterable
-from typing import Any, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import PIL.Image
@@ -79,9 +79,7 @@ class Flux2ImageProcessor(VaeImageProcessor):
 
         width, height = image.size
         if width < min_side_length or height < min_side_length:
-            raise ValueError(
-                f"Image too small: {width}x{height}. Both dimensions must be at least {min_side_length}px"
-            )
+            raise ValueError(f"Image too small: {width}x{height}. Both dimensions must be at least {min_side_length}px")
 
         aspect_ratio = max(width / height, height / width)
         if aspect_ratio > max_aspect_ratio:
@@ -119,7 +117,7 @@ class Flux2ImageProcessor(VaeImageProcessor):
         return image.crop((left, top, right, bottom))
 
     @staticmethod
-    def concatenate_images(images: List[PIL.Image.Image]) -> PIL.Image.Image:
+    def concatenate_images(images: list[PIL.Image.Image]) -> PIL.Image.Image:
         if len(images) == 1:
             return images[0].copy()
 
@@ -159,6 +157,7 @@ def get_flux2_klein_post_process_func(
 
     return post_process_func
 
+
 # Copied from diffusers.pipelines.flux2.pipeline_flux2.compute_empirical_mu
 def compute_empirical_mu(image_seq_len: int, num_steps: int) -> float:
     a1, b1 = 8.73809524e-05, 1.89833333
@@ -181,10 +180,10 @@ def compute_empirical_mu(image_seq_len: int, num_steps: int) -> float:
 # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.retrieve_timesteps
 def retrieve_timesteps(
     scheduler,
-    num_inference_steps: Optional[int] = None,
-    device: Optional[str | torch.device] = None,
-    timesteps: Optional[List[int]] = None,
-    sigmas: Optional[List[float]] = None,
+    num_inference_steps: int | None = None,
+    device: str | torch.device | None = None,
+    timesteps: list[int] | None = None,
+    sigmas: list[float] | None = None,
     **kwargs,
 ):
     r"""
@@ -240,7 +239,7 @@ def retrieve_timesteps(
 
 # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_img2img.retrieve_latents
 def retrieve_latents(
-    encoder_output: torch.Tensor, generator: Optional[torch.Generator] = None, sample_mode: str = "sample"
+    encoder_output: torch.Tensor, generator: torch.Generator | None = None, sample_mode: str = "sample"
 ):
     if hasattr(encoder_output, "latent_dist") and sample_mode == "sample":
         return encoder_output.latent_dist.sample(generator)
@@ -320,11 +319,11 @@ class Flux2KleinPipeline(nn.Module, SupportImageInput):
     def _get_qwen3_prompt_embeds(
         text_encoder: Qwen3ForCausalLM,
         tokenizer: Qwen2TokenizerFast,
-        prompt: str | List[str],
-        dtype: Optional[torch.dtype] = None,
-        device: Optional[torch.device] = None,
+        prompt: str | list[str],
+        dtype: torch.dtype | None = None,
+        device: torch.device | None = None,
         max_sequence_length: int = 512,
-        hidden_states_layers: List[int] = (9, 18, 27),
+        hidden_states_layers: list[int] = (9, 18, 27),
     ):
         dtype = text_encoder.dtype if dtype is None else dtype
         device = text_encoder.device if device is None else device
@@ -377,7 +376,7 @@ class Flux2KleinPipeline(nn.Module, SupportImageInput):
     # Copied from diffusers.pipelines.flux2.pipeline_flux2.Flux2Pipeline._prepare_text_ids
     def _prepare_text_ids(
         x: torch.Tensor,  # (B, L, D) or (L, D)
-        t_coord: Optional[torch.Tensor] = None,
+        t_coord: torch.Tensor | None = None,
     ):
         B, L, _ = x.shape
         out_ids = []
@@ -386,9 +385,9 @@ class Flux2KleinPipeline(nn.Module, SupportImageInput):
             t = torch.arange(1) if t_coord is None else t_coord[i]
             h = torch.arange(1)
             w = torch.arange(1)
-            l = torch.arange(L)
+            seq_positions = torch.arange(L)
 
-            coords = torch.cartesian_prod(t, h, w, l)
+            coords = torch.cartesian_prod(t, h, w, seq_positions)
             out_ids.append(coords)
 
         return torch.stack(out_ids)
@@ -416,10 +415,10 @@ class Flux2KleinPipeline(nn.Module, SupportImageInput):
         t = torch.arange(1)  # [0] - time dimension
         h = torch.arange(height)
         w = torch.arange(width)
-        l = torch.arange(1)  # [0] - layer dimension
+        layer_ids = torch.arange(1)  # [0] - layer dimension
 
         # Create position IDs: (H*W, 4)
-        latent_ids = torch.cartesian_prod(t, h, w, l)
+        latent_ids = torch.cartesian_prod(t, h, w, layer_ids)
 
         # Expand to batch: (B, H*W, 4)
         latent_ids = latent_ids.unsqueeze(0).expand(batch_size, -1, -1)
@@ -429,7 +428,7 @@ class Flux2KleinPipeline(nn.Module, SupportImageInput):
     @staticmethod
     # Copied from diffusers.pipelines.flux2.pipeline_flux2.Flux2Pipeline._prepare_image_ids
     def _prepare_image_ids(
-        image_latents: List[torch.Tensor],  # [(1, C, H, W), (1, C, H, W), ...]
+        image_latents: list[torch.Tensor],  # [(1, C, H, W), (1, C, H, W), ...]
         scale: int = 10,
     ):
         r"""
@@ -536,12 +535,12 @@ class Flux2KleinPipeline(nn.Module, SupportImageInput):
 
     def encode_prompt(
         self,
-        prompt: str | List[str],
-        device: Optional[torch.device] = None,
+        prompt: str | list[str],
+        device: torch.device | None = None,
         num_images_per_prompt: int = 1,
-        prompt_embeds: Optional[torch.Tensor] = None,
+        prompt_embeds: torch.Tensor | None = None,
         max_sequence_length: int = 512,
-        text_encoder_out_layers: Tuple[int, ...] = (9, 18, 27),
+        text_encoder_out_layers: tuple[int, ...] = (9, 18, 27),
     ):
         device = device or self._execution_device
 
@@ -592,7 +591,7 @@ class Flux2KleinPipeline(nn.Module, SupportImageInput):
         dtype,
         device,
         generator: torch.Generator,
-        latents: Optional[torch.Tensor] = None,
+        latents: torch.Tensor | None = None,
     ):
         # VAE applies 8x compression on images but we must also account for packing which requires
         # latent height and width to be divisible by 2.
@@ -619,7 +618,7 @@ class Flux2KleinPipeline(nn.Module, SupportImageInput):
     # Copied from diffusers.pipelines.flux2.pipeline_flux2.Flux2Pipeline.prepare_image_latents
     def prepare_image_latents(
         self,
-        images: List[torch.Tensor],
+        images: list[torch.Tensor],
         batch_size,
         generator: torch.Generator,
         device,
@@ -667,7 +666,11 @@ class Flux2KleinPipeline(nn.Module, SupportImageInput):
             and width % (self.vae_scale_factor * 2) != 0
         ):
             logger.warning(
-                f"`height` and `width` have to be divisible by {self.vae_scale_factor * 2} but are {height} and {width}. Dimensions will be resized accordingly"
+                "`height` and `width` have to be divisible by %s but are %s and %s. "
+                "Dimensions will be resized accordingly",
+                self.vae_scale_factor * 2,
+                height,
+                width,
             )
 
         if callback_on_step_end_tensor_inputs is not None and not all(
@@ -718,31 +721,38 @@ class Flux2KleinPipeline(nn.Module, SupportImageInput):
     def forward(
         self,
         req: OmniDiffusionRequest,
-        image: Optional[PIL.Image.Image | List[PIL.Image.Image]] = None,
+        image: PIL.Image.Image | list[PIL.Image.Image] | None = None,
         prompt: str | list[str] | None = None,
-        height: Optional[int] = None,
-        width: Optional[int] = None,
+        height: int | None = None,
+        width: int | None = None,
         num_inference_steps: int = 50,
-        sigmas: Optional[List[float]] = None,
-        guidance_scale: Optional[float] = 4.0,
+        sigmas: list[float] | None = None,
+        guidance_scale: float | None = 4.0,
         num_images_per_prompt: int = 1,
-        generator: Optional[torch.Generator | List[torch.Generator]] = None,
-        latents: Optional[torch.Tensor] = None,
-        prompt_embeds: Optional[torch.Tensor] = None,
-        negative_prompt_embeds: Optional[torch.Tensor] = None,
-        output_type: Optional[str] = "pil",
+        generator: torch.Generator | list[torch.Generator] | None = None,
+        latents: torch.Tensor | None = None,
+        prompt_embeds: torch.Tensor | None = None,
+        negative_prompt_embeds: torch.Tensor | None = None,
+        output_type: str | None = "pil",
         return_dict: bool = True,
-        attention_kwargs: Optional[dict[str, Any]] = None,
-        callback_on_step_end: Optional[Callable[[int, int, dict], None]] = None,
-        callback_on_step_end_tensor_inputs: List[str] = ["latents"],
+        attention_kwargs: dict[str, Any] | None = None,
+        callback_on_step_end: Callable[[int, int, dict], None] | None = None,
+        callback_on_step_end_tensor_inputs: list[str] = ["latents"],
         max_sequence_length: int = 512,
-        text_encoder_out_layers: Tuple[int, ...] = (9, 18, 27),
+        text_encoder_out_layers: tuple[int, ...] = (9, 18, 27),
     ) -> DiffusionOutput:
         r"""
         Function invoked when calling the pipeline for generation.
 
         Args:
-            image (`torch.Tensor`, `PIL.Image.Image`, `np.ndarray`, `List[torch.Tensor]`, `List[PIL.Image.Image]`, or `List[np.ndarray]`):
+            image (
+                `torch.Tensor`,
+                `PIL.Image.Image`,
+                `np.ndarray`,
+                `List[torch.Tensor]`,
+                `List[PIL.Image.Image]`,
+                or `List[np.ndarray]`
+            ):
                 `Image`, numpy array or tensor representing an image batch to be used as the starting point. For both
                 numpy array and pytorch tensor, the expected value range is between `[0, 1]` If it's a tensor or a list
                 or tensors, the expected shape should be `(B, C, H, W)` or `(C, H, W)`. If it is a numpy array or a
