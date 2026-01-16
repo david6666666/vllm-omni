@@ -206,8 +206,8 @@ def retrieve_timesteps(
             `num_inference_steps` and `timesteps` must be `None`.
 
     Returns:
-        `Tuple[torch.Tensor, int]`: A tuple where the first element is the timestep schedule from the scheduler and the
-        second element is the number of inference steps.
+        timesteps (`torch.Tensor`): The timestep schedule from the scheduler.
+        num_inference_steps (`int`): The number of inference steps.
     """
     if timesteps is not None and sigmas is not None:
         raise ValueError("Only one of `timesteps` or `sigmas` can be passed. Please choose one to set custom values")
@@ -745,14 +745,7 @@ class Flux2KleinPipeline(nn.Module, SupportImageInput):
         Function invoked when calling the pipeline for generation.
 
         Args:
-            image (
-                `torch.Tensor`,
-                `PIL.Image.Image`,
-                `np.ndarray`,
-                `List[torch.Tensor]`,
-                `List[PIL.Image.Image]`,
-                or `List[np.ndarray]`
-            ):
+            image (`torch.Tensor`, `PIL.Image.Image`, `np.ndarray`, or list of these):
                 `Image`, numpy array or tensor representing an image batch to be used as the starting point. For both
                 numpy array and pytorch tensor, the expected value range is between `[0, 1]` If it's a tensor or a list
                 or tensors, the expected shape should be `(B, C, H, W)` or `(C, H, W)`. If it is a numpy array or a
