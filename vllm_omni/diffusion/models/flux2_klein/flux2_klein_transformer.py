@@ -16,7 +16,7 @@
 # limitations under the License.
 
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -35,7 +35,7 @@ def _scaled_dot_product_attention(
     query: torch.Tensor,
     key: torch.Tensor,
     value: torch.Tensor,
-    attention_mask: Optional[torch.Tensor] = None,
+    attention_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     # query/key/value: (batch, seq, heads, head_dim)
     query = query.transpose(1, 2)
@@ -65,9 +65,9 @@ class Flux2FeedForward(nn.Module):
     def __init__(
         self,
         dim: int,
-        dim_out: Optional[int] = None,
+        dim_out: int | None = None,
         mult: float = 3.0,
-        inner_dim: Optional[int] = None,
+        inner_dim: int | None = None,
         bias: bool = False,
     ):
         super().__init__()
@@ -93,8 +93,8 @@ class Flux2Attention(nn.Module):
         dim_head: int = 64,
         dropout: float = 0.0,
         bias: bool = False,
-        added_kv_proj_dim: Optional[int] = None,
-        added_proj_bias: Optional[bool] = True,
+        added_kv_proj_dim: int | None = None,
+        added_proj_bias: bool | None = True,
         out_bias: bool = True,
         eps: float = 1e-5,
         out_dim: int = None,
@@ -129,9 +129,9 @@ class Flux2Attention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        image_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        encoder_hidden_states: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        image_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
         **kwargs,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         query = self.to_q(hidden_states)
@@ -232,8 +232,8 @@ class Flux2ParallelSelfAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        image_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        attention_mask: torch.Tensor | None = None,
+        image_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
         **kwargs,
     ) -> torch.Tensor:
         hidden_states = self.to_qkv_mlp_proj(hidden_states)
@@ -290,12 +290,12 @@ class Flux2SingleTransformerBlock(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        encoder_hidden_states: Optional[torch.Tensor],
-        temb_mod_params: Tuple[torch.Tensor, torch.Tensor, torch.Tensor],
-        image_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        joint_attention_kwargs: Optional[Dict[str, Any]] = None,
+        encoder_hidden_states: torch.Tensor | None,
+        temb_mod_params: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+        image_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+        joint_attention_kwargs: dict[str, Any] | None = None,
         split_hidden_states: bool = False,
-        text_seq_len: Optional[int] = None,
+        text_seq_len: int | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         if encoder_hidden_states is not None:
             text_seq_len = encoder_hidden_states.shape[1]
@@ -359,10 +359,10 @@ class Flux2TransformerBlock(nn.Module):
         self,
         hidden_states: torch.Tensor,
         encoder_hidden_states: torch.Tensor,
-        temb_mod_params_img: Tuple[Tuple[torch.Tensor, torch.Tensor, torch.Tensor], ...],
-        temb_mod_params_txt: Tuple[Tuple[torch.Tensor, torch.Tensor, torch.Tensor], ...],
-        image_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        joint_attention_kwargs: Optional[Dict[str, Any]] = None,
+        temb_mod_params_img: tuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor], ...],
+        temb_mod_params_txt: tuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor], ...],
+        image_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+        joint_attention_kwargs: dict[str, Any] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         joint_attention_kwargs = joint_attention_kwargs or {}
 
@@ -404,12 +404,12 @@ class Flux2TransformerBlock(nn.Module):
 
 
 class Flux2PosEmbed(nn.Module):
-    def __init__(self, theta: int, axes_dim: List[int]):
+    def __init__(self, theta: int, axes_dim: list[int]):
         super().__init__()
         self.theta = theta
         self.axes_dim = axes_dim
 
-    def forward(self, ids: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         cos_out = []
         sin_out = []
         pos = ids.float()
@@ -457,7 +457,7 @@ class Flux2TimestepGuidanceEmbeddings(nn.Module):
         else:
             self.guidance_embedder = None
 
-    def forward(self, timestep: torch.Tensor, guidance: Optional[torch.Tensor]) -> torch.Tensor:
+    def forward(self, timestep: torch.Tensor, guidance: torch.Tensor | None) -> torch.Tensor:
         timesteps_proj = self.time_proj(timestep)
         timesteps_emb = self.timestep_embedder(timesteps_proj.to(timestep.dtype))
 
@@ -475,7 +475,7 @@ class Flux2Modulation(nn.Module):
         self.linear = nn.Linear(dim, dim * 3 * self.mod_param_sets, bias=bias)
         self.act_fn = nn.SiLU()
 
-    def forward(self, temb: torch.Tensor) -> Tuple[Tuple[torch.Tensor, torch.Tensor, torch.Tensor], ...]:
+    def forward(self, temb: torch.Tensor) -> tuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor], ...]:
         mod = self.act_fn(temb)
         mod = self.linear(mod)
         if mod.ndim == 2:
@@ -495,7 +495,7 @@ class Flux2Transformer2DModel(nn.Module):
         self,
         patch_size: int = 1,
         in_channels: int = 128,
-        out_channels: Optional[int] = None,
+        out_channels: int | None = None,
         num_layers: int = 8,
         num_single_layers: int = 48,
         attention_head_dim: int = 128,
@@ -503,7 +503,7 @@ class Flux2Transformer2DModel(nn.Module):
         joint_attention_dim: int = 15360,
         timestep_guidance_channels: int = 256,
         mlp_ratio: float = 3.0,
-        axes_dims_rope: Tuple[int, ...] = (32, 32, 32, 32),
+        axes_dims_rope: tuple[int, ...] = (32, 32, 32, 32),
         rope_theta: int = 2000,
         eps: float = 1e-6,
         guidance_embeds: bool = True,
@@ -591,8 +591,8 @@ class Flux2Transformer2DModel(nn.Module):
         timestep: torch.LongTensor,
         img_ids: torch.Tensor,
         txt_ids: torch.Tensor,
-        guidance: Optional[torch.Tensor] = None,
-        joint_attention_kwargs: Optional[Dict[str, Any]] = None,
+        guidance: torch.Tensor | None = None,
+        joint_attention_kwargs: dict[str, Any] | None = None,
         return_dict: bool = True,
     ) -> torch.Tensor | Transformer2DModelOutput:
         joint_attention_kwargs = joint_attention_kwargs or {}
