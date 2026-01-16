@@ -15,6 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Iterable
 from types import SimpleNamespace
 from typing import Any
 
@@ -27,6 +28,9 @@ from diffusers.models.embeddings import (
 )
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.normalization import AdaLayerNormContinuous
+from vllm.model_executor.layers.layernorm import RMSNorm
+from vllm.model_executor.layers.linear import QKVParallelLinear, ReplicatedLinear
+from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.layer import Attention
@@ -93,22 +97,30 @@ class Flux2Attention(nn.Module):
         self.dropout = dropout
         self.added_kv_proj_dim = added_kv_proj_dim
 
-        self.to_q = nn.Linear(query_dim, self.inner_dim, bias=bias)
-        self.to_k = nn.Linear(query_dim, self.inner_dim, bias=bias)
-        self.to_v = nn.Linear(query_dim, self.inner_dim, bias=bias)
+        self.to_qkv = QKVParallelLinear(
+            hidden_size=query_dim,
+            head_size=self.head_dim,
+            total_num_heads=self.heads,
+            disable_tp=True,
+            bias=bias,
+        )
 
-        self.norm_q = nn.RMSNorm(dim_head, eps=eps, elementwise_affine=elementwise_affine)
-        self.norm_k = nn.RMSNorm(dim_head, eps=eps, elementwise_affine=elementwise_affine)
+        self.norm_q = RMSNorm(dim_head, eps=eps)
+        self.norm_k = RMSNorm(dim_head, eps=eps)
 
-        self.to_out = nn.ModuleList([nn.Linear(self.inner_dim, self.out_dim, bias=out_bias), nn.Dropout(dropout)])
+        self.to_out = nn.ModuleList([ReplicatedLinear(self.inner_dim, self.out_dim, bias=out_bias), nn.Dropout(dropout)])
 
         if added_kv_proj_dim is not None:
-            self.norm_added_q = nn.RMSNorm(dim_head, eps=eps)
-            self.norm_added_k = nn.RMSNorm(dim_head, eps=eps)
-            self.add_q_proj = nn.Linear(added_kv_proj_dim, self.inner_dim, bias=added_proj_bias)
-            self.add_k_proj = nn.Linear(added_kv_proj_dim, self.inner_dim, bias=added_proj_bias)
-            self.add_v_proj = nn.Linear(added_kv_proj_dim, self.inner_dim, bias=added_proj_bias)
-            self.to_add_out = nn.Linear(self.inner_dim, query_dim, bias=out_bias)
+            self.norm_added_q = RMSNorm(dim_head, eps=eps)
+            self.norm_added_k = RMSNorm(dim_head, eps=eps)
+            self.add_kv_proj = QKVParallelLinear(
+                hidden_size=added_kv_proj_dim,
+                head_size=self.head_dim,
+                total_num_heads=self.heads,
+                disable_tp=True,
+                bias=added_proj_bias,
+            )
+            self.to_add_out = ReplicatedLinear(self.inner_dim, query_dim, bias=out_bias)
 
         self.rope = RotaryEmbedding(is_neox_style=False)
         self.attn = Attention(
@@ -126,15 +138,13 @@ class Flux2Attention(nn.Module):
         image_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
         **kwargs,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        query = self.to_q(hidden_states)
-        key = self.to_k(hidden_states)
-        value = self.to_v(hidden_states)
+        qkv, _ = self.to_qkv(hidden_states)
+        query, key, value = qkv.chunk(3, dim=-1)
 
         encoder_query = encoder_key = encoder_value = None
         if encoder_hidden_states is not None and self.added_kv_proj_dim is not None:
-            encoder_query = self.add_q_proj(encoder_hidden_states)
-            encoder_key = self.add_k_proj(encoder_hidden_states)
-            encoder_value = self.add_v_proj(encoder_hidden_states)
+            encoder_qkv, _ = self.add_kv_proj(encoder_hidden_states)
+            encoder_query, encoder_key, encoder_value = encoder_qkv.chunk(3, dim=-1)
 
         query = query.unflatten(-1, (self.heads, -1))
         key = key.unflatten(-1, (self.heads, -1))
@@ -177,9 +187,9 @@ class Flux2Attention(nn.Module):
                 [context_len, hidden_states.shape[1] - context_len],
                 dim=1,
             )
-            encoder_hidden_states = self.to_add_out(encoder_hidden_states)
+            encoder_hidden_states, _ = self.to_add_out(encoder_hidden_states)
 
-        hidden_states = self.to_out[0](hidden_states)
+        hidden_states, _ = self.to_out[0](hidden_states)
         hidden_states = self.to_out[1](hidden_states)
 
         if encoder_hidden_states is not None:
@@ -225,8 +235,8 @@ class Flux2ParallelSelfAttention(nn.Module):
         )
         self.mlp_act_fn = Flux2SwiGLU()
 
-        self.norm_q = nn.RMSNorm(dim_head, eps=eps, elementwise_affine=elementwise_affine)
-        self.norm_k = nn.RMSNorm(dim_head, eps=eps, elementwise_affine=elementwise_affine)
+        self.norm_q = RMSNorm(dim_head, eps=eps)
+        self.norm_k = RMSNorm(dim_head, eps=eps)
 
         self.to_out = nn.Linear(self.inner_dim + self.mlp_hidden_dim, self.out_dim, bias=out_bias)
         self.rope = RotaryEmbedding(is_neox_style=False)
@@ -668,3 +678,36 @@ class Flux2Transformer2DModel(nn.Module):
         if not return_dict:
             return (output,)
         return Transformer2DModelOutput(sample=output)
+
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        stacked_params_mapping = [
+            (".to_qkv", ".to_q", "q"),
+            (".to_qkv", ".to_k", "k"),
+            (".to_qkv", ".to_v", "v"),
+            (".add_kv_proj", ".add_q_proj", "q"),
+            (".add_kv_proj", ".add_k_proj", "k"),
+            (".add_kv_proj", ".add_v_proj", "v"),
+        ]
+
+        params_dict = dict(self.named_parameters())
+
+        for name, buffer in self.named_buffers():
+            if name.endswith(".beta") or name.endswith(".eps"):
+                params_dict[name] = buffer
+
+        loaded_params: set[str] = set()
+        for name, loaded_weight in weights:
+            for param_name, weight_name, shard_id in stacked_params_mapping:
+                if weight_name not in name:
+                    continue
+                name = name.replace(weight_name, param_name)
+                param = params_dict[name]
+                weight_loader = param.weight_loader
+                weight_loader(param, loaded_weight, shard_id)
+                break
+            else:
+                param = params_dict[name]
+                weight_loader = getattr(param, "weight_loader", default_weight_loader)
+                weight_loader(param, loaded_weight)
+            loaded_params.add(name)
+        return loaded_params
