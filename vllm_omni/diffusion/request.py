@@ -58,6 +58,7 @@ class OmniDiffusionRequest:
 
     # Additional text-related parameters
     max_sequence_length: int | None = None
+    text_encoder_out_layers: tuple[int, ...] | None = None
     prompt_template: dict[str, Any] | None = None
     do_classifier_free_guidance: bool = False
 
