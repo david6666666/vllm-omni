@@ -20,33 +20,17 @@ from typing import Any
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from diffusers.models.embeddings import (
     TimestepEmbedding,
     Timesteps,
-    apply_rotary_emb,
     get_1d_rotary_pos_embed,
 )
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.normalization import AdaLayerNormContinuous
 
-
-def _scaled_dot_product_attention(
-    query: torch.Tensor,
-    key: torch.Tensor,
-    value: torch.Tensor,
-    attention_mask: torch.Tensor | None = None,
-) -> torch.Tensor:
-    # query/key/value: (batch, seq, heads, head_dim)
-    query = query.transpose(1, 2)
-    key = key.transpose(1, 2)
-    value = value.transpose(1, 2)
-
-    if attention_mask is not None and attention_mask.dim() == 3:
-        attention_mask = attention_mask.unsqueeze(1)
-
-    hidden_states = F.scaled_dot_product_attention(query, key, value, attn_mask=attention_mask)
-    return hidden_states.transpose(1, 2)
+from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
+from vllm_omni.diffusion.attention.layer import Attention
+from vllm_omni.diffusion.layers.rope import RotaryEmbedding
 
 
 class Flux2SwiGLU(nn.Module):
@@ -126,6 +110,14 @@ class Flux2Attention(nn.Module):
             self.add_v_proj = nn.Linear(added_kv_proj_dim, self.inner_dim, bias=added_proj_bias)
             self.to_add_out = nn.Linear(self.inner_dim, query_dim, bias=out_bias)
 
+        self.rope = RotaryEmbedding(is_neox_style=False)
+        self.attn = Attention(
+            num_heads=self.heads,
+            head_size=self.head_dim,
+            softmax_scale=1.0 / (self.head_dim**0.5),
+            causal=False,
+        )
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -164,10 +156,19 @@ class Flux2Attention(nn.Module):
             value = torch.cat([encoder_value, value], dim=1)
 
         if image_rotary_emb is not None:
-            query = apply_rotary_emb(query, image_rotary_emb, sequence_dim=1)
-            key = apply_rotary_emb(key, image_rotary_emb, sequence_dim=1)
+            cos, sin = image_rotary_emb
+            cos = cos.to(query.dtype)
+            sin = sin.to(query.dtype)
+            query = self.rope(query, cos, sin)
+            key = self.rope(key, cos, sin)
 
-        hidden_states = _scaled_dot_product_attention(query, key, value, attention_mask=attention_mask)
+        attn_metadata = None
+        if attention_mask is not None:
+            if attention_mask.dim() == 3:
+                attention_mask = attention_mask.unsqueeze(1)
+            attn_metadata = AttentionMetadata(attn_mask=attention_mask)
+
+        hidden_states = self.attn(query, key, value, attn_metadata)
         hidden_states = hidden_states.flatten(2, 3).to(query.dtype)
 
         if encoder_hidden_states is not None:
@@ -228,6 +229,13 @@ class Flux2ParallelSelfAttention(nn.Module):
         self.norm_k = nn.RMSNorm(dim_head, eps=eps, elementwise_affine=elementwise_affine)
 
         self.to_out = nn.Linear(self.inner_dim + self.mlp_hidden_dim, self.out_dim, bias=out_bias)
+        self.rope = RotaryEmbedding(is_neox_style=False)
+        self.attn = Attention(
+            num_heads=self.heads,
+            head_size=self.head_dim,
+            softmax_scale=1.0 / (self.head_dim**0.5),
+            causal=False,
+        )
 
     def forward(
         self,
@@ -252,10 +260,19 @@ class Flux2ParallelSelfAttention(nn.Module):
         key = self.norm_k(key)
 
         if image_rotary_emb is not None:
-            query = apply_rotary_emb(query, image_rotary_emb, sequence_dim=1)
-            key = apply_rotary_emb(key, image_rotary_emb, sequence_dim=1)
+            cos, sin = image_rotary_emb
+            cos = cos.to(query.dtype)
+            sin = sin.to(query.dtype)
+            query = self.rope(query, cos, sin)
+            key = self.rope(key, cos, sin)
 
-        attn_output = _scaled_dot_product_attention(query, key, value, attention_mask=attention_mask)
+        attn_metadata = None
+        if attention_mask is not None:
+            if attention_mask.dim() == 3:
+                attention_mask = attention_mask.unsqueeze(1)
+            attn_metadata = AttentionMetadata(attn_mask=attention_mask)
+
+        attn_output = self.attn(query, key, value, attn_metadata)
         attn_output = attn_output.flatten(2, 3).to(query.dtype)
 
         mlp_hidden_states = self.mlp_act_fn(mlp_hidden_states)
@@ -417,16 +434,15 @@ class Flux2PosEmbed(nn.Module):
         is_npu = ids.device.type == "npu"
         freqs_dtype = torch.float32 if (is_mps or is_npu) else torch.float64
         for i in range(len(self.axes_dim)):
-            cos, sin = get_1d_rotary_pos_embed(
+            freqs_cis = get_1d_rotary_pos_embed(
                 self.axes_dim[i],
                 pos[..., i],
                 theta=self.theta,
-                repeat_interleave_real=True,
-                use_real=True,
+                use_real=False,
                 freqs_dtype=freqs_dtype,
             )
-            cos_out.append(cos)
-            sin_out.append(sin)
+            cos_out.append(freqs_cis.real)
+            sin_out.append(freqs_cis.imag)
         freqs_cos = torch.cat(cos_out, dim=-1).to(ids.device)
         freqs_sin = torch.cat(sin_out, dim=-1).to(ids.device)
         return freqs_cos, freqs_sin
