@@ -315,7 +315,11 @@ def main():
 
     video_array = _ensure_frame_list(video_array)
 
-    use_ltx2_export = is_ltx2 or audio is not None
+    if audio is not None and args.audio_output is None:
+        # Skip muxing audio unless explicitly requested to keep the MP4 broadly compatible.
+        audio = None
+
+    use_ltx2_export = audio is not None
     if use_ltx2_export:
         try:
             from diffusers.pipelines.ltx2.export_utils import encode_video
