@@ -9,6 +9,8 @@ from typing import Any
 import numpy as np
 import PIL.Image
 import torch
+from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import rescale_noise_cfg, retrieve_timesteps
+from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_img2img import retrieve_latents
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.video_processor import VideoProcessor
 
@@ -19,23 +21,7 @@ from .pipeline_ltx2 import (
     LTX2Pipeline,
     calculate_shift,
     get_ltx2_post_process_func as _get_ltx2_post_process_func,
-    rescale_noise_cfg,
-    retrieve_timesteps,
 )
-
-
-def retrieve_latents(
-    encoder_output: torch.Tensor,
-    generator: torch.Generator | None = None,
-    sample_mode: str = "sample",
-):
-    if hasattr(encoder_output, "latent_dist") and sample_mode == "sample":
-        return encoder_output.latent_dist.sample(generator)
-    if hasattr(encoder_output, "latent_dist") and sample_mode == "argmax":
-        return encoder_output.latent_dist.mode()
-    if hasattr(encoder_output, "latents"):
-        return encoder_output.latents
-    raise AttributeError("Could not access latents of provided encoder_output")
 
 
 def _unwrap_request_tensor(value: Any) -> Any:

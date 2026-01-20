@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 import torch
 from diffusers import AutoencoderKLLTX2Audio, AutoencoderKLLTX2Video, FlowMatchEulerDiscreteScheduler
+from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import rescale_noise_cfg, retrieve_timesteps
 from diffusers.pipelines.ltx2 import LTX2TextConnectors
 from diffusers.pipelines.ltx2.vocoder import LTX2Vocoder
 from diffusers.utils.torch_utils import randn_tensor
@@ -89,49 +90,6 @@ def calculate_shift(
     mu = image_seq_len * m + b
     return mu
 
-
-def retrieve_timesteps(
-    scheduler,
-    num_inference_steps: int | None = None,
-    device: str | torch.device | None = None,
-    timesteps: list[int] | None = None,
-    sigmas: list[float] | None = None,
-    **kwargs,
-):
-    if timesteps is not None and sigmas is not None:
-        raise ValueError("Only one of `timesteps` or `sigmas` can be passed. Please choose one to set custom values")
-    if timesteps is not None:
-        accepts_timesteps = "timesteps" in set(inspect.signature(scheduler.set_timesteps).parameters.keys())
-        if not accepts_timesteps:
-            raise ValueError(
-                f"The current scheduler class {scheduler.__class__}'s `set_timesteps` does not support custom"
-                " timestep schedules. Please check whether you are using the correct scheduler."
-            )
-        scheduler.set_timesteps(timesteps=timesteps, device=device, **kwargs)
-        timesteps = scheduler.timesteps
-        num_inference_steps = len(timesteps)
-    elif sigmas is not None:
-        accept_sigmas = "sigmas" in set(inspect.signature(scheduler.set_timesteps).parameters.keys())
-        if not accept_sigmas:
-            raise ValueError(
-                f"The current scheduler class {scheduler.__class__}'s `set_timesteps` does not support custom"
-                " sigmas schedules. Please check whether you are using the correct scheduler."
-            )
-        scheduler.set_timesteps(sigmas=sigmas, device=device, **kwargs)
-        timesteps = scheduler.timesteps
-        num_inference_steps = len(timesteps)
-    else:
-        scheduler.set_timesteps(num_inference_steps, device=device, **kwargs)
-        timesteps = scheduler.timesteps
-    return timesteps, num_inference_steps
-
-
-def rescale_noise_cfg(noise_cfg, noise_pred_text, guidance_rescale: float = 0.0):
-    std_text = noise_pred_text.std(dim=list(range(1, noise_pred_text.ndim)), keepdim=True)
-    std_cfg = noise_cfg.std(dim=list(range(1, noise_cfg.ndim)), keepdim=True)
-    noise_pred_rescaled = noise_cfg * (std_text / std_cfg)
-    noise_cfg = guidance_rescale * noise_pred_rescaled + (1 - guidance_rescale) * noise_cfg
-    return noise_cfg
 
 class LTX2Pipeline(nn.Module):
     def __init__(
