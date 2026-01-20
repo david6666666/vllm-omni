@@ -319,13 +319,15 @@ def main():
         # Skip muxing audio unless explicitly requested to keep the MP4 broadly compatible.
         audio = None
 
-    use_ltx2_export = audio is not None
+    use_ltx2_export = is_ltx2
+    encode_video = None
     if use_ltx2_export:
         try:
             from diffusers.pipelines.ltx2.export_utils import encode_video
         except ImportError:
-            raise ImportError("diffusers is required for LTX2 encode_video.")
+            encode_video = None
 
+    if use_ltx2_export and encode_video is not None:
         if isinstance(video_array, list):
             frames_np = np.stack(video_array, axis=0)
         elif isinstance(video_array, np.ndarray):
@@ -333,6 +335,10 @@ def main():
         else:
             frames_np = np.asarray(video_array)
 
+        if frames_np.ndim == 4 and frames_np.shape[-1] == 4:
+            frames_np = frames_np[..., :3]
+
+        frames_np = np.clip(frames_np, 0.0, 1.0)
         frames_u8 = (frames_np * 255).round().clip(0, 255).astype("uint8")
         video_tensor = torch.from_numpy(frames_u8)
 
