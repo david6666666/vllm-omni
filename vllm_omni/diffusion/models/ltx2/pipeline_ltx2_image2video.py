@@ -15,7 +15,13 @@ from diffusers.video_processor import VideoProcessor
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 
-from .pipeline_ltx2 import LTX2Pipeline, calculate_shift, rescale_noise_cfg, retrieve_timesteps
+from .pipeline_ltx2 import (
+    LTX2Pipeline,
+    calculate_shift,
+    get_ltx2_post_process_func as _get_ltx2_post_process_func,
+    rescale_noise_cfg,
+    retrieve_timesteps,
+)
 
 
 def retrieve_latents(
@@ -36,6 +42,10 @@ def _unwrap_request_tensor(value: Any) -> Any:
     if isinstance(value, list):
         return value[0] if value else None
     return value
+
+
+def get_ltx2_post_process_func(od_config: OmniDiffusionConfig):
+    return _get_ltx2_post_process_func(od_config)
 
 
 class LTX2ImageToVideoPipeline(LTX2Pipeline):
