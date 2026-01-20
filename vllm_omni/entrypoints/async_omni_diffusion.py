@@ -83,6 +83,7 @@ class AsyncOmniDiffusion:
 
         try:
             config_dict = get_hf_file_to_dict("model_index.json", od_config.model)
+
             od_config.model_class_name = config_dict.get("_class_name", None)
             od_config.update_multimodal_support()
 
