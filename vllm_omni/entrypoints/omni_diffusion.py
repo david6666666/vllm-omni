@@ -98,7 +98,6 @@ class OmniDiffusion:
                 raise
 
         self.engine: DiffusionEngine = DiffusionEngine.make_engine(od_config)
-        logger.info("OmniDiffusion initialized with model: %s", od_config.model_class_name)
 
 
     def generate(
