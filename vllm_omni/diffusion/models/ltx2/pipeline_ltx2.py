@@ -403,9 +403,10 @@ class LTX2Pipeline(nn.Module):
                 )
             if prompt_attention_mask.shape != negative_prompt_attention_mask.shape:
                 raise ValueError(
-                    "`prompt_attention_mask` and `negative_prompt_attention_mask` must have the same shape when passed directly, but"
-                    f" got: `prompt_attention_mask` {prompt_attention_mask.shape} != `negative_prompt_attention_mask`"
-                    f" {negative_prompt_attention_mask.shape}."
+                    "`prompt_attention_mask` and `negative_prompt_attention_mask` must have the same shape when "
+                    "passed directly, but got: `prompt_attention_mask` "
+                    f"{prompt_attention_mask.shape} != `negative_prompt_attention_mask` "
+                    f"{negative_prompt_attention_mask.shape}."
                 )
 
     @staticmethod
@@ -636,15 +637,15 @@ class LTX2Pipeline(nn.Module):
 
         latents = req.latents if req.latents is not None else latents
         audio_latents = (
-            req.audio_latents
-            if req.audio_latents is not None
-            else req.extra.get("audio_latents", audio_latents)
+            req.audio_latents if req.audio_latents is not None else req.extra.get("audio_latents", audio_latents)
         )
 
         prompt_embeds = _unwrap_request_tensor(req.prompt_embeds) or prompt_embeds
         negative_prompt_embeds = _unwrap_request_tensor(req.negative_prompt_embeds) or negative_prompt_embeds
         prompt_attention_mask = _unwrap_request_tensor(req.prompt_attention_mask) or prompt_attention_mask
-        negative_prompt_attention_mask = _unwrap_request_tensor(req.negative_attention_mask) or negative_prompt_attention_mask
+        negative_prompt_attention_mask = (
+            _unwrap_request_tensor(req.negative_attention_mask) or negative_prompt_attention_mask
+        )
         if req.decode_timestep is not None:
             decode_timestep = req.decode_timestep
         if req.decode_noise_scale is not None:
@@ -784,7 +785,9 @@ class LTX2Pipeline(nn.Module):
 
             latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
             latent_model_input = latent_model_input.to(prompt_embeds.dtype)
-            audio_latent_model_input = torch.cat([audio_latents] * 2) if self.do_classifier_free_guidance else audio_latents
+            audio_latent_model_input = (
+                torch.cat([audio_latents] * 2) if self.do_classifier_free_guidance else audio_latents
+            )
             audio_latent_model_input = audio_latent_model_input.to(prompt_embeds.dtype)
 
             timestep = t.expand(latent_model_input.shape[0])

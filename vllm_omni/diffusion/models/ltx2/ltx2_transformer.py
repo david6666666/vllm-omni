@@ -166,7 +166,8 @@ class LTX2AudioVideoAttnProcessor:
     def __init__(self):
         if is_torch_version("<", "2.0"):
             raise ValueError(
-                "LTX attention processors require a minimum PyTorch version of 2.0. Please upgrade your PyTorch installation."
+                "LTX attention processors require a minimum PyTorch version of 2.0. "
+                "Please upgrade your PyTorch installation."
             )
 
     def __call__(
@@ -293,7 +294,9 @@ class LTX2Attention(torch.nn.Module, AttentionModuleMixin):
         unused_kwargs = [k for k, _ in kwargs.items() if k not in attn_parameters]
         if len(unused_kwargs) > 0:
             logger.warning(
-                f"attention_kwargs {unused_kwargs} are not expected by {self.processor.__class__.__name__} and will be ignored."
+                "attention_kwargs %s are not expected by %s and will be ignored.",
+                unused_kwargs,
+                self.processor.__class__.__name__,
             )
         kwargs = {k: w for k, w in kwargs.items() if k in attn_parameters}
         hidden_states = self.processor(
@@ -1183,9 +1186,7 @@ class LTX2VideoTransformer3DModel(
             scale_lora_layers(self, lora_scale)
         else:
             if attention_kwargs is not None and attention_kwargs.get("scale", None) is not None:
-                logger.warning(
-                    "Passing `scale` via `attention_kwargs` when not using the PEFT backend is ineffective."
-                )
+                logger.warning("Passing `scale` via `attention_kwargs` when not using the PEFT backend is ineffective.")
 
         # Determine timestep for audio.
         audio_timestep = audio_timestep if audio_timestep is not None else timestep
