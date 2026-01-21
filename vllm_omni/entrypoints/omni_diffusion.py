@@ -99,7 +99,6 @@ class OmniDiffusion:
 
         self.engine: DiffusionEngine = DiffusionEngine.make_engine(od_config)
 
-
     def generate(
         self,
         prompt: str | list[str],

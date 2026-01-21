@@ -20,6 +20,8 @@ from vllm_omni.diffusion.request import OmniDiffusionRequest
 from .pipeline_ltx2 import (
     LTX2Pipeline,
     calculate_shift,
+)
+from .pipeline_ltx2 import (
     get_ltx2_post_process_func as _get_ltx2_post_process_func,
 )
 

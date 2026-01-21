@@ -15,13 +15,19 @@
 
 import inspect
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any
 
 import torch
 import torch.nn as nn
 
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders import FromOriginalModelMixin, PeftAdapterMixin
+from diffusers.models._modeling_parallel import ContextParallelInput, ContextParallelOutput
+from diffusers.models.attention import AttentionMixin, AttentionModuleMixin, FeedForward
+from diffusers.models.cache_utils import CacheMixin
+from diffusers.models.embeddings import PixArtAlphaCombinedTimestepSizeEmbeddings, PixArtAlphaTextProjection
+from diffusers.models.modeling_utils import ModelMixin
+from diffusers.models.normalization import RMSNorm
 from diffusers.utils import (
     USE_PEFT_BACKEND,
     BaseOutput,
@@ -30,12 +36,6 @@ from diffusers.utils import (
     scale_lora_layers,
     unscale_lora_layers,
 )
-from diffusers.models._modeling_parallel import ContextParallelInput, ContextParallelOutput
-from diffusers.models.attention import AttentionMixin, AttentionModuleMixin, FeedForward
-from diffusers.models.cache_utils import CacheMixin
-from diffusers.models.embeddings import PixArtAlphaCombinedTimestepSizeEmbeddings, PixArtAlphaTextProjection
-from diffusers.models.modeling_utils import ModelMixin
-from diffusers.models.normalization import RMSNorm
 
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.layer import Attention
@@ -44,7 +44,7 @@ from vllm_omni.diffusion.attention.layer import Attention
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
-def apply_interleaved_rotary_emb(x: torch.Tensor, freqs: Tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
+def apply_interleaved_rotary_emb(x: torch.Tensor, freqs: tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
     cos, sin = freqs
     x_real, x_imag = x.unflatten(2, (-1, 2)).unbind(-1)  # [B, S, C // 2]
     x_rotated = torch.stack([-x_imag, x_real], dim=-1).flatten(2)
@@ -52,7 +52,7 @@ def apply_interleaved_rotary_emb(x: torch.Tensor, freqs: Tuple[torch.Tensor, tor
     return out
 
 
-def apply_split_rotary_emb(x: torch.Tensor, freqs: Tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
+def apply_split_rotary_emb(x: torch.Tensor, freqs: tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
     cos, sin = freqs
 
     x_dtype = x.dtype
@@ -143,10 +143,10 @@ class LTX2AdaLayerNormSingle(nn.Module):
     def forward(
         self,
         timestep: torch.Tensor,
-        added_cond_kwargs: Optional[Dict[str, torch.Tensor]] = None,
-        batch_size: Optional[int] = None,
-        hidden_dtype: Optional[torch.dtype] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        added_cond_kwargs: dict[str, torch.Tensor] | None = None,
+        batch_size: int | None = None,
+        hidden_dtype: torch.dtype | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         # No modulation happening here.
         added_cond_kwargs = added_cond_kwargs or {"resolution": None, "aspect_ratio": None}
         embedded_timestep = self.emb(timestep, **added_cond_kwargs, batch_size=batch_size, hidden_dtype=hidden_dtype)
@@ -174,10 +174,10 @@ class LTX2AudioVideoAttnProcessor:
         self,
         attn: "LTX2Attention",
         hidden_states: torch.Tensor,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        query_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        key_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        encoder_hidden_states: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        query_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+        key_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         batch_size, sequence_length, _ = (
             hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
@@ -238,7 +238,7 @@ class LTX2Attention(torch.nn.Module, AttentionModuleMixin):
         dim_head: int = 64,
         dropout: float = 0.0,
         bias: bool = True,
-        cross_attention_dim: Optional[int] = None,
+        cross_attention_dim: int | None = None,
         out_bias: bool = True,
         qk_norm: str = "rms_norm_across_heads",
         norm_eps: float = 1e-6,
@@ -284,10 +284,10 @@ class LTX2Attention(torch.nn.Module, AttentionModuleMixin):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        query_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        key_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        encoder_hidden_states: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        query_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+        key_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
         **kwargs,
     ) -> torch.Tensor:
         attn_parameters = set(inspect.signature(self.processor.__call__).parameters.keys())
@@ -455,14 +455,14 @@ class LTX2VideoTransformerBlock(nn.Module):
         temb_ca_audio_scale_shift: torch.Tensor,
         temb_ca_gate: torch.Tensor,
         temb_ca_audio_gate: torch.Tensor,
-        video_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        audio_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        ca_video_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        ca_audio_rotary_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        encoder_attention_mask: Optional[torch.Tensor] = None,
-        audio_encoder_attention_mask: Optional[torch.Tensor] = None,
-        a2v_cross_attention_mask: Optional[torch.Tensor] = None,
-        v2a_cross_attention_mask: Optional[torch.Tensor] = None,
+        video_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+        audio_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+        ca_video_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+        ca_audio_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+        encoder_attention_mask: torch.Tensor | None = None,
+        audio_encoder_attention_mask: torch.Tensor | None = None,
+        a2v_cross_attention_mask: torch.Tensor | None = None,
+        v2a_cross_attention_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         batch_size = hidden_states.size(0)
 
@@ -625,7 +625,7 @@ class LTX2AudioVideoRotaryPosEmbed(nn.Module):
         base_width: int = 2048,
         sampling_rate: int = 16000,
         hop_length: int = 160,
-        scale_factors: Tuple[int, ...] = (8, 32, 32),
+        scale_factors: tuple[int, ...] = (8, 32, 32),
         theta: float = 10000.0,
         causal_offset: int = 1,
         modality: str = "video",
@@ -769,7 +769,7 @@ class LTX2AudioVideoRotaryPosEmbed(nn.Module):
             start=shift, end=num_frames + shift, step=self.patch_size_t, dtype=torch.float32, device=device
         )
 
-        # 2. Calculate start timstamps in seconds with respect to the original spectrogram grid
+        # 2. Calculate start timestamps in seconds with respect to the original spectrogram grid
         audio_scale_factor = self.scale_factors[0]
         # Scale back to mel spectrogram space
         grid_start_mel = grid_f * audio_scale_factor
@@ -778,7 +778,7 @@ class LTX2AudioVideoRotaryPosEmbed(nn.Module):
         # Convert mel bins back into seconds
         grid_start_s = grid_start_mel * self.hop_length / self.sampling_rate
 
-        # 3. Calculate start timstamps in seconds with respect to the original spectrogram grid
+        # 3. Calculate start timestamps in seconds with respect to the original spectrogram grid
         grid_end_mel = (grid_f + self.patch_size_t) * audio_scale_factor
         grid_end_mel = (grid_end_mel + self.causal_offset - audio_scale_factor).clip(min=0)
         grid_end_s = grid_end_mel * self.hop_length / self.sampling_rate
@@ -795,8 +795,8 @@ class LTX2AudioVideoRotaryPosEmbed(nn.Module):
             return self.prepare_audio_coords(*args, **kwargs)
 
     def forward(
-        self, coords: torch.Tensor, device: Optional[Union[str, torch.device]] = None
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        self, coords: torch.Tensor, device: str | torch.device | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         device = device or coords.device
 
         # Number of spatiotemporal dimensions (3 for video, 1 (temporal) for audio and cross attn)
@@ -921,18 +921,18 @@ class LTX2VideoTransformer3DModel(
     def __init__(
         self,
         in_channels: int = 128,  # Video Arguments
-        out_channels: Optional[int] = 128,
+        out_channels: int | None = 128,
         patch_size: int = 1,
         patch_size_t: int = 1,
         num_attention_heads: int = 32,
         attention_head_dim: int = 128,
         cross_attention_dim: int = 4096,
-        vae_scale_factors: Tuple[int, int, int] = (8, 32, 32),
+        vae_scale_factors: tuple[int, int, int] = (8, 32, 32),
         pos_embed_max_pos: int = 20,
         base_height: int = 2048,
         base_width: int = 2048,
         audio_in_channels: int = 128,  # Audio Arguments
-        audio_out_channels: Optional[int] = 128,
+        audio_out_channels: int | None = 128,
         audio_patch_size: int = 1,
         audio_patch_size_t: int = 1,
         audio_num_attention_heads: int = 32,
@@ -1112,17 +1112,17 @@ class LTX2VideoTransformer3DModel(
         encoder_hidden_states: torch.Tensor,
         audio_encoder_hidden_states: torch.Tensor,
         timestep: torch.LongTensor,
-        audio_timestep: Optional[torch.LongTensor] = None,
-        encoder_attention_mask: Optional[torch.Tensor] = None,
-        audio_encoder_attention_mask: Optional[torch.Tensor] = None,
-        num_frames: Optional[int] = None,
-        height: Optional[int] = None,
-        width: Optional[int] = None,
+        audio_timestep: torch.LongTensor | None = None,
+        encoder_attention_mask: torch.Tensor | None = None,
+        audio_encoder_attention_mask: torch.Tensor | None = None,
+        num_frames: int | None = None,
+        height: int | None = None,
+        width: int | None = None,
         fps: float = 24.0,
-        audio_num_frames: Optional[int] = None,
-        video_coords: Optional[torch.Tensor] = None,
-        audio_coords: Optional[torch.Tensor] = None,
-        attention_kwargs: Optional[Dict[str, Any]] = None,
+        audio_num_frames: int | None = None,
+        video_coords: torch.Tensor | None = None,
+        audio_coords: torch.Tensor | None = None,
+        attention_kwargs: dict[str, Any] | None = None,
         return_dict: bool = True,
     ) -> torch.Tensor:
         """
