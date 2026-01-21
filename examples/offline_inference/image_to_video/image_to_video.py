@@ -365,23 +365,6 @@ def main():
         export_to_video(video_array, str(output_path), fps=fps)
     print(f"Saved generated video to {output_path}")
 
-    if profiler_enabled:
-        print("\n[Profiler] Stopping profiler and collecting results...")
-        profile_results = omni.stop_profile()
-        if profile_results and isinstance(profile_results, dict):
-            traces = profile_results.get("traces", [])
-            print("\n" + "=" * 60)
-            print("PROFILING RESULTS:")
-            for rank, trace in enumerate(traces):
-                print(f"\nRank {rank}:")
-                if trace:
-                    print(f"  • Trace: {trace}")
-            if not traces:
-                print("  No traces collected.")
-            print("=" * 60)
-        else:
-            print("[Profiler] No valid profiling data returned.")
-
     if audio is not None and args.audio_output:
         audio_path = Path(args.audio_output)
         audio_path.parent.mkdir(parents=True, exist_ok=True)
@@ -411,6 +394,23 @@ def main():
                     "Install with: pip install soundfile or pip install scipy"
                 )
         print(f"Saved generated audio to {audio_path}")
+
+    if profiler_enabled:
+        print("\n[Profiler] Stopping profiler and collecting results...")
+        profile_results = omni.stop_profile()
+        if profile_results and isinstance(profile_results, dict):
+            traces = profile_results.get("traces", [])
+            print("\n" + "=" * 60)
+            print("PROFILING RESULTS:")
+            for rank, trace in enumerate(traces):
+                print(f"\nRank {rank}:")
+                if trace:
+                    print(f"  • Trace: {trace}")
+            if not traces:
+                print("  No traces collected.")
+            print("=" * 60)
+        else:
+            print("[Profiler] No valid profiling data returned.")
 
 
 if __name__ == "__main__":
