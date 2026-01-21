@@ -19,7 +19,6 @@ from typing import Any
 
 import torch
 import torch.nn as nn
-
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders import FromOriginalModelMixin, PeftAdapterMixin
 from diffusers.models._modeling_parallel import ContextParallelInput, ContextParallelOutput
@@ -39,7 +38,6 @@ from diffusers.utils import (
 
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.layer import Attention
-
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
