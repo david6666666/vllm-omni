@@ -32,11 +32,13 @@ from diffusers.utils import (
 )
 from diffusers.models._modeling_parallel import ContextParallelInput, ContextParallelOutput
 from diffusers.models.attention import AttentionMixin, AttentionModuleMixin, FeedForward
-from diffusers.models.attention_dispatch import dispatch_attention_fn
 from diffusers.models.cache_utils import CacheMixin
 from diffusers.models.embeddings import PixArtAlphaCombinedTimestepSizeEmbeddings, PixArtAlphaTextProjection
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.normalization import RMSNorm
+
+from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
+from vllm_omni.diffusion.attention.layer import Attention
 
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
@@ -208,16 +210,8 @@ class LTX2AudioVideoAttnProcessor:
         key = key.unflatten(2, (attn.heads, -1))
         value = value.unflatten(2, (attn.heads, -1))
 
-        hidden_states = dispatch_attention_fn(
-            query,
-            key,
-            value,
-            attn_mask=attention_mask,
-            dropout_p=0.0,
-            is_causal=False,
-            backend=self._attention_backend,
-            parallel_config=self._parallel_config,
-        )
+        attn_metadata = AttentionMetadata(attn_mask=attention_mask) if attention_mask is not None else None
+        hidden_states = attn.attn(query, key, value, attn_metadata)
         hidden_states = hidden_states.flatten(2, 3)
         hidden_states = hidden_states.to(query.dtype)
 
@@ -274,6 +268,13 @@ class LTX2Attention(torch.nn.Module, AttentionModuleMixin):
         self.to_out = torch.nn.ModuleList([])
         self.to_out.append(torch.nn.Linear(self.inner_dim, self.out_dim, bias=out_bias))
         self.to_out.append(torch.nn.Dropout(dropout))
+        self.attn = Attention(
+            num_heads=heads,
+            head_size=dim_head,
+            num_kv_heads=kv_heads,
+            softmax_scale=1.0 / (dim_head**0.5),
+            causal=False,
+        )
 
         if processor is None:
             processor = self._default_processor_cls()
