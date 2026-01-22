@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import inspect
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,6 +36,8 @@ from diffusers.utils import (
     scale_lora_layers,
     unscale_lora_layers,
 )
+from vllm.model_executor.layers.linear import QKVParallelLinear, ReplicatedLinear
+from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.layer import Attention
@@ -177,20 +180,31 @@ class LTX2AudioVideoAttnProcessor:
         query_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
         key_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
+        is_self_attention = encoder_hidden_states is None
         batch_size, sequence_length, _ = (
-            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+            hidden_states.shape if is_self_attention else encoder_hidden_states.shape
         )
 
         if attention_mask is not None:
             attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
             attention_mask = attention_mask.view(batch_size, attn.heads, -1, attention_mask.shape[-1])
 
-        if encoder_hidden_states is None:
+        if is_self_attention:
             encoder_hidden_states = hidden_states
 
-        query = attn.to_q(hidden_states)
-        key = attn.to_k(encoder_hidden_states)
-        value = attn.to_v(encoder_hidden_states)
+        if is_self_attention and attn.to_qkv is not None:
+            qkv, _ = attn.to_qkv(hidden_states)
+            query, key, value = qkv.split([attn.inner_dim, attn.inner_kv_dim, attn.inner_kv_dim], dim=-1)
+        else:
+            query = attn.to_q(hidden_states)
+            if isinstance(query, tuple):
+                query = query[0]
+            key = attn.to_k(encoder_hidden_states)
+            if isinstance(key, tuple):
+                key = key[0]
+            value = attn.to_v(encoder_hidden_states)
+            if isinstance(value, tuple):
+                value = value[0]
 
         query = attn.norm_q(query)
         key = attn.norm_k(key)
@@ -215,6 +229,8 @@ class LTX2AudioVideoAttnProcessor:
         hidden_states = hidden_states.to(query.dtype)
 
         hidden_states = attn.to_out[0](hidden_states)
+        if isinstance(hidden_states, tuple):
+            hidden_states = hidden_states[0]
         hidden_states = attn.to_out[1](hidden_states)
         return hidden_states
 
@@ -261,12 +277,27 @@ class LTX2Attention(torch.nn.Module, AttentionModuleMixin):
 
         self.norm_q = torch.nn.RMSNorm(dim_head * heads, eps=norm_eps, elementwise_affine=norm_elementwise_affine)
         self.norm_k = torch.nn.RMSNorm(dim_head * kv_heads, eps=norm_eps, elementwise_affine=norm_elementwise_affine)
-        self.to_q = torch.nn.Linear(query_dim, self.inner_dim, bias=bias)
-        self.to_k = torch.nn.Linear(self.cross_attention_dim, self.inner_kv_dim, bias=bias)
-        self.to_v = torch.nn.Linear(self.cross_attention_dim, self.inner_kv_dim, bias=bias)
-        self.to_out = torch.nn.ModuleList([])
-        self.to_out.append(torch.nn.Linear(self.inner_dim, self.out_dim, bias=out_bias))
-        self.to_out.append(torch.nn.Dropout(dropout))
+
+        self.to_qkv = None
+        self.to_q = None
+        self.to_k = None
+        self.to_v = None
+        if cross_attention_dim is None:
+            self.to_qkv = QKVParallelLinear(
+                hidden_size=query_dim,
+                head_size=self.head_dim,
+                total_num_heads=heads,
+                bias=bias,
+                disable_tp=True,
+            )
+        else:
+            self.to_q = ReplicatedLinear(query_dim, self.inner_dim, bias=bias)
+            self.to_k = ReplicatedLinear(self.cross_attention_dim, self.inner_kv_dim, bias=bias)
+            self.to_v = ReplicatedLinear(self.cross_attention_dim, self.inner_kv_dim, bias=bias)
+
+        self.to_out = torch.nn.ModuleList(
+            [ReplicatedLinear(self.inner_dim, self.out_dim, bias=out_bias), torch.nn.Dropout(dropout)]
+        )
         self.attn = Attention(
             num_heads=heads,
             head_size=dim_head,
@@ -1348,3 +1379,40 @@ class LTX2VideoTransformer3DModel(
         if not return_dict:
             return (output, audio_output)
         return AudioVisualModelOutput(sample=output, audio_sample=audio_output)
+
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        """
+        Load weights from a pretrained model, mapping separate Q/K/V projections
+        into fused QKV projections for self-attention blocks.
+
+        Returns:
+            Set of parameter names that were successfully loaded.
+        """
+        stacked_params_mapping = [
+            (".attn1.to_qkv", ".attn1.to_q", "q"),
+            (".attn1.to_qkv", ".attn1.to_k", "k"),
+            (".attn1.to_qkv", ".attn1.to_v", "v"),
+            (".audio_attn1.to_qkv", ".audio_attn1.to_q", "q"),
+            (".audio_attn1.to_qkv", ".audio_attn1.to_k", "k"),
+            (".audio_attn1.to_qkv", ".audio_attn1.to_v", "v"),
+        ]
+
+        params_dict = dict(self.named_parameters())
+        loaded_params: set[str] = set()
+
+        for name, loaded_weight in weights:
+            for param_name, weight_name, shard_id in stacked_params_mapping:
+                if weight_name not in name:
+                    continue
+                name = name.replace(weight_name, param_name)
+                param = params_dict[name]
+                weight_loader = param.weight_loader
+                weight_loader(param, loaded_weight, shard_id)
+                break
+            else:
+                param = params_dict[name]
+                weight_loader = getattr(param, "weight_loader", default_weight_loader)
+                weight_loader(param, loaded_weight)
+            loaded_params.add(name)
+
+        return loaded_params
