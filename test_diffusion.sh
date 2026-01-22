@@ -269,6 +269,8 @@ QWEN_EDIT_PORT=8092
 QWEN_EDIT_MODEL="/workspace/models/Qwen/Qwen-Image-Edit"
 QWEN_EDIT_LOG="${SERVER_LOG_DIR}/qwen_image_edit_server.log"
 QWEN_EDIT_OUTPUT="${OUTPUT_DIR}/qwen_image_edit_online.png"
+QWEN_EDIT_REQUEST_JSON="${OUTPUT_DIR}/qwen_image_edit_request.json"
+QWEN_EDIT_PROMPT="Let this mascot dance under the moon, surrounded by floating stars and poetic bubbles such as 'Be Kind'"
 
 echo "Starting online serving test: Qwen-Image-Edit (port ${QWEN_EDIT_PORT})"
 QWEN_EDIT_PID=$(start_server "${QWEN_EDIT_MODEL}" "${QWEN_EDIT_PORT}" "${QWEN_EDIT_LOG}")
@@ -280,28 +282,28 @@ if ! wait_for_server "${QWEN_EDIT_PORT}" "${QWEN_EDIT_PID}"; then
 fi
 
 QWEN_EDIT_IMG_B64=$(base64 -w0 "${ASSETS_DIR}/qwen-bear.png")
-QWEN_EDIT_REQUEST_JSON=$(
-  jq -n --arg prompt "Stylize this image into a colorful illustration" --arg img "${QWEN_EDIT_IMG_B64}" '{
-    messages: [{
-      role: "user",
-      content: [
-        {"type": "text", "text": $prompt},
-        {"type": "image_url", "image_url": {"url": ("data:image/png;base64," + $img)}}
-      ]
-    }],
-    extra_body: {
-      height: 1024,
-      width: 1024,
-      num_inference_steps: 50,
-      guidance_scale: 1,
-      seed: 42
-    }
-  }'
-)
+cat <<EOF > "${QWEN_EDIT_REQUEST_JSON}"
+{
+  "messages": [{
+    "role": "user",
+    "content": [
+      {"type": "text", "text": "${QWEN_EDIT_PROMPT}"},
+      {"type": "image_url", "image_url": {"url": "data:image/png;base64,${QWEN_EDIT_IMG_B64}"}}
+    ]
+  }],
+  "extra_body": {
+    "height": 1024,
+    "width": 1024,
+    "num_inference_steps": 50,
+    "guidance_scale": 1,
+    "seed": 42
+  }
+}
+EOF
 
 curl -s --max-time 600 "http://localhost:${QWEN_EDIT_PORT}/v1/chat/completions" \
   -H "Content-Type: application/json" \
-  -d "${QWEN_EDIT_REQUEST_JSON}" \
+  -d @"${QWEN_EDIT_REQUEST_JSON}" \
   | jq -r '.choices[0].message.content[0].image_url.url' \
   | cut -d',' -f2- | base64 -d > "${QWEN_EDIT_OUTPUT}"
 
