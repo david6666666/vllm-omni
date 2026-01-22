@@ -270,7 +270,7 @@ QWEN_EDIT_MODEL="/workspace/models/Qwen/Qwen-Image-Edit"
 QWEN_EDIT_LOG="${SERVER_LOG_DIR}/qwen_image_edit_server.log"
 QWEN_EDIT_OUTPUT="${OUTPUT_DIR}/qwen_image_edit_online.png"
 QWEN_EDIT_REQUEST_JSON="${OUTPUT_DIR}/qwen_image_edit_request.json"
-QWEN_EDIT_PROMPT="Let this mascot dance under the moon, surrounded by floating stars and poetic bubbles such as 'Be Kind'"
+QWEN_EDIT_PROMPT="Let this mascot dance under the moon, surrounded by floating stars and poetic bubbles such as Be Kind"
 
 echo "Starting online serving test: Qwen-Image-Edit (port ${QWEN_EDIT_PORT})"
 QWEN_EDIT_PID=$(start_server "${QWEN_EDIT_MODEL}" "${QWEN_EDIT_PORT}" "${QWEN_EDIT_LOG}")
@@ -292,8 +292,6 @@ cat <<EOF > "${QWEN_EDIT_REQUEST_JSON}"
     ]
   }],
   "extra_body": {
-    "height": 1024,
-    "width": 1024,
     "num_inference_steps": 50,
     "guidance_scale": 1,
     "seed": 42
