@@ -56,9 +56,6 @@ if [ ! -f "${ASSETS_DIR}/qwen-bear.png" ]; then
     https://vllm-public-assets.s3.us-west-2.amazonaws.com/omni-assets/qwen-bear.png
 fi
 
-# Duplicate for multi-image edit example
-cp -f "${ASSETS_DIR}/qwen-bear.png" "${ASSETS_DIR}/qwen-bear-2.png"
-
 # ---------------------------
 # Text-to-Image models
 # ---------------------------
