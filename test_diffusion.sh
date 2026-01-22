@@ -158,7 +158,7 @@ python examples/offline_inference/image_to_image/image_edit.py \
 
 python examples/offline_inference/image_to_image/image_edit.py \
   --model /workspace/models/Qwen/Qwen-Image-Layered \
-  --image "${OUTPUT_DIR}/qwen_image_edit.png"" \
+  --image "${OUTPUT_DIR}/qwen_image_edit.png" \
   --prompt "Decompose the image into layered RGBA outputs" \
   --output "${OUTPUT_DIR}/qwen_image_layered" \
   --num_inference_steps 50 \
