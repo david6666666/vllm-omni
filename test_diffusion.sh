@@ -42,17 +42,6 @@ python examples/offline_inference/text_to_image/text_to_image.py \
   --output "${OUTPUT_DIR}/qwen_image_coffee.png"
 
 python examples/offline_inference/text_to_image/text_to_image.py \
-  --model /workspace/models/Qwen/Qwen-Image-2512 \
-  --prompt "a cup of coffee on the table" \
-  --seed 42 \
-  --cfg_scale 4.0 \
-  --num_images_per_prompt 1 \
-  --num_inference_steps 50 \
-  --height 1024 \
-  --width 1024 \
-  --output "${OUTPUT_DIR}/qwen_image_2512_coffee.png"
-
-python examples/offline_inference/text_to_image/text_to_image.py \
   --model /workspace/models/Tongyi-MAI/Z-Image-Turbo \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
