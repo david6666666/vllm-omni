@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${ROOT_DIR}/../../.." && pwd)"
 ASSETS_DIR="${ROOT_DIR}/assets"
 OUTPUT_DIR="${ROOT_DIR}/outputs"
 SERVER_LOG_DIR="${OUTPUT_DIR}/server_logs"
@@ -59,7 +60,7 @@ fi
 # ---------------------------
 # Text-to-Image models
 # ---------------------------
-python examples/offline_inference/text_to_image/text_to_image.py \
+python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
   --model /workspace/models/ByteDance-Seed/BAGEL-7B-MoT \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
@@ -70,7 +71,7 @@ python examples/offline_inference/text_to_image/text_to_image.py \
   --width 1024 \
   --output "${OUTPUT_DIR}/bagel_coffee.png"
 
-python examples/offline_inference/text_to_image/text_to_image.py \
+python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
   --model /workspace/models/Qwen/Qwen-Image \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
@@ -81,7 +82,7 @@ python examples/offline_inference/text_to_image/text_to_image.py \
   --width 1024 \
   --output "${OUTPUT_DIR}/qwen_image_coffee.png"
 
-python examples/offline_inference/text_to_image/text_to_image.py \
+python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
   --model /workspace/models/Qwen/Qwen-Image \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
@@ -93,7 +94,7 @@ python examples/offline_inference/text_to_image/text_to_image.py \
   --cache_backend cache_dit \
   --output "${OUTPUT_DIR}/qwen_image_coffee_cache_dit.png"
 
-python examples/offline_inference/text_to_image/text_to_image.py \
+python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
   --model /workspace/models/Qwen/Qwen-Image \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
@@ -105,7 +106,7 @@ python examples/offline_inference/text_to_image/text_to_image.py \
   --cache_backend tea_cache \
   --output "${OUTPUT_DIR}/qwen_image_coffee_tea_cache.png"
 
-python examples/offline_inference/text_to_image/text_to_image.py \
+python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
   --model /workspace/models/Qwen/Qwen-Image \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
@@ -117,7 +118,7 @@ python examples/offline_inference/text_to_image/text_to_image.py \
   --ulysses_degree 2 \
   --output "${OUTPUT_DIR}/qwen_image_coffee_ulysses_degree.png"
 
-python examples/offline_inference/text_to_image/text_to_image.py \
+python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
   --model /workspace/models/Qwen/Qwen-Image \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
@@ -129,7 +130,7 @@ python examples/offline_inference/text_to_image/text_to_image.py \
   --ring_degree 2 \
   --output "${OUTPUT_DIR}/qwen_image_coffee_ring_degree.png"
 
-python examples/offline_inference/text_to_image/text_to_image.py \
+python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
   --model /workspace/models/Qwen/Qwen-Image \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
@@ -199,7 +200,7 @@ python examples/offline_inference/text_to_image/text_to_image.py \
 # ---------------------------
 # Image-Editing models
 # ---------------------------
-python examples/offline_inference/image_to_image/image_edit.py \
+python "${REPO_ROOT}/examples/offline_inference/image_to_image/image_edit.py" \
   --model /workspace/models/Qwen/Qwen-Image-Edit \
   --image "${ASSETS_DIR}/qwen-bear.png" \
   --prompt "Let this mascot dance under the moon, surrounded by floating stars and poetic bubbles such as 'Be Kind'" \
@@ -207,7 +208,7 @@ python examples/offline_inference/image_to_image/image_edit.py \
   --num_inference_steps 50 \
   --cfg_scale 4.0
 
-python examples/offline_inference/image_to_image/image_edit.py \
+python "${REPO_ROOT}/examples/offline_inference/image_to_image/image_edit.py" \
   --model /workspace/models/Qwen/Qwen-Image-Edit-2509 \
   --image "${ASSETS_DIR}/qwen-bear.png" "${OUTPUT_DIR}/qwen_image_coffee.png" \
   --prompt "Combine these images into a single scene" \
@@ -216,7 +217,7 @@ python examples/offline_inference/image_to_image/image_edit.py \
   --cfg_scale 4.0 \
   --guidance_scale 1.0
 
-python examples/offline_inference/image_to_image/image_edit.py \
+python "${REPO_ROOT}/examples/offline_inference/image_to_image/image_edit.py" \
   --model /workspace/models/Qwen/Qwen-Image-Layered \
   --image "${OUTPUT_DIR}/qwen_image_edit.png" \
   --prompt "Decompose the image into layered RGBA outputs" \
@@ -226,7 +227,7 @@ python examples/offline_inference/image_to_image/image_edit.py \
   --layers 4 \
   --color-format "RGBA"
 
-python examples/offline_inference/image_to_image/image_edit.py \
+python "${REPO_ROOT}/examples/offline_inference/image_to_image/image_edit.py" \
   --model /workspace/models/meituan-longcat/LongCat-Image-Edit \
   --image "${ASSETS_DIR}/qwen-bear.png" \
   --prompt "Stylize this image into a colorful illustration" \
@@ -234,7 +235,7 @@ python examples/offline_inference/image_to_image/image_edit.py \
   --num_inference_steps 50 \
   --cfg_scale 4.0
 
-python examples/offline_inference/image_to_image/image_edit.py \
+python "${REPO_ROOT}/examples/offline_inference/image_to_image/image_edit.py" \
   --model /workspace/models/black-forest-labs/FLUX.2-klein-9B \
   --image "${ASSETS_DIR}/qwen-bear.png" \
   --prompt "Stylize this image into a colorful illustration" \
@@ -245,7 +246,7 @@ python examples/offline_inference/image_to_image/image_edit.py \
 # ---------------------------
 # Text-to-Video (Wan2.2 T2V)
 # ---------------------------
-python examples/offline_inference/text_to_video/text_to_video.py \
+python "${REPO_ROOT}/examples/offline_inference/text_to_video/text_to_video.py" \
   --model /workspace/models/Wan-AI/Wan2.2-T2V-A14B-Diffusers \
   --prompt "Two anthropomorphic cats in comfy boxing gear fight intensely on a spotlighted stage." \
   --negative_prompt "" \
@@ -261,7 +262,7 @@ python examples/offline_inference/text_to_video/text_to_video.py \
 # ---------------------------
 # Image-to-Video (Wan2.2 I2V / TI2V)
 # ---------------------------
-python examples/offline_inference/image_to_video/image_to_video.py \
+python "${REPO_ROOT}/examples/offline_inference/image_to_video/image_to_video.py" \
   --model /workspace/models/Wan-AI/Wan2.2-TI2V-5B-Diffusers \
   --image "${ASSETS_DIR}/qwen-bear.png" \
   --prompt "A bear playing with yarn, smooth motion" \
@@ -278,7 +279,7 @@ python examples/offline_inference/image_to_video/image_to_video.py \
 # ---------------------------
 # Text-to-Audio (Stable Audio Open)
 # ---------------------------
-python examples/offline_inference/text_to_audio/text_to_audio.py \
+python "${REPO_ROOT}/examples/offline_inference/text_to_audio/text_to_audio.py" \
   --model /workspace/models/stabilityai/stable-audio-open-1.0 \
   --prompt "The sound of a hammer hitting a wooden surface." \
   --negative_prompt "Low quality." \
