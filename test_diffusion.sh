@@ -82,6 +82,66 @@ python examples/offline_inference/text_to_image/text_to_image.py \
   --output "${OUTPUT_DIR}/qwen_image_coffee.png"
 
 python examples/offline_inference/text_to_image/text_to_image.py \
+  --model /workspace/models/Qwen/Qwen-Image \
+  --prompt "a cup of coffee on the table" \
+  --seed 42 \
+  --cfg_scale 4.0 \
+  --num_images_per_prompt 1 \
+  --num_inference_steps 50 \
+  --height 1024 \
+  --width 1024 \
+  --cache_backend cache_dit \
+  --output "${OUTPUT_DIR}/qwen_image_coffee_cache_dit.png"
+
+python examples/offline_inference/text_to_image/text_to_image.py \
+  --model /workspace/models/Qwen/Qwen-Image \
+  --prompt "a cup of coffee on the table" \
+  --seed 42 \
+  --cfg_scale 4.0 \
+  --num_images_per_prompt 1 \
+  --num_inference_steps 50 \
+  --height 1024 \
+  --width 1024 \
+  --cache_backend tea_cache \
+  --output "${OUTPUT_DIR}/qwen_image_coffee_tea_cache.png"
+
+python examples/offline_inference/text_to_image/text_to_image.py \
+  --model /workspace/models/Qwen/Qwen-Image \
+  --prompt "a cup of coffee on the table" \
+  --seed 42 \
+  --cfg_scale 4.0 \
+  --num_images_per_prompt 1 \
+  --num_inference_steps 50 \
+  --height 1024 \
+  --width 1024 \
+  --ulysses_degree 2 \
+  --output "${OUTPUT_DIR}/qwen_image_coffee_ulysses_degree.png"
+
+python examples/offline_inference/text_to_image/text_to_image.py \
+  --model /workspace/models/Qwen/Qwen-Image \
+  --prompt "a cup of coffee on the table" \
+  --seed 42 \
+  --cfg_scale 4.0 \
+  --num_images_per_prompt 1 \
+  --num_inference_steps 50 \
+  --height 1024 \
+  --width 1024 \
+  --ring_degree 2 \
+  --output "${OUTPUT_DIR}/qwen_image_coffee_ring_degree.png"
+
+python examples/offline_inference/text_to_image/text_to_image.py \
+  --model /workspace/models/Qwen/Qwen-Image \
+  --prompt "a cup of coffee on the table" \
+  --seed 42 \
+  --cfg_scale 4.0 \
+  --num_images_per_prompt 1 \
+  --num_inference_steps 50 \
+  --height 1024 \
+  --width 1024 \
+  --cfg_parallel_size 2 \
+  --output "${OUTPUT_DIR}/qwen_image_coffee_cfg_parallel.png"
+
+python examples/offline_inference/text_to_image/text_to_image.py \
   --model /workspace/models/Tongyi-MAI/Z-Image-Turbo \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
