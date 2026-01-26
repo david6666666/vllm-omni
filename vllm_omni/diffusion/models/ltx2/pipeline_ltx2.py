@@ -67,6 +67,11 @@ def get_ltx2_post_process_func(
     od_config: OmniDiffusionConfig,
 ):
     def post_process_func(output: tuple[torch.Tensor, torch.Tensor] | torch.Tensor):
+        if isinstance(output, tuple) and len(output) == 2:
+            video, audio = output
+            if isinstance(audio, torch.Tensor):
+                audio = audio.detach().cpu()
+            return {"video": video, "audio": audio}
         return output
 
     return post_process_func

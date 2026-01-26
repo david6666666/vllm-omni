@@ -192,11 +192,15 @@ def main():
             raise ValueError(
                 f"Unexpected output type '{frames.final_output_type}', expected 'image' for video generation."
             )
+        if frames.multimodal_output and "audio" in frames.multimodal_output:
+            audio = frames.multimodal_output["audio"]
         if frames.is_pipeline_output and frames.request_output is not None:
             inner_output = frames.request_output
             if isinstance(inner_output, list):
                 inner_output = inner_output[0] if inner_output else None
             if isinstance(inner_output, OmniRequestOutput):
+                if inner_output.multimodal_output and "audio" in inner_output.multimodal_output:
+                    audio = inner_output.multimodal_output["audio"]
                 frames = inner_output
         if isinstance(frames, OmniRequestOutput):
             if frames.images:
@@ -314,10 +318,6 @@ def main():
         video_array = frames
 
     video_array = _ensure_frame_list(video_array)
-
-    if audio is not None and args.audio_output is None:
-        # Skip muxing audio unless explicitly requested to keep the MP4 broadly compatible.
-        audio = None
 
     use_ltx2_export = is_ltx2
     encode_video = None
