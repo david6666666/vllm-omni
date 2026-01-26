@@ -99,6 +99,17 @@ def parse_args() -> argparse.Namespace:
         default=24000,
         help="Sample rate for audio output when saved (default: 24000 for LTX2).",
     )
+    parser.add_argument(
+        "--cache_backend",
+        type=str,
+        default=None,
+        choices=["cache_dit", "tea_cache"],
+        help=(
+            "Cache backend to use for acceleration. "
+            "Options: 'cache_dit' (DBCache + SCM + TaylorSeer), 'tea_cache' (Timestep Embedding Aware Cache). "
+            "Default: None (no cache acceleration)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -153,6 +164,25 @@ def main():
     vae_use_slicing = is_npu()
     vae_use_tiling = is_npu()
 
+    # Configure cache based on backend type
+    cache_config = None
+    if args.cache_backend == "cache_dit":
+        cache_config = {
+            "Fn_compute_blocks": 1,
+            "Bn_compute_blocks": 0,
+            "max_warmup_steps": 4,
+            "residual_diff_threshold": 0.24,
+            "max_continuous_cached_steps": 3,
+            "enable_taylorseer": False,
+            "taylorseer_order": 1,
+            "scm_steps_mask_policy": None,
+            "scm_steps_policy": "dynamic",
+        }
+    elif args.cache_backend == "tea_cache":
+        cache_config = {
+            "rel_l1_thresh": 0.2,
+        }
+
     # Check if profiling is requested via environment variable
     profiler_enabled = bool(os.getenv("VLLM_TORCH_PROFILER_DIR"))
 
@@ -164,6 +194,8 @@ def main():
         flow_shift=args.flow_shift,
         enable_cpu_offload=args.enable_cpu_offload,
         model_class_name=model_class_name,
+        cache_backend=args.cache_backend,
+        cache_config=cache_config,
     )
 
     if profiler_enabled:

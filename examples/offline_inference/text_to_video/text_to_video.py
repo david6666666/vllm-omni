@@ -77,6 +77,17 @@ def parse_args() -> argparse.Namespace:
         default=24000,
         help="Sample rate for audio output when saved (default: 24000 for LTX2).",
     )
+    parser.add_argument(
+        "--cache_backend",
+        type=str,
+        default=None,
+        choices=["cache_dit", "tea_cache"],
+        help=(
+            "Cache backend to use for acceleration. "
+            "Options: 'cache_dit' (DBCache + SCM + TaylorSeer), 'tea_cache' (Timestep Embedding Aware Cache). "
+            "Default: None (no cache acceleration)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -97,6 +108,32 @@ def main():
         ring_degree=args.ring_degree,
     )
 
+    # Configure parallel settings (only SP is supported for Wan)
+    # Note: cfg_parallel and tensor_parallel are not implemented for Wan models
+    parallel_config = DiffusionParallelConfig(
+        ulysses_degree=args.ulysses_degree,
+        ring_degree=args.ring_degree,
+    )
+
+    # Configure cache based on backend type
+    cache_config = None
+    if args.cache_backend == "cache_dit":
+        cache_config = {
+            "Fn_compute_blocks": 1,
+            "Bn_compute_blocks": 0,
+            "max_warmup_steps": 4,
+            "residual_diff_threshold": 0.24,
+            "max_continuous_cached_steps": 3,
+            "enable_taylorseer": False,
+            "taylorseer_order": 1,
+            "scm_steps_mask_policy": None,
+            "scm_steps_policy": "dynamic",
+        }
+    elif args.cache_backend == "tea_cache":
+        cache_config = {
+            "rel_l1_thresh": 0.2,
+        }
+
     # Check if profiling is requested via environment variable
     profiler_enabled = bool(os.getenv("VLLM_TORCH_PROFILER_DIR"))
 
@@ -109,6 +146,8 @@ def main():
         enable_cpu_offload=args.enable_cpu_offload,
         parallel_config=parallel_config,
         enforce_eager=args.enforce_eager,
+        cache_backend=args.cache_backend,
+        cache_config=cache_config,
     )
 
     if profiler_enabled:
