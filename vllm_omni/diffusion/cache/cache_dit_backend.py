@@ -357,14 +357,11 @@ def enable_cache_for_ltx2(pipeline: Any, cache_config: Any) -> Callable[[int], N
         def _wrap_block_forward(orig):
             @functools.wraps(orig)
             def _wrapped_forward(self, hidden_states, encoder_hidden_states=None, *args, **kwargs):
-                audio_hidden_states = encoder_hidden_states
-                if "audio_hidden_states" in kwargs:
-                    if audio_hidden_states is None:
-                        audio_hidden_states = kwargs.pop("audio_hidden_states")
-                    else:
-                        kwargs.pop("audio_hidden_states")
+                audio_hidden_states = kwargs.pop("audio_hidden_states", None)
 
-                text_encoder_hidden_states = kwargs.pop("encoder_hidden_states", None)
+                text_encoder_hidden_states = encoder_hidden_states
+                if "encoder_hidden_states" in kwargs:
+                    text_encoder_hidden_states = kwargs.pop("encoder_hidden_states")
                 audio_encoder_hidden_states = kwargs.pop("audio_encoder_hidden_states", None)
                 temb = kwargs.pop("temb", None)
                 temb_audio = kwargs.pop("temb_audio", None)
