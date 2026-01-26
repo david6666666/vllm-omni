@@ -171,6 +171,24 @@ class LTX2AudioVideoAttnProcessor:
                 "Please upgrade your PyTorch installation."
             )
 
+    @staticmethod
+    def _to_padding_mask(attention_mask: torch.Tensor) -> torch.Tensor:
+        # Convert additive/expanded masks into a 2D padding mask for flash-attn.
+        if attention_mask.ndim > 2:
+            if attention_mask.is_floating_point():
+                valid = attention_mask >= 0
+            else:
+                valid = attention_mask.to(torch.bool)
+            b = valid.shape[0]
+            key_len = valid.shape[-1]
+            valid = valid.reshape(b, -1, key_len).all(dim=1)
+            attention_mask = valid
+        if attention_mask.is_floating_point():
+            attention_mask = attention_mask >= 0
+        if attention_mask.dtype != torch.bool:
+            attention_mask = attention_mask.to(torch.bool)
+        return attention_mask
+
     def __call__(
         self,
         attn: "LTX2Attention",
@@ -188,6 +206,8 @@ class LTX2AudioVideoAttnProcessor:
         if attention_mask is not None:
             attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
             attention_mask = attention_mask.view(batch_size, attn.heads, -1, attention_mask.shape[-1])
+            if attn.attn.attn_backend.get_name().upper() == "FLASH_ATTN":
+                attention_mask = self._to_padding_mask(attention_mask)
 
         if is_self_attention:
             encoder_hidden_states = hidden_states

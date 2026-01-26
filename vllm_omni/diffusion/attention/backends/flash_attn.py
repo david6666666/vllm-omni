@@ -67,22 +67,6 @@ class FlashAttentionImpl(AttentionImpl):
         """
         query_length = query.size(1)
         attention_mask = attn_metadata.attn_mask if attn_metadata is not None else None
-        if attention_mask is not None:
-            # Flash-attn expects a 2D padding mask (batch, seq_len) with bool/int dtype.
-            # Some pipelines (e.g. LTX2) provide additive masks with shape (b, h, q, k).
-            if attention_mask.ndim > 2:
-                if attention_mask.is_floating_point():
-                    valid = attention_mask >= 0
-                else:
-                    valid = attention_mask.to(torch.bool)
-                b = valid.shape[0]
-                key_len = valid.shape[-1]
-                valid = valid.reshape(b, -1, key_len).all(dim=1)
-                attention_mask = valid
-            if attention_mask.is_floating_point():
-                attention_mask = attention_mask >= 0
-            if attention_mask.dtype != torch.bool:
-                attention_mask = attention_mask.to(torch.bool)
         #  Contains at least one padding token in the sequence
         if attention_mask is not None and torch.any(~attention_mask):
             assert attention_mask.ndim == 2, "attention_mask must be 2D, (batch_size, seq_len)"
