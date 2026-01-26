@@ -1359,22 +1359,22 @@ class LTX2VideoTransformer3DModel(
                 )
             else:
                 hidden_states, audio_hidden_states = block(
-                    hidden_states=hidden_states,
-                    audio_hidden_states=audio_hidden_states,
-                    encoder_hidden_states=encoder_hidden_states,
-                    audio_encoder_hidden_states=audio_encoder_hidden_states,
-                    temb=temb,
-                    temb_audio=temb_audio,
-                    temb_ca_scale_shift=video_cross_attn_scale_shift,
-                    temb_ca_audio_scale_shift=audio_cross_attn_scale_shift,
-                    temb_ca_gate=video_cross_attn_a2v_gate,
-                    temb_ca_audio_gate=audio_cross_attn_v2a_gate,
-                    video_rotary_emb=video_rotary_emb,
-                    audio_rotary_emb=audio_rotary_emb,
-                    ca_video_rotary_emb=video_cross_attn_rotary_emb,
-                    ca_audio_rotary_emb=audio_cross_attn_rotary_emb,
-                    encoder_attention_mask=encoder_attention_mask,
-                    audio_encoder_attention_mask=audio_encoder_attention_mask,
+                    hidden_states,
+                    audio_hidden_states,
+                    encoder_hidden_states,
+                    audio_encoder_hidden_states,
+                    temb,
+                    temb_audio,
+                    video_cross_attn_scale_shift,
+                    audio_cross_attn_scale_shift,
+                    video_cross_attn_a2v_gate,
+                    audio_cross_attn_v2a_gate,
+                    video_rotary_emb,
+                    audio_rotary_emb,
+                    video_cross_attn_rotary_emb,
+                    audio_cross_attn_rotary_emb,
+                    encoder_attention_mask,
+                    audio_encoder_attention_mask,
                 )
 
         # 6. Output layers (including unpatchification)
