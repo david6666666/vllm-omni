@@ -163,6 +163,7 @@ def main():
         boundary_ratio=args.boundary_ratio,
         flow_shift=args.flow_shift,
         enable_cpu_offload=args.enable_cpu_offload,
+        model_class_name=model_class_name,
     )
 
     if profiler_enabled:
