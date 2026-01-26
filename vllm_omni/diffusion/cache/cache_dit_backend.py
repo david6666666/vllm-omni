@@ -351,6 +351,49 @@ def enable_cache_for_sd3(pipeline: Any, cache_config: Any) -> Callable[[int], No
 
 def enable_cache_for_ltx2(pipeline: Any, cache_config: Any) -> Callable[[int], None]:
     """Enable cache-dit for LTX2 pipelines (audio-video transformer blocks)."""
+    transformer = pipeline.transformer
+
+    if not getattr(transformer, "_cache_dit_ltx2_patched", False):
+        def _wrap_block_forward(orig):
+            @functools.wraps(orig)
+            def _wrapped_forward(self, hidden_states, encoder_hidden_states=None, *args, **kwargs):
+                audio_hidden_states = encoder_hidden_states
+                if "audio_hidden_states" in kwargs:
+                    if audio_hidden_states is None:
+                        audio_hidden_states = kwargs.pop("audio_hidden_states")
+                    else:
+                        kwargs.pop("audio_hidden_states")
+
+                text_encoder_hidden_states = kwargs.pop("encoder_hidden_states", None)
+                audio_encoder_hidden_states = kwargs.pop("audio_encoder_hidden_states", None)
+                temb = kwargs.pop("temb", None)
+                temb_audio = kwargs.pop("temb_audio", None)
+                temb_ca_scale_shift = kwargs.pop("temb_ca_scale_shift", None)
+                temb_ca_audio_scale_shift = kwargs.pop("temb_ca_audio_scale_shift", None)
+                temb_ca_gate = kwargs.pop("temb_ca_gate", None)
+                temb_ca_audio_gate = kwargs.pop("temb_ca_audio_gate", None)
+
+                return orig(
+                    hidden_states,
+                    audio_hidden_states,
+                    text_encoder_hidden_states,
+                    audio_encoder_hidden_states,
+                    temb,
+                    temb_audio,
+                    temb_ca_scale_shift,
+                    temb_ca_audio_scale_shift,
+                    temb_ca_gate,
+                    temb_ca_audio_gate,
+                    **kwargs,
+                )
+
+            return _wrapped_forward
+
+        for block in transformer.transformer_blocks:
+            block.forward = _wrap_block_forward(block.forward).__get__(block, block.__class__)
+
+        transformer._cache_dit_ltx2_patched = True
+
     db_cache_config = _build_db_cache_config(cache_config)
 
     calibrator_config = None
@@ -359,7 +402,6 @@ def enable_cache_for_ltx2(pipeline: Any, cache_config: Any) -> Callable[[int], N
         calibrator_config = TaylorSeerCalibratorConfig(taylorseer_order=taylorseer_order)
         logger.info(f"TaylorSeer enabled with order={taylorseer_order}")
 
-    transformer = pipeline.transformer
     blocks = transformer.transformer_blocks
 
     logger.info(
