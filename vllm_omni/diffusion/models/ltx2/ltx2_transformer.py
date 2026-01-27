@@ -22,7 +22,6 @@ import torch
 import torch.nn as nn
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders import FromOriginalModelMixin, PeftAdapterMixin
-from diffusers.models._modeling_parallel import ContextParallelInput, ContextParallelOutput
 from diffusers.models.attention import AttentionMixin, AttentionModuleMixin, FeedForward
 from diffusers.models.cache_utils import CacheMixin
 from diffusers.models.embeddings import PixArtAlphaCombinedTimestepSizeEmbeddings, PixArtAlphaTextProjection
@@ -41,6 +40,8 @@ from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.layer import Attention
+from vllm_omni.diffusion.distributed.sp_plan import SequenceParallelInput, SequenceParallelOutput
+from vllm_omni.diffusion.forward_context import get_forward_context, is_forward_context_available
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -204,10 +205,27 @@ class LTX2AudioVideoAttnProcessor:
         )
 
         if attention_mask is not None:
-            attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
-            attention_mask = attention_mask.view(batch_size, attn.heads, -1, attention_mask.shape[-1])
-            if attn.attn.attn_backend.get_name().upper() == "FLASH_ATTN":
-                attention_mask = self._to_padding_mask(attention_mask)
+            sp_enabled = False
+            if is_forward_context_available():
+                try:
+                    od_config = get_forward_context().omni_diffusion_config
+                    parallel_config = getattr(od_config, "parallel_config", None) if od_config is not None else None
+                    sp_enabled = getattr(parallel_config, "sequence_parallel_size", 1) > 1
+                except Exception:
+                    sp_enabled = False
+
+            if sp_enabled:
+                # In SP, Ulysses expects a 2D padding mask that matches query length.
+                # For cross-attention, encoder sequence length != query length, so drop the mask.
+                if encoder_hidden_states is not None and encoder_hidden_states.shape[1] != hidden_states.shape[1]:
+                    attention_mask = None
+                else:
+                    attention_mask = self._to_padding_mask(attention_mask)
+            else:
+                attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+                attention_mask = attention_mask.view(batch_size, attn.heads, -1, attention_mask.shape[-1])
+                if attn.attn.attn_backend.get_name().upper() == "FLASH_ATTN":
+                    attention_mask = self._to_padding_mask(attention_mask)
 
         if is_self_attention:
             encoder_hidden_states = hidden_states
@@ -953,18 +971,66 @@ class LTX2VideoTransformer3DModel(
     _supports_gradient_checkpointing = True
     _skip_layerwise_casting_patterns = ["norm"]
     _repeated_blocks = ["LTX2VideoTransformerBlock"]
-    _cp_plan = {
-        "": {
-            "hidden_states": ContextParallelInput(split_dim=1, expected_dims=3, split_output=False),
-            "encoder_hidden_states": ContextParallelInput(split_dim=1, expected_dims=3, split_output=False),
-            "encoder_attention_mask": ContextParallelInput(split_dim=1, expected_dims=2, split_output=False),
-        },
-        "rope": {
-            0: ContextParallelInput(split_dim=1, expected_dims=3, split_output=True),
-            1: ContextParallelInput(split_dim=1, expected_dims=3, split_output=True),
-        },
-        "proj_out": ContextParallelOutput(gather_dim=1, expected_dims=3),
-    }
+    _sp_plan: dict[str, Any] | None = None
+
+    @staticmethod
+    def _build_sp_plan(rope_type: str) -> dict[str, Any]:
+        if rope_type == "split":
+            # split RoPE returns (B, H, T, D/2) -> shard along T dim
+            rope_expected_dims = 4
+            rope_split_dim = 2
+        else:
+            # interleaved RoPE returns (B, T, D) -> shard along T dim
+            rope_expected_dims = 3
+            rope_split_dim = 1
+
+        return {
+            "": {
+                # Shard video/audio latents across sequence
+                "hidden_states": SequenceParallelInput(split_dim=1, expected_dims=3, split_output=False),
+                "audio_hidden_states": SequenceParallelInput(split_dim=1, expected_dims=3, split_output=False),
+                # Shard prompt embeds across sequence
+                "encoder_hidden_states": SequenceParallelInput(split_dim=1, expected_dims=3, split_output=False),
+                "audio_encoder_hidden_states": SequenceParallelInput(split_dim=1, expected_dims=3, split_output=False),
+                # Shard video timestep when provided as (B, seq_len)
+                "timestep": SequenceParallelInput(split_dim=1, expected_dims=2, split_output=False),
+            },
+            "rope": {
+                0: SequenceParallelInput(
+                    split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True
+                ),
+                1: SequenceParallelInput(
+                    split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True
+                ),
+            },
+            "audio_rope": {
+                0: SequenceParallelInput(
+                    split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True
+                ),
+                1: SequenceParallelInput(
+                    split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True
+                ),
+            },
+            "cross_attn_rope": {
+                0: SequenceParallelInput(
+                    split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True
+                ),
+                1: SequenceParallelInput(
+                    split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True
+                ),
+            },
+            "cross_attn_audio_rope": {
+                0: SequenceParallelInput(
+                    split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True
+                ),
+                1: SequenceParallelInput(
+                    split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True
+                ),
+            },
+            # Gather outputs before returning
+            "proj_out": SequenceParallelOutput(gather_dim=1, expected_dims=3),
+            "audio_proj_out": SequenceParallelOutput(gather_dim=1, expected_dims=3),
+        }
 
     @register_to_config
     def __init__(
@@ -1153,6 +1219,7 @@ class LTX2VideoTransformer3DModel(
         self.audio_proj_out = nn.Linear(audio_inner_dim, audio_out_channels)
 
         self.gradient_checkpointing = False
+        self._sp_plan = self._build_sp_plan(rope_type)
 
     def forward(
         self,

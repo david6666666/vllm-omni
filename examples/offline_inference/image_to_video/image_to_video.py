@@ -34,6 +34,7 @@ import numpy as np
 import PIL.Image
 import torch
 
+from vllm_omni.diffusion.data import DiffusionParallelConfig
 from vllm_omni.entrypoints.omni import Omni
 from vllm_omni.outputs import OmniRequestOutput
 from vllm_omni.utils.platform_utils import detect_device_type, is_npu
@@ -110,6 +111,18 @@ def parse_args() -> argparse.Namespace:
             "Default: None (no cache acceleration)."
         ),
     )
+    parser.add_argument(
+        "--ulysses_degree",
+        type=int,
+        default=1,
+        help="Number of GPUs used for ulysses sequence parallelism.",
+    )
+    parser.add_argument(
+        "--ring_degree",
+        type=int,
+        default=1,
+        help="Number of GPUs used for ring sequence parallelism.",
+    )
     return parser.parse_args()
 
 
@@ -183,6 +196,11 @@ def main():
             "rel_l1_thresh": 0.2,
         }
 
+    parallel_config = DiffusionParallelConfig(
+        ulysses_degree=args.ulysses_degree,
+        ring_degree=args.ring_degree,
+    )
+
     # Check if profiling is requested via environment variable
     profiler_enabled = bool(os.getenv("VLLM_TORCH_PROFILER_DIR"))
 
@@ -196,6 +214,7 @@ def main():
         model_class_name=model_class_name,
         cache_backend=args.cache_backend,
         cache_config=cache_config,
+        parallel_config=parallel_config,
     )
 
     if profiler_enabled:

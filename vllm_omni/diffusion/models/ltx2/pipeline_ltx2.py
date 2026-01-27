@@ -539,10 +539,20 @@ class LTX2Pipeline(nn.Module):
         latents_per_second = float(sampling_rate) / float(hop_length) / float(self.audio_vae_temporal_compression_ratio)
         latent_length = round(duration_s * latents_per_second)
 
+        latent_mel_bins = num_mel_bins // self.audio_vae_mel_compression_ratio
+
+        sp_size = getattr(self.od_config.parallel_config, "sequence_parallel_size", 1)
+        if sp_size > 1 and latent_length < sp_size:
+            pad_len = sp_size - latent_length
+            if latents is not None:
+                pad_shape = list(latents.shape)
+                pad_shape[2] = pad_len
+                padding = torch.zeros(pad_shape, dtype=latents.dtype, device=latents.device)
+                latents = torch.cat([latents, padding], dim=2)
+            latent_length = sp_size
+
         if latents is not None:
             return latents.to(device=device, dtype=dtype), latent_length
-
-        latent_mel_bins = num_mel_bins // self.audio_vae_mel_compression_ratio
 
         shape = (batch_size, num_channels_latents, latent_length, latent_mel_bins)
 
