@@ -23,7 +23,7 @@ Usage:
         --model_class_name LTX2ImageToVideoPipeline \
         --image input.jpg --prompt "A cinematic dolly shot of a boat" \
         --num_frames 121 --num_inference_steps 40 --guidance_scale 4.0 \
-        --frame_rate 24 --fps 24 --output ltx2_i2v.mp4 --audio_output ltx2_i2v.wav
+        --frame_rate 24 --fps 24 --output ltx2_i2v.mp4
 """
 
 import argparse
@@ -87,12 +87,6 @@ def parse_args() -> argparse.Namespace:
         "--enable-cpu-offload",
         action="store_true",
         help="Enable CPU offloading for diffusion models.",
-    )
-    parser.add_argument(
-        "--audio_output",
-        type=str,
-        default=None,
-        help="Optional path to save audio (wav) when the pipeline returns audio (e.g., LTX2).",
     )
     parser.add_argument(
         "--audio_sample_rate",
@@ -417,36 +411,6 @@ def main():
     else:
         export_to_video(video_array, str(output_path), fps=fps)
     print(f"Saved generated video to {output_path}")
-
-    if audio is not None and args.audio_output:
-        audio_path = Path(args.audio_output)
-        audio_path.parent.mkdir(parents=True, exist_ok=True)
-        if isinstance(audio, torch.Tensor):
-            audio = audio.detach().cpu().float().numpy()
-        if isinstance(audio, np.ndarray) and audio.ndim == 3:
-            audio_data = audio[0].T
-        elif isinstance(audio, np.ndarray) and audio.ndim == 2:
-            audio_data = audio.T
-        else:
-            audio_data = audio
-        try:
-            import soundfile as sf
-
-            sf.write(str(audio_path), audio_data, args.audio_sample_rate)
-        except ImportError:
-            try:
-                import scipy.io.wavfile as wav
-
-                if isinstance(audio_data, np.ndarray) and np.issubdtype(audio_data.dtype, np.floating):
-                    audio_data = np.clip(audio_data, -1.0, 1.0)
-                    audio_data = (audio_data * 32767).astype(np.int16)
-                wav.write(str(audio_path), args.audio_sample_rate, audio_data)
-            except ImportError:
-                raise ImportError(
-                    "Either 'soundfile' or 'scipy' is required to save audio files. "
-                    "Install with: pip install soundfile or pip install scipy"
-                )
-        print(f"Saved generated audio to {audio_path}")
 
     if profiler_enabled:
         print("\n[Profiler] Stopping profiler and collecting results...")

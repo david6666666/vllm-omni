@@ -200,9 +200,7 @@ class LTX2AudioVideoAttnProcessor:
         key_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         is_self_attention = encoder_hidden_states is None
-        batch_size, sequence_length, _ = (
-            hidden_states.shape if is_self_attention else encoder_hidden_states.shape
-        )
+        batch_size, sequence_length, _ = hidden_states.shape if is_self_attention else encoder_hidden_states.shape
 
         if attention_mask is not None:
             sp_enabled = False
@@ -996,36 +994,20 @@ class LTX2VideoTransformer3DModel(
                 "timestep": SequenceParallelInput(split_dim=1, expected_dims=2, split_output=False),
             },
             "rope": {
-                0: SequenceParallelInput(
-                    split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True
-                ),
-                1: SequenceParallelInput(
-                    split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True
-                ),
+                0: SequenceParallelInput(split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True),
+                1: SequenceParallelInput(split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True),
             },
             "audio_rope": {
-                0: SequenceParallelInput(
-                    split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True
-                ),
-                1: SequenceParallelInput(
-                    split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True
-                ),
+                0: SequenceParallelInput(split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True),
+                1: SequenceParallelInput(split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True),
             },
             "cross_attn_rope": {
-                0: SequenceParallelInput(
-                    split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True
-                ),
-                1: SequenceParallelInput(
-                    split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True
-                ),
+                0: SequenceParallelInput(split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True),
+                1: SequenceParallelInput(split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True),
             },
             "cross_attn_audio_rope": {
-                0: SequenceParallelInput(
-                    split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True
-                ),
-                1: SequenceParallelInput(
-                    split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True
-                ),
+                0: SequenceParallelInput(split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True),
+                1: SequenceParallelInput(split_dim=rope_split_dim, expected_dims=rope_expected_dims, split_output=True),
             },
             # Gather outputs before returning
             "proj_out": SequenceParallelOutput(gather_dim=1, expected_dims=3),

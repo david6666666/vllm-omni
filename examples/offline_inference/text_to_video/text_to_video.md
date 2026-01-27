@@ -1,7 +1,7 @@
 # Text-To-Video
 
 The `Wan-AI/Wan2.2-T2V-A14B-Diffusers` pipeline generates short videos from text prompts. This script can also be used
-for `Lightricks/LTX-2` to generate video+audio and optionally save the audio stream.
+for `Lightricks/LTX-2` to generate video+audio.
 
 ## Local CLI Usage
 
@@ -20,7 +20,7 @@ python text_to_video.py \
   --output t2v_out.mp4
 ```
 
-LTX2 example (with optional audio output):
+LTX2 example:
 
 ```bash
 python text_to_video.py \
@@ -34,8 +34,7 @@ python text_to_video.py \
   --guidance_scale 4.0 \
   --frame_rate 24 \
   --fps 24 \
-  --output ltx2_out.mp4 \
-  --audio_output ltx2_out.wav
+  --output ltx2_out.mp4
 ```
 
 Key arguments:
@@ -50,5 +49,4 @@ Key arguments:
 - `--output`: path to save the generated video.
 - `--enable-cpu-offload`: enable CPU offloading for diffusion models.
 - `--frame_rate`: generation FPS for pipelines that require it (e.g., LTX2).
-- `--audio_output`: optional WAV output path for pipelines that return audio.
-- `--audio_sample_rate`: WAV sample rate for saved audio when `--audio_output` is set.
+- `--audio_sample_rate`: audio sample rate for embedded audio (when the pipeline returns audio).
