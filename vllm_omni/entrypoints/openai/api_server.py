@@ -1076,14 +1076,3 @@ async def generate_images(request: ImageGenerationRequest, raw_request: Request)
         raise HTTPException(
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR.value, detail=f"Image generation failed: {str(e)}"
         )
-
-
-@router.get(
-    "/v1/health",
-    responses={
-        HTTPStatus.OK.value: {"content": {"application/json": {}}},
-    },
-)
-async def health_check_v1():
-    """Lightweight health check for OpenAI-compatible prefix."""
-    return JSONResponse(content={"status": "ok"})

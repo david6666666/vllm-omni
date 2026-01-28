@@ -51,7 +51,8 @@ start_server() {
   local model=$1
   local port=$2
   local log_file=$3
-  vllm serve "${model}" --omni --port "${port}" > "${log_file}" 2>&1 &
+  shift 3
+  vllm serve "${model}" --omni --port "${port}" "$@" > "${log_file}" 2>&1 &
   echo $!
 }
 
@@ -480,3 +481,105 @@ python "${REPO_ROOT}/examples/online_serving/bagel/openai_chat_client.py" \
   --output "${BAGEL_OUTPUT}"
 
 stop_server "${BAGEL_PID}"
+
+# ---------------------------
+# Qwen3-TTS online serving
+# ---------------------------
+
+QWEN3_TTS_PORT=8093
+QWEN3_TTS_LOG="${SERVER_LOG_DIR}/qwen3_tts_server.log"
+QWEN3_TTS_STAGE_CONFIG="${REPO_ROOT}/vllm_omni/model_executor/stage_configs/qwen3_tts.yaml"
+
+QWEN3_CUSTOMVOICE_MODEL="${MODEL_PREFIX}Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+QWEN3_CUSTOMVOICE_OUTPUT="${OUTPUT_DIR}/qwen3_customvoice_chinese.wav"
+QWEN3_CUSTOMVOICE_OUTPUT_EN="${OUTPUT_DIR}/qwen3_customvoice_english.wav"
+
+echo "Starting online serving test: Qwen3-TTS CustomVoice (port ${QWEN3_TTS_PORT})"
+QWEN3_CUSTOMVOICE_PID=$(start_server "${QWEN3_CUSTOMVOICE_MODEL}" "${QWEN3_TTS_PORT}" "${QWEN3_TTS_LOG}" \
+  --stage-configs-path "${QWEN3_TTS_STAGE_CONFIG}" \
+  --trust-remote-code \
+  --enforce-eager)
+cleanup_pids+=("${QWEN3_CUSTOMVOICE_PID}")
+if ! wait_for_server "${QWEN3_TTS_PORT}" "${QWEN3_CUSTOMVOICE_PID}"; then
+  echo "Qwen3-TTS CustomVoice server failed to start. See ${QWEN3_TTS_LOG}"
+  stop_server "${QWEN3_CUSTOMVOICE_PID}"
+  exit 1
+fi
+
+curl -s --max-time 600 -X POST "http://localhost:${QWEN3_TTS_PORT}/v1/audio/speech" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": "其实我真的有发现，我是一个特别善于观察别人情绪的人。",
+    "voice": "Vivian",
+    "language": "Chinese",
+    "instructions": "用特别愤怒的语气说"
+  }' --output "${QWEN3_CUSTOMVOICE_OUTPUT}"
+
+curl -s --max-time 600 -X POST "http://localhost:${QWEN3_TTS_PORT}/v1/audio/speech" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": "She said she would be here by noon.",
+    "voice": "Ryan",
+    "language": "English",
+    "instructions": "Very happy."
+  }' --output "${QWEN3_CUSTOMVOICE_OUTPUT_EN}"
+
+stop_server "${QWEN3_CUSTOMVOICE_PID}"
+
+QWEN3_TTS_PORT=8094
+QWEN3_VOICEDESIGN_MODEL="${MODEL_PREFIX}Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+QWEN3_VOICEDESIGN_OUTPUT="${OUTPUT_DIR}/qwen3_voicedesign.wav"
+QWEN3_VOICEDESIGN_LOG="${SERVER_LOG_DIR}/qwen3_tts_voicedesign_server.log"
+
+echo "Starting online serving test: Qwen3-TTS VoiceDesign (port ${QWEN3_TTS_PORT})"
+QWEN3_VOICEDESIGN_PID=$(start_server "${QWEN3_VOICEDESIGN_MODEL}" "${QWEN3_TTS_PORT}" "${QWEN3_VOICEDESIGN_LOG}" \
+  --stage-configs-path "${QWEN3_TTS_STAGE_CONFIG}" \
+  --trust-remote-code \
+  --enforce-eager)
+cleanup_pids+=("${QWEN3_VOICEDESIGN_PID}")
+if ! wait_for_server "${QWEN3_TTS_PORT}" "${QWEN3_VOICEDESIGN_PID}"; then
+  echo "Qwen3-TTS VoiceDesign server failed to start. See ${QWEN3_VOICEDESIGN_LOG}"
+  stop_server "${QWEN3_VOICEDESIGN_PID}"
+  exit 1
+fi
+
+curl -s --max-time 600 -X POST "http://localhost:${QWEN3_TTS_PORT}/v1/audio/speech" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": "哥哥，你回来啦，人家等了你好久好久了，要抱抱！",
+    "task_type": "VoiceDesign",
+    "language": "Chinese",
+    "instructions": "体现撒娇稚嫩的萝莉女声，音调偏高且起伏明显，营造出黏人、做作又刻意卖萌的听觉效果。"
+  }' --output "${QWEN3_VOICEDESIGN_OUTPUT}"
+
+stop_server "${QWEN3_VOICEDESIGN_PID}"
+
+QWEN3_TTS_PORT=8095
+QWEN3_BASE_MODEL="${MODEL_PREFIX}Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+QWEN3_BASE_OUTPUT="${OUTPUT_DIR}/qwen3_base_clone.wav"
+QWEN3_BASE_LOG="${SERVER_LOG_DIR}/qwen3_tts_base_server.log"
+
+echo "Starting online serving test: Qwen3-TTS Base (port ${QWEN3_TTS_PORT})"
+QWEN3_BASE_PID=$(start_server "${QWEN3_BASE_MODEL}" "${QWEN3_TTS_PORT}" "${QWEN3_BASE_LOG}" \
+  --stage-configs-path "${QWEN3_TTS_STAGE_CONFIG}" \
+  --trust-remote-code \
+  --enforce-eager)
+cleanup_pids+=("${QWEN3_BASE_PID}")
+if ! wait_for_server "${QWEN3_TTS_PORT}" "${QWEN3_BASE_PID}"; then
+  echo "Qwen3-TTS Base server failed to start. See ${QWEN3_BASE_LOG}"
+  stop_server "${QWEN3_BASE_PID}"
+  exit 1
+fi
+
+curl -s --max-time 600 -X POST "http://localhost:${QWEN3_TTS_PORT}/v1/audio/speech" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": "Good one. Okay, fine, I am just gonna leave this sock monkey here. Goodbye.",
+    "task_type": "Base",
+    "language": "Auto",
+    "ref_audio": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-TTS-Repo/clone_2.wav",
+    "ref_text": "Okay. Yeah. I resent you. I love you. I respect you. But you know what? You blew it! And thanks to you.",
+    "x_vector_only_mode": false
+  }' --output "${QWEN3_BASE_OUTPUT}"
+
+stop_server "${QWEN3_BASE_PID}"
