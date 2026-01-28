@@ -108,6 +108,17 @@ fi
 # ---------------------------
 
 python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
+  --model "${MODEL_PREFIX}ByteDance-Seed/BAGEL-7B-MoT" \
+  --prompt "a cup of coffee on the table" \
+  --seed 42 \
+  --cfg_scale 4.0 \
+  --num_images_per_prompt 1 \
+  --num_inference_steps 50 \
+  --height 1024 \
+  --width 1024 \
+  --output "${OUTPUT_DIR}/bagel_coffee.png"
+
+python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
   --model "${MODEL_PREFIX}Qwen/Qwen-Image" \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
@@ -323,6 +334,7 @@ python "${REPO_ROOT}/examples/offline_inference/text_to_video/text_to_video.py" 
   --guidance_scale 4.0 \
   --guidance_scale_high 3.0 \
   --num_inference_steps 40 \
+  --enable-cpu-offload \
   --fps 16 \
   --output "${OUTPUT_DIR}/wan22_t2v.mp4"
 
@@ -340,6 +352,7 @@ python "${REPO_ROOT}/examples/offline_inference/image_to_video/image_to_video.py
   --guidance_scale 4.0 \
   --num_inference_steps 40 \
   --flow_shift 12.0 \
+  --enable-cpu-offload \
   --fps 16 \
   --output "${OUTPUT_DIR}/wan22_ti2v.mp4"
 
@@ -361,10 +374,12 @@ python "${REPO_ROOT}/examples/offline_inference/text_to_audio/text_to_audio.py" 
 # Bagel 2-stage
 # ---------------------------
 python3 "${REPO_ROOT}/examples/offline_inference/bagel/end2end.py" \
+  --model "${MODEL_PREFIX}ByteDance-Seed/BAGEL-7B-MoT" \
   --prompts "A cute cat" \
   --modality text2img
 
 python3 "${REPO_ROOT}/examples/offline_inference/bagel/end2end.py" \
+  --model "${MODEL_PREFIX}ByteDance-Seed/BAGEL-7B-MoT" \
   --prompts "Let this mascot dance under the moon, surrounded by floating stars and poetic bubbles such as 'Be Kind'" \
   --modality img2img \
   --image-path "${ASSETS_DIR}/qwen-bear.png"
