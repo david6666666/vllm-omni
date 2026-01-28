@@ -219,6 +219,18 @@ class LTX2AudioVideoAttnProcessor:
                     attention_mask = None
                 else:
                     attention_mask = self._to_padding_mask(attention_mask)
+                    try:
+                        from vllm_omni.diffusion.distributed.parallel_state import (
+                            get_ring_parallel_rank,
+                            get_ring_parallel_world_size,
+                        )
+
+                        ring_world_size = get_ring_parallel_world_size()
+                        if ring_world_size > 1:
+                            ring_rank = get_ring_parallel_rank()
+                            attention_mask = attention_mask.chunk(ring_world_size, dim=1)[ring_rank].contiguous()
+                    except Exception:
+                        pass
             else:
                 attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
                 attention_mask = attention_mask.view(batch_size, attn.heads, -1, attention_mask.shape[-1])
