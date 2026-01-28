@@ -47,6 +47,13 @@ if [[ -n "${MODEL_PREFIX}" ]]; then
   MODEL_PREFIX="${MODEL_PREFIX%/}/"
 fi
 
+echo "ROOT_DIR:$ROOT_DIR"
+echo "REPO_ROOT:$REPO_ROOT"
+echo "ASSETS_DIR:$ASSETS_DIR"
+echo "OUTPUT_DIR:$OUTPUT_DIR"
+echo "SERVER_LOG_DIR:$SERVER_LOG_DIR"
+echo "MODEL_PREFIX:$MODEL_PREFIX"
+
 start_server() {
   local model=$1
   local port=$2
@@ -99,16 +106,6 @@ fi
 # ---------------------------
 # Text-to-Image models
 # ---------------------------
-python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
-  --model "${MODEL_PREFIX}ByteDance-Seed/BAGEL-7B-MoT" \
-  --prompt "a cup of coffee on the table" \
-  --seed 42 \
-  --cfg_scale 4.0 \
-  --num_images_per_prompt 1 \
-  --num_inference_steps 50 \
-  --height 1024 \
-  --width 1024 \
-  --output "${OUTPUT_DIR}/bagel_coffee.png"
 
 python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
   --model "${MODEL_PREFIX}Qwen/Qwen-Image" \
@@ -193,7 +190,7 @@ python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" 
   --tensor_parallel_size 2 \
   --output "${OUTPUT_DIR}/qwen_image_coffee_tensor_parallel.png"
 
-python examples/offline_inference/text_to_image/text_to_image.py \
+python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
   --model "${MODEL_PREFIX}Tongyi-MAI/Z-Image-Turbo" \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
@@ -204,7 +201,7 @@ python examples/offline_inference/text_to_image/text_to_image.py \
   --width 1024 \
   --output "${OUTPUT_DIR}/zimage_coffee.png"
 
-python examples/offline_inference/text_to_image/text_to_image.py \
+python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
   --model "${MODEL_PREFIX}AIDC-AI/Ovis-Image-7B" \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
@@ -215,7 +212,7 @@ python examples/offline_inference/text_to_image/text_to_image.py \
   --width 1024 \
   --output "${OUTPUT_DIR}/ovis_image_coffee.png"
 
-python examples/offline_inference/text_to_image/text_to_image.py \
+python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
   --model "${MODEL_PREFIX}meituan-longcat/LongCat-Image" \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
@@ -226,7 +223,7 @@ python examples/offline_inference/text_to_image/text_to_image.py \
   --width 1024 \
   --output "${OUTPUT_DIR}/longcat_image_coffee.png"
 
-python examples/offline_inference/text_to_image/text_to_image.py \
+python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
   --model "${MODEL_PREFIX}stabilityai/stable-diffusion-3.5-medium" \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
@@ -237,7 +234,7 @@ python examples/offline_inference/text_to_image/text_to_image.py \
   --width 1024 \
   --output "${OUTPUT_DIR}/sd3_coffee.png"
 
-python examples/offline_inference/text_to_image/text_to_image.py \
+python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
   --model "${MODEL_PREFIX}black-forest-labs/FLUX.2-klein-9B" \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
@@ -248,7 +245,7 @@ python examples/offline_inference/text_to_image/text_to_image.py \
   --width 1024 \
   --output "${OUTPUT_DIR}/flux2_klein_9b_coffee.png"
 
-python examples/offline_inference/text_to_image/text_to_image.py \
+python "${REPO_ROOT}/examples/offline_inference/text_to_image/text_to_image.py" \
   --model "${MODEL_PREFIX}zai-org/GLM-Image" \
   --prompt "a cup of coffee on the table" \
   --seed 42 \
@@ -363,11 +360,11 @@ python "${REPO_ROOT}/examples/offline_inference/text_to_audio/text_to_audio.py" 
 # ---------------------------
 # Bagel 2-stage
 # ---------------------------
-python3 examples/offline_inference/bagel/end2end.py \
+python3 "${REPO_ROOT}/examples/offline_inference/bagel/end2end.py" \
   --prompts "A cute cat" \
   --modality text2img
 
-python3 examples/offline_inference/bagel/end2end.py \
+python3 "${REPO_ROOT}/examples/offline_inference/bagel/end2end.py" \
   --prompts "Let this mascot dance under the moon, surrounded by floating stars and poetic bubbles such as 'Be Kind'" \
   --modality img2img \
   --image-path "${ASSETS_DIR}/qwen-bear.png"
@@ -375,9 +372,9 @@ python3 examples/offline_inference/bagel/end2end.py \
 # ---------------------------
 # Qwen3-TTS
 # ---------------------------
-python examples/offline_inference/qwen3_tts/end2end.py --query-type CustomVoice
+python "${REPO_ROOT}/examples/offline_inference/qwen3_tts/end2end.py" --query-type CustomVoice
 
-python examples/offline_inference/qwen3_tts/end2end.py --query-type VoiceDesign --use-batch-sample
+python "${REPO_ROOT}/examples/offline_inference/qwen3_tts/end2end.py" --query-type VoiceDesign --use-batch-sample
 
 # ---------------------------
 # Online serving tests (non-hanging)
