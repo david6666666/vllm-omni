@@ -398,6 +398,7 @@ ZIMAGE_PORT=8091
 ZIMAGE_MODEL="${MODEL_PREFIX}Tongyi-MAI/Z-Image-Turbo"
 ZIMAGE_LOG="${SERVER_LOG_DIR}/zimage_server.log"
 ZIMAGE_OUTPUT="${OUTPUT_DIR}/zimage_coffee_online.png"
+ZIMAGE_OPENAI_OUTPUT="${OUTPUT_DIR}/zimage_coffee_online_openai.png"
 
 echo "Starting online serving test: Z-Image-Turbo (port ${ZIMAGE_PORT})"
 ZIMAGE_PID=$(start_server "${ZIMAGE_MODEL}" "${ZIMAGE_PORT}" "${ZIMAGE_LOG}")
@@ -407,6 +408,14 @@ if ! wait_for_server "${ZIMAGE_PORT}" "${ZIMAGE_PID}"; then
   stop_server "${ZIMAGE_PID}"
   exit 1
 fi
+
+curl -s --max-time 600 "http://localhost:${ZIMAGE_PORT}/v1/images/generations" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "a dragon laying over the spine of the Green Mountains of Vermont",
+    "size": "1024x1024",
+    "seed": 42
+  }' | jq -r '.data[0].b64_json' | base64 -d > "${ZIMAGE_OPENAI_OUTPUT}"
 
 curl -s --max-time 600 "http://localhost:${ZIMAGE_PORT}/v1/chat/completions" \
   -H "Content-Type: application/json" \
