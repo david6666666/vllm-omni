@@ -70,7 +70,7 @@ wait_for_server() {
   local delay=2
 
   for _ in $(seq 1 "${retries}"); do
-    if curl -sf "http://localhost:${port}/v1/health" >/dev/null 2>&1; then
+    if curl -sf "http://localhost:${port}/health" >/dev/null 2>&1; then
       return 0
     fi
     if ! kill -0 "${pid}" >/dev/null 2>&1; then
