@@ -58,8 +58,7 @@ start_server() {
   local model=$1
   local port=$2
   local log_file=$3
-  shift 3
-  vllm serve "${model}" --omni --port "${port}" "$@" > "${log_file}" 2>&1 &
+  vllm serve "${model}" --omni --port "${port}" > "${log_file}" 2>&1 &
   echo $!
 }
 
