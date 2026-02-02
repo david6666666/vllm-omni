@@ -36,7 +36,7 @@ from diffusers.utils import (
     scale_lora_layers,
     unscale_lora_layers,
 )
-from vllm.distributed import get_tensor_model_parallel_world_size
+from vllm.distributed import get_tensor_model_parallel_rank, get_tensor_model_parallel_world_size
 from vllm.model_executor.layers.linear import (
     ColumnParallelLinear,
     QKVParallelLinear,
@@ -1574,7 +1574,24 @@ class LTX2VideoTransformer3DModel(
         ]
 
         params_dict = dict(self.named_parameters())
+        tp_size = get_tensor_model_parallel_world_size()
+        tp_rank = get_tensor_model_parallel_rank() if tp_size > 1 else 0
         loaded_params: set[str] = set()
+
+        def _maybe_shard_weight(weight: torch.Tensor, param: torch.Tensor) -> torch.Tensor:
+            if tp_size <= 1 or weight.shape == param.shape:
+                return weight
+
+            if weight.ndim == 1 and weight.numel() == param.numel() * tp_size:
+                return weight.chunk(tp_size, dim=0)[tp_rank]
+
+            if weight.ndim == 2:
+                if weight.shape[0] == param.shape[0] * tp_size:
+                    return weight.chunk(tp_size, dim=0)[tp_rank]
+                if weight.shape[1] == param.shape[1] * tp_size:
+                    return weight.chunk(tp_size, dim=1)[tp_rank]
+
+            return weight
 
         for name, loaded_weight in weights:
             for param_name, weight_name, shard_id in stacked_params_mapping:
@@ -1587,8 +1604,12 @@ class LTX2VideoTransformer3DModel(
                 break
             else:
                 param = params_dict[name]
-                weight_loader = getattr(param, "weight_loader", default_weight_loader)
-                weight_loader(param, loaded_weight)
+                weight_loader = getattr(param, "weight_loader", None)
+                if weight_loader is not None:
+                    weight_loader(param, loaded_weight)
+                else:
+                    loaded_weight = _maybe_shard_weight(loaded_weight, param)
+                    default_weight_loader(param, loaded_weight)
             loaded_params.add(name)
 
         return loaded_params
