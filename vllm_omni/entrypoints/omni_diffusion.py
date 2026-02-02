@@ -61,7 +61,8 @@ class OmniDiffusion:
                 "model_index.json",
                 od_config.model,
             )
-            od_config.model_class_name = config_dict.get("_class_name", None)
+            if od_config.model_class_name is None:
+                od_config.model_class_name = config_dict.get("_class_name", None)
             od_config.update_multimodal_support()
 
             tf_config_dict = get_hf_file_to_dict(

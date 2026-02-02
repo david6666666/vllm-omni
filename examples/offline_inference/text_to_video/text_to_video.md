@@ -1,6 +1,7 @@
 # Text-To-Video
 
-The `Wan-AI/Wan2.2-T2V-A14B-Diffusers` pipeline generates short videos from text prompts.
+The `Wan-AI/Wan2.2-T2V-A14B-Diffusers` pipeline generates short videos from text prompts. This script can also be used
+for `Lightricks/LTX-2` to generate video+audio.
 
 ## Local CLI Usage
 
@@ -19,6 +20,23 @@ python text_to_video.py \
   --output t2v_out.mp4
 ```
 
+LTX2 example:
+
+```bash
+python text_to_video.py \
+  --model "Lightricks/LTX-2" \
+  --prompt "A cinematic close-up of ocean waves at golden hour." \
+  --negative_prompt "worst quality, inconsistent motion, blurry, jittery, distorted" \
+  --height 512 \
+  --width 768 \
+  --num_frames 121 \
+  --num_inference_steps 40 \
+  --guidance_scale 4.0 \
+  --frame_rate 24 \
+  --fps 24 \
+  --output ltx2_out.mp4
+```
+
 Key arguments:
 
 - `--prompt`: text description (string).
@@ -33,5 +51,8 @@ Key arguments:
 - `--vae_use_tiling`: enable VAE tiling for memory optimization.
 - `--cfg_parallel_size`: set it to 2 to enable CFG Parallel. See more examples in [`user_guide`](../../../docs/user_guide/diffusion/parallelism_acceleration.md#cfg-parallel).
 - `--enable-cpu-offload`: enable CPU offloading for diffusion models.
+- `--frame_rate`: generation FPS for pipelines that require it (e.g., LTX2).
+- `--audio_sample_rate`: audio sample rate for embedded audio (when the pipeline returns audio).
 
 > ℹ️ If you encounter OOM errors, try using `--vae_use_slicing` and `--vae_use_tiling` to reduce memory usage.
+
