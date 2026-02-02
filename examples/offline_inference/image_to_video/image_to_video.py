@@ -118,6 +118,12 @@ def parse_args() -> argparse.Namespace:
         help="Number of GPUs used for classifier free guidance parallel size.",
     )
     parser.add_argument(
+        "--tensor_parallel_size",
+        type=int,
+        default=1,
+        help="Number of GPUs used for tensor parallelism.",
+    )
+    parser.add_argument(
         "--enforce_eager",
         action="store_true",
         help="Disable torch.compile and force eager execution.",
@@ -225,6 +231,7 @@ def main():
         cfg_parallel_size=args.cfg_parallel_size,
         ulysses_degree=args.ulysses_degree,
         ring_degree=args.ring_degree,
+        tensor_parallel_size=args.tensor_parallel_size,
     )
     omni = Omni(
         model=args.model,
@@ -256,7 +263,8 @@ def main():
         "  Parallel configuration: "
         f"cfg_parallel_size={args.cfg_parallel_size}, "
         f"ulysses_degree={args.ulysses_degree}, "
-        f"ring_degree={args.ring_degree}"
+        f"ring_degree={args.ring_degree}, "
+        f"tensor_parallel_size={args.tensor_parallel_size}"
     )
     print(f"  Video size: {args.width}x{args.height}")
     print(f"{'=' * 60}\n")
