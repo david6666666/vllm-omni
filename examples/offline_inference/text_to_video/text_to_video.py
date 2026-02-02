@@ -48,17 +48,6 @@ def parse_args() -> argparse.Namespace:
         "--flow_shift", type=float, default=5.0, help="Scheduler flow_shift (5.0 for 720p, 12.0 for 480p)."
     )
     parser.add_argument(
-        "--cache_backend",
-        type=str,
-        default=None,
-        choices=["cache_dit"],
-        help=(
-            "Cache backend to use for acceleration. "
-            "Options: 'cache_dit' (DBCache + SCM + TaylorSeer). "
-            "Default: None (no cache acceleration)."
-        ),
-    )
-    parser.add_argument(
         "--enable-cache-dit-summary",
         action="store_true",
         help="Enable cache-dit summary logging after diffusion forward passes.",
@@ -144,8 +133,7 @@ def parse_args() -> argparse.Namespace:
 
 def main():
     args = parse_args()
-    device = detect_device_type()
-    generator = torch.Generator(device=device).manual_seed(args.seed)
+    generator = torch.Generator(device=current_omni_platform.device_type).manual_seed(args.seed)
     frame_rate = args.frame_rate if args.frame_rate is not None else float(args.fps)
 
     # Wan2.2 cache-dit tuning (from cache-dit examples and cache_alignment).
@@ -186,8 +174,6 @@ def main():
         vae_use_tiling=args.vae_use_tiling,
         boundary_ratio=args.boundary_ratio,
         flow_shift=args.flow_shift,
-        cache_backend=args.cache_backend,
-        cache_config=cache_config,
         enable_cache_dit_summary=args.enable_cache_dit_summary,
         enable_cpu_offload=args.enable_cpu_offload,
         parallel_config=parallel_config,
