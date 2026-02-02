@@ -83,6 +83,17 @@ def _unwrap_request_tensor(value: Any) -> Any:
     return value
 
 
+def _get_prompt_field(prompt: Any, key: str) -> Any:
+    if isinstance(prompt, str):
+        return None
+    value = prompt.get(key)
+    if value is None:
+        additional = prompt.get("additional_information")
+        if isinstance(additional, dict):
+            value = additional.get(key)
+    return _unwrap_request_tensor(value)
+
+
 def calculate_shift(
     image_seq_len,
     base_seq_len: int = 256,
@@ -623,50 +634,79 @@ class LTX2Pipeline(nn.Module):
         attention_kwargs: dict[str, Any] | None = None,
         max_sequence_length: int | None = None,
     ) -> DiffusionOutput:
-        prompt = req.prompt if req.prompt is not None else prompt
-        negative_prompt = req.negative_prompt if req.negative_prompt is not None else negative_prompt
-        height = req.height or height or 512
-        width = req.width or width or 768
-        num_frames = req.num_frames or num_frames or 121
-        req_fps = req.fps
+        prompt = [p if isinstance(p, str) else (p.get("prompt") or "") for p in req.prompts] or prompt
+        if all(isinstance(p, str) or p.get("negative_prompt") is None for p in req.prompts):
+            negative_prompt = None
+        elif req.prompts:
+            negative_prompt = ["" if isinstance(p, str) else (p.get("negative_prompt") or "") for p in req.prompts]
+
+        height = req.sampling_params.height or height or 512
+        width = req.sampling_params.width or width or 768
+        num_frames = req.sampling_params.num_frames or num_frames or 121
+        req_fps = req.sampling_params.fps
         if isinstance(req_fps, list):
             req_fps = req_fps[0] if req_fps else None
-        frame_rate = req.frame_rate or (float(req_fps) if req_fps is not None else None) or frame_rate or 24.0
-        num_inference_steps = req.num_inference_steps or num_inference_steps or 40
+        frame_rate = (
+            req.sampling_params.frame_rate or (float(req_fps) if req_fps is not None else None) or frame_rate or 24.0
+        )
+        num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps or 40
         if timesteps is None:
             num_inference_steps = max(int(num_inference_steps), 2)
         elif len(timesteps) < 2:
             raise ValueError("`timesteps` must contain at least 2 values for FlowMatchEulerDiscreteScheduler.")
-        num_videos_per_prompt = req.num_outputs_per_prompt or num_videos_per_prompt or 1
-        max_sequence_length = req.max_sequence_length or max_sequence_length or self.tokenizer_max_length
+        num_videos_per_prompt = (
+            req.sampling_params.num_outputs_per_prompt
+            if req.sampling_params.num_outputs_per_prompt > 0
+            else num_videos_per_prompt
+            or 1
+        )
+        max_sequence_length = req.sampling_params.max_sequence_length or max_sequence_length or self.tokenizer_max_length
 
-        if req.guidance_scale_provided:
-            guidance_scale = req.guidance_scale
-        if req.guidance_rescale is not None:
-            guidance_rescale = req.guidance_rescale
+        if req.sampling_params.guidance_scale_provided:
+            guidance_scale = req.sampling_params.guidance_scale
+        if req.sampling_params.guidance_rescale is not None:
+            guidance_rescale = req.sampling_params.guidance_rescale
 
         if generator is None:
-            generator = req.generator
-        if generator is None and req.seed is not None:
-            generator = torch.Generator(device=self.device).manual_seed(req.seed)
+            generator = req.sampling_params.generator
+        if generator is None and req.sampling_params.seed is not None:
+            generator = torch.Generator(device=self.device).manual_seed(req.sampling_params.seed)
 
-        latents = req.latents if req.latents is not None else latents
+        latents = req.sampling_params.latents if req.sampling_params.latents is not None else latents
         audio_latents = (
-            req.audio_latents if req.audio_latents is not None else req.extra.get("audio_latents", audio_latents)
+            req.sampling_params.audio_latents
+            if req.sampling_params.audio_latents is not None
+            else req.sampling_params.extra_args.get("audio_latents", audio_latents)
         )
 
-        prompt_embeds = _unwrap_request_tensor(req.prompt_embeds) or prompt_embeds
-        negative_prompt_embeds = _unwrap_request_tensor(req.negative_prompt_embeds) or negative_prompt_embeds
-        prompt_attention_mask = _unwrap_request_tensor(req.prompt_attention_mask) or prompt_attention_mask
-        negative_prompt_attention_mask = (
-            _unwrap_request_tensor(req.negative_attention_mask) or negative_prompt_attention_mask
-        )
-        if req.decode_timestep is not None:
-            decode_timestep = req.decode_timestep
-        if req.decode_noise_scale is not None:
-            decode_noise_scale = req.decode_noise_scale
-        if req.output_type is not None:
-            output_type = req.output_type
+        req_prompt_embeds = [_get_prompt_field(p, "prompt_embeds") for p in req.prompts]
+        if any(p is not None for p in req_prompt_embeds):
+            prompt_embeds = torch.stack(req_prompt_embeds)  # type: ignore[arg-type]
+
+        req_negative_prompt_embeds = [_get_prompt_field(p, "negative_prompt_embeds") for p in req.prompts]
+        if any(p is not None for p in req_negative_prompt_embeds):
+            negative_prompt_embeds = torch.stack(req_negative_prompt_embeds)  # type: ignore[arg-type]
+
+        req_prompt_attention_masks = [
+            _get_prompt_field(p, "prompt_attention_mask") or _get_prompt_field(p, "attention_mask")
+            for p in req.prompts
+        ]
+        if any(m is not None for m in req_prompt_attention_masks):
+            prompt_attention_mask = torch.stack(req_prompt_attention_masks)  # type: ignore[arg-type]
+
+        req_negative_attention_masks = [
+            _get_prompt_field(p, "negative_prompt_attention_mask") or _get_prompt_field(p, "negative_attention_mask")
+            for p in req.prompts
+        ]
+        if any(m is not None for m in req_negative_attention_masks):
+            negative_prompt_attention_mask = torch.stack(req_negative_attention_masks)  # type: ignore[arg-type]
+
+        if req.sampling_params.decode_timestep is not None:
+            decode_timestep = req.sampling_params.decode_timestep
+        if req.sampling_params.decode_noise_scale is not None:
+            decode_noise_scale = req.sampling_params.decode_noise_scale
+        if req.sampling_params.output_type is not None:
+            output_type = req.sampling_params.output_type
 
         self.check_inputs(
             prompt=prompt,
