@@ -312,7 +312,41 @@ class LTX2AudioVideoAttnProcessor:
         query = attn.norm_q(query)
         key = attn.norm_k(key)
 
+        def _slice_rope_for_tp(
+            rope: tuple[torch.Tensor, torch.Tensor] | None,
+            attn_module: "LTX2Attention",
+        ) -> tuple[torch.Tensor, torch.Tensor] | None:
+            if rope is None:
+                return None
+            cos, sin = rope
+            tp_size = get_tensor_model_parallel_world_size()
+            if tp_size <= 1:
+                return rope
+            tp_rank = get_tensor_model_parallel_rank()
+
+            if cos.ndim == 4:
+                if cos.shape[1] != attn_module.heads:
+                    local_heads = cos.shape[1] // tp_size
+                    if local_heads == attn_module.heads:
+                        start = tp_rank * local_heads
+                        end = start + local_heads
+                        cos = cos[:, start:end, :, :]
+                        sin = sin[:, start:end, :, :]
+            elif cos.ndim == 3:
+                local_dim = attn_module.heads * attn_module.head_dim
+                if cos.shape[-1] != local_dim:
+                    if cos.shape[-1] == local_dim * tp_size:
+                        start = tp_rank * local_dim
+                        end = start + local_dim
+                        cos = cos[..., start:end]
+                        sin = sin[..., start:end]
+
+            return cos, sin
+
         if query_rotary_emb is not None:
+            query_rotary_emb = _slice_rope_for_tp(query_rotary_emb, attn)
+            if key_rotary_emb is not None:
+                key_rotary_emb = _slice_rope_for_tp(key_rotary_emb, attn)
             if attn.rope_type == "interleaved":
                 query = apply_interleaved_rotary_emb(query, query_rotary_emb)
                 key = apply_interleaved_rotary_emb(
