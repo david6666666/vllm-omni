@@ -219,15 +219,12 @@ def main():
             "rel_l1_thresh": 0.2,
         }
 
-    parallel_config = DiffusionParallelConfig(
-        ulysses_degree=args.ulysses_degree,
-        ring_degree=args.ring_degree,
-    )
-
     # Check if profiling is requested via environment variable
     profiler_enabled = bool(os.getenv("VLLM_TORCH_PROFILER_DIR"))
     parallel_config = DiffusionParallelConfig(
         cfg_parallel_size=args.cfg_parallel_size,
+        ulysses_degree=args.ulysses_degree,
+        ring_degree=args.ring_degree,
     )
     omni = Omni(
         model=args.model,
@@ -255,7 +252,12 @@ def main():
     print(f"  Model: {args.model}")
     print(f"  Inference steps: {args.num_inference_steps}")
     print(f"  Frames: {args.num_frames}")
-    print(f"  Parallel configuration: cfg_parallel_size={args.cfg_parallel_size}")
+    print(
+        "  Parallel configuration: "
+        f"cfg_parallel_size={args.cfg_parallel_size}, "
+        f"ulysses_degree={args.ulysses_degree}, "
+        f"ring_degree={args.ring_degree}"
+    )
     print(f"  Video size: {args.width}x{args.height}")
     print(f"{'=' * 60}\n")
 
