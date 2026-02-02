@@ -20,9 +20,10 @@ from typing import Any
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders import FromOriginalModelMixin, PeftAdapterMixin
-from diffusers.models.attention import AttentionMixin, AttentionModuleMixin, FeedForward
+from diffusers.models.attention import AttentionMixin, AttentionModuleMixin
 from diffusers.models.cache_utils import CacheMixin
 from diffusers.models.embeddings import PixArtAlphaCombinedTimestepSizeEmbeddings, PixArtAlphaTextProjection
 from diffusers.models.modeling_utils import ModelMixin
@@ -35,7 +36,12 @@ from diffusers.utils import (
     scale_lora_layers,
     unscale_lora_layers,
 )
-from vllm.model_executor.layers.linear import QKVParallelLinear, ReplicatedLinear
+from vllm.distributed import get_tensor_model_parallel_world_size
+from vllm.model_executor.layers.linear import (
+    ColumnParallelLinear,
+    QKVParallelLinear,
+    RowParallelLinear,
+)
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
@@ -155,6 +161,63 @@ class LTX2AdaLayerNormSingle(nn.Module):
         return self.linear(self.silu(embedded_timestep)), embedded_timestep
 
 
+class ColumnParallelApproxGELU(nn.Module):
+    def __init__(self, dim_in: int, dim_out: int, *, approximate: str, bias: bool = True):
+        super().__init__()
+        self.proj = ColumnParallelLinear(
+            dim_in,
+            dim_out,
+            bias=bias,
+            gather_output=False,
+            return_bias=False,
+        )
+        self.approximate = approximate
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.proj(x)
+        return F.gelu(x, approximate=self.approximate)
+
+
+class LTX2FeedForward(nn.Module):
+    def __init__(
+        self,
+        dim: int,
+        dim_out: int | None = None,
+        mult: int = 4,
+        activation_fn: str = "gelu-approximate",
+        inner_dim: int | None = None,
+        bias: bool = True,
+        dropout: float = 0.0,
+        final_dropout: bool = False,
+    ) -> None:
+        super().__init__()
+
+        assert activation_fn == "gelu-approximate", "Only gelu-approximate is supported."
+
+        inner_dim = inner_dim or int(dim * mult)
+        dim_out = dim_out or dim
+
+        layers: list[nn.Module] = [
+            ColumnParallelApproxGELU(dim, inner_dim, approximate="tanh", bias=bias),
+            nn.Dropout(dropout),
+            RowParallelLinear(
+                inner_dim,
+                dim_out,
+                input_is_parallel=True,
+                return_bias=False,
+            ),
+        ]
+        if final_dropout:
+            layers.append(nn.Dropout(dropout))
+
+        self.net = nn.ModuleList(layers)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        for module in self.net:
+            hidden_states = module(hidden_states)
+        return hidden_states
+
+
 class LTX2AudioVideoAttnProcessor:
     r"""
     Processor for implementing attention (SDPA is used by default if you're using PyTorch 2.0) for the LTX-2.0 model.
@@ -230,7 +293,11 @@ class LTX2AudioVideoAttnProcessor:
 
         if is_self_attention and attn.to_qkv is not None:
             qkv, _ = attn.to_qkv(hidden_states)
-            query, key, value = qkv.split([attn.inner_dim, attn.inner_kv_dim, attn.inner_kv_dim], dim=-1)
+            q_heads = getattr(attn, "query_num_heads", attn.heads)
+            kv_heads = getattr(attn, "kv_num_heads", attn.heads)
+            q_size = q_heads * attn.head_dim
+            kv_size = kv_heads * attn.head_dim
+            query, key, value = qkv.split([q_size, kv_size, kv_size], dim=-1)
         else:
             query = attn.to_q(hidden_states)
             if isinstance(query, tuple):
@@ -300,19 +367,19 @@ class LTX2Attention(torch.nn.Module, AttentionModuleMixin):
         if qk_norm != "rms_norm_across_heads":
             raise NotImplementedError("Only 'rms_norm_across_heads' is supported as a valid value for `qk_norm`.")
 
+        kv_heads = heads if kv_heads is None else kv_heads
+
         self.head_dim = dim_head
         self.inner_dim = dim_head * heads
-        self.inner_kv_dim = self.inner_dim if kv_heads is None else dim_head * kv_heads
+        self.inner_kv_dim = dim_head * kv_heads
         self.query_dim = query_dim
         self.cross_attention_dim = cross_attention_dim if cross_attention_dim is not None else query_dim
         self.use_bias = bias
         self.dropout = dropout
         self.out_dim = query_dim
-        self.heads = heads
+        self.total_num_heads = heads
+        self.total_num_kv_heads = kv_heads
         self.rope_type = rope_type
-
-        self.norm_q = torch.nn.RMSNorm(dim_head * heads, eps=norm_eps, elementwise_affine=norm_elementwise_affine)
-        self.norm_k = torch.nn.RMSNorm(dim_head * kv_heads, eps=norm_eps, elementwise_affine=norm_elementwise_affine)
 
         self.to_qkv = None
         self.to_q = None
@@ -324,20 +391,60 @@ class LTX2Attention(torch.nn.Module, AttentionModuleMixin):
                 head_size=self.head_dim,
                 total_num_heads=heads,
                 bias=bias,
-                disable_tp=True,
             )
+            self.query_num_heads = self.to_qkv.num_heads
+            self.kv_num_heads = self.to_qkv.num_kv_heads
         else:
-            self.to_q = ReplicatedLinear(query_dim, self.inner_dim, bias=bias)
-            self.to_k = ReplicatedLinear(self.cross_attention_dim, self.inner_kv_dim, bias=bias)
-            self.to_v = ReplicatedLinear(self.cross_attention_dim, self.inner_kv_dim, bias=bias)
+            tp_size = get_tensor_model_parallel_world_size()
+            self.query_num_heads = heads // tp_size
+            self.kv_num_heads = kv_heads // tp_size
+
+            self.to_q = ColumnParallelLinear(
+                query_dim,
+                self.inner_dim,
+                bias=bias,
+                gather_output=False,
+                return_bias=False,
+            )
+            self.to_k = ColumnParallelLinear(
+                self.cross_attention_dim,
+                self.inner_kv_dim,
+                bias=bias,
+                gather_output=False,
+                return_bias=False,
+            )
+            self.to_v = ColumnParallelLinear(
+                self.cross_attention_dim,
+                self.inner_kv_dim,
+                bias=bias,
+                gather_output=False,
+                return_bias=False,
+            )
+
+        self.heads = self.query_num_heads
+        self.norm_q = torch.nn.RMSNorm(
+            dim_head * self.query_num_heads, eps=norm_eps, elementwise_affine=norm_elementwise_affine
+        )
+        self.norm_k = torch.nn.RMSNorm(
+            dim_head * self.kv_num_heads, eps=norm_eps, elementwise_affine=norm_elementwise_affine
+        )
 
         self.to_out = torch.nn.ModuleList(
-            [ReplicatedLinear(self.inner_dim, self.out_dim, bias=out_bias), torch.nn.Dropout(dropout)]
+            [
+                RowParallelLinear(
+                    self.inner_dim,
+                    self.out_dim,
+                    bias=out_bias,
+                    input_is_parallel=True,
+                    return_bias=False,
+                ),
+                torch.nn.Dropout(dropout),
+            ]
         )
         self.attn = Attention(
-            num_heads=heads,
+            num_heads=self.query_num_heads,
             head_size=dim_head,
-            num_kv_heads=kv_heads,
+            num_kv_heads=self.kv_num_heads,
             softmax_scale=1.0 / (dim_head**0.5),
             causal=False,
         )
@@ -494,10 +601,10 @@ class LTX2VideoTransformerBlock(nn.Module):
 
         # 4. Feedforward layers
         self.norm3 = RMSNorm(dim, eps=eps, elementwise_affine=elementwise_affine)
-        self.ff = FeedForward(dim, activation_fn=activation_fn)
+        self.ff = LTX2FeedForward(dim, activation_fn=activation_fn)
 
         self.audio_norm3 = RMSNorm(audio_dim, eps=eps, elementwise_affine=elementwise_affine)
-        self.audio_ff = FeedForward(audio_dim, activation_fn=activation_fn)
+        self.audio_ff = LTX2FeedForward(audio_dim, activation_fn=activation_fn)
 
         # 5. Per-Layer Modulation Parameters
         # Self-Attention / Feedforward AdaLayerNorm-Zero mod params

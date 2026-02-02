@@ -154,8 +154,7 @@ def main():
             "scm_steps_mask_policy": None,  # SCM mask policy: None (disabled), "slow", "medium", "fast", "ultra"
             "scm_steps_policy": "dynamic",  # SCM steps policy: "dynamic" or "static"
         }
-    # Configure parallel settings (only SP is supported for Wan)
-    # Note: cfg_parallel and tensor_parallel are not implemented for Wan models
+    # Configure parallel settings
     parallel_config = DiffusionParallelConfig(
         ulysses_degree=args.ulysses_degree,
         ring_degree=args.ring_degree,
@@ -193,7 +192,11 @@ def main():
     print(f"  Inference steps: {args.num_inference_steps}")
     print(f"  Frames: {args.num_frames}")
     print(
-        f"  Parallel configuration: ulysses_degree={args.ulysses_degree}, ring_degree={args.ring_degree}, cfg_parallel_size={args.cfg_parallel_size}, tensor_parallel_size={args.tensor_parallel_size}"
+        "  Parallel configuration: "
+        f"ulysses_degree={args.ulysses_degree}, "
+        f"ring_degree={args.ring_degree}, "
+        f"cfg_parallel_size={args.cfg_parallel_size}, "
+        f"tensor_parallel_size={args.tensor_parallel_size}"
     )
     print(f"  Video size: {args.width}x{args.height}")
     print(f"{'=' * 60}\n")

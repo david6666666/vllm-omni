@@ -65,6 +65,7 @@ Key arguments:
 - `--vae_use_slicing`: Enable VAE slicing for memory optimization.
 - `--vae_use_tiling`: Enable VAE tiling for memory optimization.
 - `--cfg_parallel_size`: set it to 2 to enable CFG Parallel. See more examples in [`user_guide`](../../../docs/user_guide/diffusion/parallelism_acceleration.md#cfg-parallel).
+- `--tensor_parallel_size`: tensor parallel size (effective for models that support TP, e.g. LTX2).
 - `--enable-cpu-offload`: enable CPU offloading for diffusion models.
 
 > ℹ️ If you encounter OOM errors, try using `--vae_use_slicing` and `--vae_use_tiling` to reduce memory usage.
