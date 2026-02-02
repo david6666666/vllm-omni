@@ -94,6 +94,10 @@ class DiffusionEngine:
 
         postprocess_start_time = time.time()
         outputs = self.post_process_func(output.output) if self.post_process_func is not None else output.output
+        audio_payload = None
+        if isinstance(outputs, dict):
+            audio_payload = outputs.get("audio")
+            outputs = outputs.get("video", outputs)
         postprocess_time = time.time() - postprocess_start_time
         logger.info(f"Post-processing completed in {postprocess_time:.4f} seconds")
 
@@ -126,6 +130,9 @@ class DiffusionEngine:
                     ),
                 ]
             else:
+                mm_output = {}
+                if audio_payload is not None:
+                    mm_output["audio"] = audio_payload
                 return [
                     OmniRequestOutput.from_diffusion(
                         request_id=request_id,
@@ -133,7 +140,8 @@ class DiffusionEngine:
                         prompt=prompt,
                         metrics=metrics,
                         latents=output.trajectory_latents,
-                    ),
+                        multimodal_output=mm_output,
+                ),
                 ]
         else:
             # Multiple requests: return list of OmniRequestOutput
@@ -167,6 +175,19 @@ class DiffusionEngine:
                         )
                     )
                 else:
+                    mm_output = {}
+                    if audio_payload is not None:
+                        sliced_audio = audio_payload
+                        if isinstance(audio_payload, (list, tuple)):
+                            sliced_audio = audio_payload[start_idx : start_idx + num_outputs]
+                            if len(sliced_audio) == 1:
+                                sliced_audio = sliced_audio[0]
+                        elif hasattr(audio_payload, "shape") and getattr(audio_payload, "shape", None) is not None:
+                            if len(audio_payload.shape) > 0 and audio_payload.shape[0] >= start_idx + num_outputs:
+                                sliced_audio = audio_payload[start_idx : start_idx + num_outputs]
+                                if num_outputs == 1:
+                                    sliced_audio = sliced_audio[0]
+                        mm_output["audio"] = sliced_audio
                     results.append(
                         OmniRequestOutput.from_diffusion(
                             request_id=request_id,
@@ -174,6 +195,7 @@ class DiffusionEngine:
                             prompt=prompt,
                             metrics=metrics,
                             latents=output.trajectory_latents,
+                            multimodal_output=mm_output,
                         )
                     )
 
