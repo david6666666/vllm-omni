@@ -209,17 +209,29 @@ def main():
     # Configure cache based on backend type
     cache_config = None
     if args.cache_backend == "cache_dit":
-        cache_config = {
-            "Fn_compute_blocks": 1,
-            "Bn_compute_blocks": 0,
-            "max_warmup_steps": 4,
-            "residual_diff_threshold": 0.24,
-            "max_continuous_cached_steps": 3,
-            "enable_taylorseer": False,
-            "taylorseer_order": 1,
-            "scm_steps_mask_policy": None,
-            "scm_steps_policy": "dynamic",
-        }
+        if is_ltx2:
+            cache_config = {
+                "Fn_compute_blocks": 2,
+                "Bn_compute_blocks": 0,
+                "max_warmup_steps": 8,
+                "residual_diff_threshold": 0.12,
+                "max_continuous_cached_steps": 1,
+                "max_cached_steps": 20,
+                "enable_taylorseer": False,
+                "scm_steps_mask_policy": None,
+            }
+        else:
+            cache_config = {
+                "Fn_compute_blocks": 1,
+                "Bn_compute_blocks": 0,
+                "max_warmup_steps": 4,
+                "residual_diff_threshold": 0.24,
+                "max_continuous_cached_steps": 3,
+                "enable_taylorseer": False,
+                "taylorseer_order": 1,
+                "scm_steps_mask_policy": None,
+                "scm_steps_policy": "dynamic",
+            }
     elif args.cache_backend == "tea_cache":
         cache_config = {
             "rel_l1_thresh": 0.2,
