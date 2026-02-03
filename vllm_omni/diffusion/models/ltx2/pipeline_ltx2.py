@@ -799,10 +799,11 @@ class LTX2Pipeline(nn.Module, CFGParallelMixin):
         num_videos_per_prompt = (
             req.sampling_params.num_outputs_per_prompt
             if req.sampling_params.num_outputs_per_prompt > 0
-            else num_videos_per_prompt
-            or 1
+            else num_videos_per_prompt or 1
         )
-        max_sequence_length = req.sampling_params.max_sequence_length or max_sequence_length or self.tokenizer_max_length
+        max_sequence_length = (
+            req.sampling_params.max_sequence_length or max_sequence_length or self.tokenizer_max_length
+        )
 
         if req.sampling_params.guidance_scale_provided:
             guidance_scale = req.sampling_params.guidance_scale
@@ -830,8 +831,7 @@ class LTX2Pipeline(nn.Module, CFGParallelMixin):
             negative_prompt_embeds = torch.stack(req_negative_prompt_embeds)  # type: ignore[arg-type]
 
         req_prompt_attention_masks = [
-            _get_prompt_field(p, "prompt_attention_mask") or _get_prompt_field(p, "attention_mask")
-            for p in req.prompts
+            _get_prompt_field(p, "prompt_attention_mask") or _get_prompt_field(p, "attention_mask") for p in req.prompts
         ]
         if any(m is not None for m in req_prompt_attention_masks):
             prompt_attention_mask = torch.stack(req_prompt_attention_masks)  # type: ignore[arg-type]
