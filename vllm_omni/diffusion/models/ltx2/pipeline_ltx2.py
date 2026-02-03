@@ -559,14 +559,15 @@ class LTX2Pipeline(nn.Module, CFGParallelMixin):
         latent_mel_bins = num_mel_bins // self.audio_vae_mel_compression_ratio
 
         sp_size = getattr(self.od_config.parallel_config, "sequence_parallel_size", 1)
-        if sp_size > 1 and latent_length < sp_size:
-            pad_len = sp_size - latent_length
-            if latents is not None:
-                pad_shape = list(latents.shape)
-                pad_shape[2] = pad_len
-                padding = torch.zeros(pad_shape, dtype=latents.dtype, device=latents.device)
-                latents = torch.cat([latents, padding], dim=2)
-            latent_length = sp_size
+        if sp_size > 1:
+            pad_len = (sp_size - (latent_length % sp_size)) % sp_size
+            if pad_len > 0:
+                if latents is not None:
+                    pad_shape = list(latents.shape)
+                    pad_shape[2] = pad_len
+                    padding = torch.zeros(pad_shape, dtype=latents.dtype, device=latents.device)
+                    latents = torch.cat([latents, padding], dim=2)
+                latent_length += pad_len
 
         if latents is not None:
             return latents.to(device=device, dtype=dtype), latent_length
