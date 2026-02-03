@@ -539,9 +539,7 @@ def set_seq_parallel_pg(
         local_ring = None
         for group_ranks in sp_group_ranks:
             if len(group_ranks) != sp_size:
-                raise ValueError(
-                    f"Invalid sp_group_ranks entry: expected size {sp_size}, got {len(group_ranks)}."
-                )
+                raise ValueError(f"Invalid sp_group_ranks entry: expected size {sp_size}, got {len(group_ranks)}.")
             if rank in group_ranks:
                 local_sp_group = list(group_ranks)
             if use_ulysses_low:
