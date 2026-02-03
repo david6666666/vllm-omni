@@ -141,7 +141,7 @@ class DiffusionEngine:
                         metrics=metrics,
                         latents=output.trajectory_latents,
                         multimodal_output=mm_output,
-                ),
+                    ),
                 ]
         else:
             # Multiple requests: return list of OmniRequestOutput
@@ -154,8 +154,10 @@ class DiffusionEngine:
 
                 # Get images for this request
                 num_outputs = request.sampling_params.num_outputs_per_prompt
-                request_outputs = outputs[output_idx : output_idx + num_outputs] if output_idx < len(outputs) else []
-                output_idx += num_outputs
+                start_idx = output_idx
+                end_idx = start_idx + num_outputs
+                request_outputs = outputs[start_idx:end_idx] if output_idx < len(outputs) else []
+                output_idx = end_idx
 
                 metrics = {}
                 if output.trajectory_timesteps is not None:
@@ -172,19 +174,19 @@ class DiffusionEngine:
                             latents=output.trajectory_latents,
                             multimodal_output={"audio": audio_payload},
                             final_output_type="audio",
-                        )
+                        ),
                     )
                 else:
                     mm_output = {}
                     if audio_payload is not None:
                         sliced_audio = audio_payload
                         if isinstance(audio_payload, (list, tuple)):
-                            sliced_audio = audio_payload[start_idx : start_idx + num_outputs]
+                            sliced_audio = audio_payload[start_idx:end_idx]
                             if len(sliced_audio) == 1:
                                 sliced_audio = sliced_audio[0]
                         elif hasattr(audio_payload, "shape") and getattr(audio_payload, "shape", None) is not None:
-                            if len(audio_payload.shape) > 0 and audio_payload.shape[0] >= start_idx + num_outputs:
-                                sliced_audio = audio_payload[start_idx : start_idx + num_outputs]
+                            if len(audio_payload.shape) > 0 and audio_payload.shape[0] >= end_idx:
+                                sliced_audio = audio_payload[start_idx:end_idx]
                                 if num_outputs == 1:
                                     sliced_audio = sliced_audio[0]
                         mm_output["audio"] = sliced_audio
@@ -196,7 +198,7 @@ class DiffusionEngine:
                             metrics=metrics,
                             latents=output.trajectory_latents,
                             multimodal_output=mm_output,
-                        )
+                        ),
                     )
 
             return results

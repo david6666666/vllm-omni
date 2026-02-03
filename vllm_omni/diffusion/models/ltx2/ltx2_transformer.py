@@ -19,9 +19,9 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
+import torch.distributed
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.distributed
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders import FromOriginalModelMixin, PeftAdapterMixin
 from diffusers.models.attention import AttentionMixin, AttentionModuleMixin
