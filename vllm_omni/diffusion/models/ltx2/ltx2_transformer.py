@@ -218,6 +218,13 @@ class LTX2FeedForward(nn.Module):
 
 
 class TensorParallelRMSNorm(nn.Module):
+    """RMSNorm that computes stats across TP shards for q/k norm.
+
+    LTX2 uses qk_norm="rms_norm_across_heads" while Q/K are tensor-parallel
+    sharded. A local RMSNorm would compute statistics on only the local shard,
+    which changes the normalization when TP > 1. We all-reduce the squared
+    sum to match the global RMS across all heads.
+    """
     def __init__(self, hidden_size: int, eps: float = 1e-6, elementwise_affine: bool = True, tp_size: int = 1):
         super().__init__()
         self.hidden_size = hidden_size
