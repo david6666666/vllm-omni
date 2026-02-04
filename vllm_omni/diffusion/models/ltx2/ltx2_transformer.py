@@ -23,9 +23,7 @@ import torch.distributed
 import torch.nn as nn
 import torch.nn.functional as F
 from diffusers.configuration_utils import ConfigMixin, register_to_config
-from diffusers.loaders import FromOriginalModelMixin, PeftAdapterMixin
-from diffusers.models.attention import AttentionMixin, AttentionModuleMixin
-from diffusers.models.cache_utils import CacheMixin
+from diffusers.models.attention import AttentionModuleMixin
 from diffusers.models.embeddings import PixArtAlphaCombinedTimestepSizeEmbeddings, PixArtAlphaTextProjection
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.normalization import RMSNorm
@@ -1130,9 +1128,7 @@ class LTX2AudioVideoRotaryPosEmbed(nn.Module):
         return cos_freqs, sin_freqs
 
 
-class LTX2VideoTransformer3DModel(
-    ModelMixin, ConfigMixin, AttentionMixin, FromOriginalModelMixin, PeftAdapterMixin, CacheMixin
-):
+class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin):
     r"""
     A Transformer model for video-like data used in [LTX](https://huggingface.co/Lightricks/LTX-Video).
 
