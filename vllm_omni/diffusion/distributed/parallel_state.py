@@ -504,13 +504,13 @@ def init_vae_group(
 
 # adapted from https://github.com/feifeibear/long-context-attention/blob/main/yunchang/globals.py
 def set_seq_parallel_pg(
-    sp_ulysses_degree,
-    sp_ring_degree,
-    rank,
-    world_size,
-    use_ulysses_low=True,
+    sp_ulysses_degree: int,
+    sp_ring_degree: int,
+    rank: int,
+    world_size: int,
+    use_ulysses_low: bool = True,
     sp_group_ranks: list[list[int]] | None = None,
-):
+) -> tuple[torch.distributed.ProcessGroup, torch.distributed.ProcessGroup]:
     """
     Initialize sequence-parallel Ulysses and Ring process groups.
 
@@ -531,8 +531,10 @@ def set_seq_parallel_pg(
             ranges.
 
     Returns:
-        (ulyssess_pg, ring_pg): The Ulysses and Ring process groups for this
-        rank.
+        ulyssess_pg (torch.distributed.ProcessGroup): The Ulysses process group
+            for this rank.
+        ring_pg (torch.distributed.ProcessGroup): The Ring process group for
+            this rank.
 
     Raises:
         ValueError: If sp_group_ranks length does not match world_size or any
