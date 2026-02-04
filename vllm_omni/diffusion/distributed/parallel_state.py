@@ -512,8 +512,39 @@ def set_seq_parallel_pg(
     sp_group_ranks: list[list[int]] | None = None,
 ):
     """
-    sp_ulysses_degree x sp_ring_degree = seq_parallel_size
-    (ulysses_degree, dp_size)
+    Initialize sequence-parallel Ulysses and Ring process groups.
+
+    This builds sequence-parallel (SP) subgroups inside each data-parallel (DP)
+    slice. The SP group size is sp_ulysses_degree * sp_ring_degree, and
+    world_size must be divisible by that size.
+
+    Args:
+        sp_ulysses_degree: Size of each Ulysses subgroup.
+        sp_ring_degree: Size of each Ring subgroup.
+        rank: Global rank of the current process.
+        world_size: Total number of processes.
+        use_ulysses_low: If True, Ulysses groups are contiguous chunks and Ring
+            groups are strided within each SP group. If False, the opposite.
+        sp_group_ranks: Optional explicit SP groups. Each entry must be a list
+            of length sp_ulysses_degree * sp_ring_degree. When provided, groups
+            are built from these ranks instead of auto-generated contiguous
+            ranges.
+
+    Returns:
+        (ulyssess_pg, ring_pg): The Ulysses and Ring process groups for this
+        rank.
+
+    Raises:
+        ValueError: If sp_group_ranks length does not match world_size or any
+            entry has the wrong size.
+        AssertionError: If world_size is not divisible by sp_size.
+
+    Behavior:
+        - If sp_group_ranks is provided, groups are built per entry and each
+          entry is further split into Ulysses/Ring groups according to
+          use_ulysses_low.
+        - If sp_group_ranks is None, groups are auto-generated within each DP
+          slice using offsets of size sp_size.
     """
     sp_size = sp_ring_degree * sp_ulysses_degree
     dp_size = world_size // sp_size
