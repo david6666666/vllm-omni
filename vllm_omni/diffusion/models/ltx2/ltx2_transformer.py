@@ -225,6 +225,7 @@ class TensorParallelRMSNorm(nn.Module):
     which changes the normalization when TP > 1. We all-reduce the squared
     sum to match the global RMS across all heads.
     """
+
     def __init__(self, hidden_size: int, eps: float = 1e-6, elementwise_affine: bool = True, tp_size: int = 1):
         super().__init__()
         self.hidden_size = hidden_size
