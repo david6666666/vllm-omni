@@ -21,7 +21,38 @@ def parse_args() -> argparse.Namespace:
         "--model",
         default="Qwen/Qwen-Image",
         help="Diffusion model name or local path. Supported models: "
-        "Qwen/Qwen-Image, Tongyi-MAI/Z-Image-Turbo, Qwen/Qwen-Image-2512",
+        "Qwen/Qwen-Image, Tongyi-MAI/Z-Image-Turbo, Qwen/Qwen-Image-2512, "
+        "unsloth/Qwen-Image-2512-FP8, unsloth/Qwen-Image-2512-GGUF:<quant_type>",
+    )
+    parser.add_argument(
+        "--quantization",
+        type=str,
+        default=None,
+        choices=["fp8", "gguf", "auto"],
+        help=(
+            "Quantization mode. "
+            "Use None for auto-detect from model config (recommended for native FP8 checkpoints), "
+            "'fp8' to force FP8 path, or 'gguf' for GGUF checkpoints."
+        ),
+    )
+    parser.add_argument(
+        "--load_format",
+        type=str,
+        default="auto",
+        choices=["auto", "hf", "gguf"],
+        help="Model weight load format. Keep 'auto' for FP8 checkpoints; use 'gguf' for GGUF.",
+    )
+    parser.add_argument(
+        "--quantization_config_file",
+        type=str,
+        default=None,
+        help="Optional local JSON file with quantization_config override.",
+    )
+    parser.add_argument(
+        "--quantization_config_dict_json",
+        type=str,
+        default=None,
+        help="Optional inline JSON string for quantization_config override.",
     )
     parser.add_argument("--prompt", default="a cup of coffee on the table", help="Text prompt for image generation.")
     parser.add_argument(
@@ -181,18 +212,29 @@ def main():
     # Check if profiling is requested via environment variable
     profiler_enabled = bool(os.getenv("VLLM_TORCH_PROFILER_DIR"))
 
+    omni_kwargs = {
+        "model": args.model,
+        "enable_layerwise_offload": args.enable_layerwise_offload,
+        "layerwise_num_gpu_layers": args.layerwise_num_gpu_layers,
+        "vae_use_slicing": args.vae_use_slicing,
+        "vae_use_tiling": args.vae_use_tiling,
+        "cache_backend": args.cache_backend,
+        "cache_config": cache_config,
+        "enable_cache_dit_summary": args.enable_cache_dit_summary,
+        "parallel_config": parallel_config,
+        "enforce_eager": args.enforce_eager,
+        "enable_cpu_offload": args.enable_cpu_offload,
+        "load_format": args.load_format,
+    }
+    if args.quantization is not None:
+        omni_kwargs["quantization"] = args.quantization
+    if args.quantization_config_file is not None:
+        omni_kwargs["quantization_config_file"] = args.quantization_config_file
+    if args.quantization_config_dict_json is not None:
+        omni_kwargs["quantization_config_dict_json"] = args.quantization_config_dict_json
+
     omni = Omni(
-        model=args.model,
-        enable_layerwise_offload=args.enable_layerwise_offload,
-        layerwise_num_gpu_layers=args.layerwise_num_gpu_layers,
-        vae_use_slicing=args.vae_use_slicing,
-        vae_use_tiling=args.vae_use_tiling,
-        cache_backend=args.cache_backend,
-        cache_config=cache_config,
-        enable_cache_dit_summary=args.enable_cache_dit_summary,
-        parallel_config=parallel_config,
-        enforce_eager=args.enforce_eager,
-        enable_cpu_offload=args.enable_cpu_offload,
+        **omni_kwargs,
     )
 
     if profiler_enabled:
@@ -203,6 +245,8 @@ def main():
     print(f"\n{'=' * 60}")
     print("Generation Configuration:")
     print(f"  Model: {args.model}")
+    print(f"  Quantization: {args.quantization if args.quantization is not None else 'auto-detect'}")
+    print(f"  Load format: {args.load_format}")
     print(f"  Inference steps: {args.num_inference_steps}")
     print(f"  Cache backend: {args.cache_backend if args.cache_backend else 'None (no acceleration)'}")
     print(

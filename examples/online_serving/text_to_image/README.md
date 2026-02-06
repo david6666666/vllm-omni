@@ -9,6 +9,29 @@ This example demonstrates how to deploy Qwen-Image model for online image genera
 ```bash
 vllm serve Qwen/Qwen-Image --omni --port 8091
 ```
+
+### Native FP8 checkpoint (recommended)
+
+```bash
+vllm serve unsloth/Qwen-Image-2512-FP8 --omni --port 8091
+```
+
+Notes:
+- Keep `--quantization` unset to use native FP8 checkpoint metadata.
+- You can force it with `--quantization fp8` if needed.
+
+### GGUF checkpoint
+
+```bash
+vllm serve "unsloth/Qwen-Image-2512-GGUF:Q8_0" --omni --port 8091 \
+  --quantization gguf \
+  --load-format gguf
+```
+
+Notes:
+- Replace `Q8_0` with the quant type available in the repo.
+- If you know the exact file, you can use `<repo_id>/<filename>.gguf`.
+
 !!! note
     If you encounter Out-of-Memory (OOM) issues or have limited GPU memory, you can enable VAE slicing and tiling to reduce memory usage, --vae-use-slicing --vae-use-tiling
 
@@ -18,6 +41,16 @@ Or use the startup script:
 
 ```bash
 bash run_server.sh
+```
+
+For quantized checkpoints with the script:
+
+```bash
+# Native FP8
+MODEL=unsloth/Qwen-Image-2512-FP8 bash run_server.sh
+
+# GGUF
+MODEL="unsloth/Qwen-Image-2512-GGUF:Q8_0" QUANTIZATION=gguf LOAD_FORMAT=gguf bash run_server.sh
 ```
 
 ## API Calls

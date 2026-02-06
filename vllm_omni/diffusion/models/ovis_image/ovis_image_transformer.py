@@ -33,6 +33,7 @@ from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 from vllm_omni.diffusion.attention.layer import Attention
 from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.layers.rope import RotaryEmbedding
+from vllm_omni.diffusion.utils.quant_utils import get_diffusion_quant_config
 
 logger = init_logger(__name__)
 
@@ -76,6 +77,7 @@ class OvisImageAttention(nn.Module):
             total_num_heads=self.heads,
             disable_tp=True,
             bias=bias,
+            quant_config=get_diffusion_quant_config(),
         )
 
         if not self.pre_only:
@@ -93,9 +95,15 @@ class OvisImageAttention(nn.Module):
                 total_num_heads=self.heads,
                 disable_tp=True,
                 bias=added_proj_bias,
+                quant_config=get_diffusion_quant_config(),
             )
 
-            self.to_add_out = ReplicatedLinear(self.inner_dim, query_dim, bias=out_bias)
+            self.to_add_out = ReplicatedLinear(
+                self.inner_dim,
+                query_dim,
+                bias=out_bias,
+                quant_config=get_diffusion_quant_config(),
+            )
 
         self.rope = RotaryEmbedding(is_neox_style=False)
         self.attn = Attention(

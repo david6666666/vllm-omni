@@ -1,6 +1,6 @@
 # Text-To-Image
 
-This folder provides several entrypoints for experimenting with `Qwen/Qwen-Image` `Qwen/Qwen-Image-2512` `Tongyi-MAI/Z-Image-Turbo` using vLLM-Omni:
+This folder provides several entrypoints for experimenting with `Qwen/Qwen-Image` `Qwen/Qwen-Image-2512` `Tongyi-MAI/Z-Image-Turbo` and quantized checkpoints (FP8/GGUF) using vLLM-Omni:
 
 - `text_to_image.py`: command-line script for single image generation with advanced options.
 - `web_demo.py`: lightweight Gradio UI for interactive prompt/seed/CFG exploration.
@@ -87,6 +87,40 @@ python text_to_image.py \
   --output outputs/coffee.png
 ```
 
+### Native FP8 checkpoint example (recommended)
+
+```bash
+python text_to_image.py \
+  --model unsloth/Qwen-Image-2512-FP8 \
+  --prompt "cinematic photo of an arctic fox under aurora" \
+  --height 1328 \
+  --width 1328 \
+  --num_inference_steps 30 \
+  --output outputs/qwen_image_fp8.png
+```
+
+Notes:
+- Keep `--quantization` unset to enable auto-detection from the model's `quantization_config`.
+- You can still force the path with `--quantization fp8`.
+
+### GGUF checkpoint example
+
+```bash
+python text_to_image.py \
+  --model unsloth/Qwen-Image-2512-GGUF:Q8_0 \
+  --quantization gguf \
+  --load_format gguf \
+  --prompt "a watercolor painting of tokyo in the rain" \
+  --height 1024 \
+  --width 1024 \
+  --num_inference_steps 28 \
+  --output outputs/qwen_image_gguf.png
+```
+
+Notes:
+- Replace `Q8_0` with the quant type that exists in the GGUF repository.
+- If you already know the exact filename, you can also use `<repo_id>/<filename>.gguf`.
+
 Key arguments:
 
 - `--prompt`: text description (string).
@@ -96,6 +130,8 @@ Key arguments:
 - `--num_inference_steps`: diffusion sampling steps (more steps = higher quality, slower).
 - `--height/--width`: output resolution (defaults 1024x1024).
 - `--output`: path to save the generated PNG.
+- `--quantization`: `fp8`, `gguf`, or `auto` (default behavior is auto-detect when unset).
+- `--load_format`: `auto`, `hf`, `gguf` (use `gguf` for GGUF checkpoints).
 - `--vae_use_slicing`: enable VAE slicing for memory optimization.
 - `--vae_use_tiling`: enable VAE tiling for memory optimization.
 - `--cfg_parallel_size`: set it to 2 to enable CFG Parallel. See more examples in [`user_guide`](../../../docs/user_guide/diffusion/parallelism_acceleration.md#cfg-parallel).

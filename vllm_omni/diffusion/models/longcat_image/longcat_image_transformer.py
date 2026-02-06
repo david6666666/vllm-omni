@@ -26,6 +26,7 @@ from vllm_omni.diffusion.distributed.parallel_state import (
 )
 from vllm_omni.diffusion.forward_context import get_forward_context
 from vllm_omni.platforms import current_omni_platform
+from vllm_omni.diffusion.utils.quant_utils import get_diffusion_quant_config
 
 logger = init_logger(__name__)
 
@@ -36,9 +37,21 @@ class FeedForward(nn.Module):
         inner_dim = int(dim * mult)
         dim_out = dim_out if dim_out is not None else dim
 
-        self.w_in = ColumnParallelLinear(dim, inner_dim, bias=bias, return_bias=False)
+        self.w_in = ColumnParallelLinear(
+            dim,
+            inner_dim,
+            bias=bias,
+            return_bias=False,
+            quant_config=get_diffusion_quant_config(),
+        )
         self.act = get_act_fn("gelu_pytorch_tanh")
-        self.w_out = RowParallelLinear(inner_dim, dim_out, bias=bias, return_bias=False)
+        self.w_out = RowParallelLinear(
+            inner_dim,
+            dim_out,
+            bias=bias,
+            return_bias=False,
+            quant_config=get_diffusion_quant_config(),
+        )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.w_in(hidden_states)
@@ -85,6 +98,7 @@ class LongCatImageAttention(nn.Module):
             head_size=self.head_dim,
             total_num_heads=self.heads,
             bias=bias,
+            quant_config=get_diffusion_quant_config(),
         )
 
         if not self.pre_only:
@@ -99,9 +113,15 @@ class LongCatImageAttention(nn.Module):
                 head_size=self.head_dim,
                 total_num_heads=self.heads,
                 bias=added_proj_bias,
+                quant_config=get_diffusion_quant_config(),
             )
 
-            self.to_add_out = RowParallelLinear(self.inner_dim, query_dim, bias=out_bias)
+            self.to_add_out = RowParallelLinear(
+                self.inner_dim,
+                query_dim,
+                bias=out_bias,
+                quant_config=get_diffusion_quant_config(),
+            )
 
         self.attn = Attention(
             num_heads=heads,

@@ -241,6 +241,14 @@ class OmniDiffusionConfig:
 
     dtype: torch.dtype = torch.bfloat16
 
+    # Quantization (shared with Omni/Stage)
+    quantization: str | None = None
+    quantization_config_file: str | None = None
+    quantization_config_dict_json: str | None = None
+    quantization_scope: str = "transformer_only"
+    load_format: str = "auto"
+    quant_config: Any | None = None
+
     tf_model_config: TransformerConfig = field(default_factory=TransformerConfig)
 
     # Attention

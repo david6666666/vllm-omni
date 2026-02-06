@@ -43,6 +43,7 @@ from vllm_omni.diffusion.forward_context import (
     is_forward_context_available,
 )
 from vllm_omni.diffusion.layers.rope import RotaryEmbedding
+from vllm_omni.diffusion.utils.quant_utils import get_diffusion_quant_config
 
 ADALN_EMBED_DIM = 256
 SEQ_MULTI_OF = 32
@@ -264,6 +265,7 @@ class ZImageAttention(nn.Module):
             total_num_heads=num_heads,
             total_num_kv_heads=num_kv_heads,
             bias=False,
+            quant_config=get_diffusion_quant_config(),
         )
 
         assert qk_norm is True
@@ -281,6 +283,7 @@ class ZImageAttention(nn.Module):
                     bias=False,
                     input_is_parallel=True,
                     return_bias=False,
+                    quant_config=get_diffusion_quant_config(),
                 )
             ]
         )
@@ -350,6 +353,7 @@ class FeedForward(nn.Module):
             [hidden_dim] * 2,
             bias=False,
             return_bias=False,
+            quant_config=get_diffusion_quant_config(),
         )
         self.act = SiluAndMul()
         self.w2 = RowParallelLinear(
@@ -358,6 +362,7 @@ class FeedForward(nn.Module):
             bias=False,
             input_is_parallel=True,
             return_bias=False,
+            quant_config=get_diffusion_quant_config(),
         )
 
     def forward(self, x):

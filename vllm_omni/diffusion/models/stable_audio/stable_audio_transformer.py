@@ -17,6 +17,7 @@ from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
 from vllm_omni.diffusion.attention.layer import Attention
 from vllm_omni.diffusion.data import OmniDiffusionConfig
+from vllm_omni.diffusion.utils.quant_utils import get_diffusion_quant_config
 
 logger = init_logger(__name__)
 
@@ -99,14 +100,25 @@ class StableAudioSelfAttention(nn.Module):
         self.inner_dim = num_attention_heads * attention_head_dim
 
         # All projections use inner_dim for output
-        self.to_q = ReplicatedLinear(dim, self.inner_dim, bias=False)
-        self.to_k = ReplicatedLinear(dim, self.inner_dim, bias=False)
-        self.to_v = ReplicatedLinear(dim, self.inner_dim, bias=False)
+        self.to_q = ReplicatedLinear(
+            dim, self.inner_dim, bias=False, quant_config=get_diffusion_quant_config()
+        )
+        self.to_k = ReplicatedLinear(
+            dim, self.inner_dim, bias=False, quant_config=get_diffusion_quant_config()
+        )
+        self.to_v = ReplicatedLinear(
+            dim, self.inner_dim, bias=False, quant_config=get_diffusion_quant_config()
+        )
 
         # Output projection
         self.to_out = nn.ModuleList(
             [
-                ReplicatedLinear(self.inner_dim, dim, bias=False),
+                ReplicatedLinear(
+                    self.inner_dim,
+                    dim,
+                    bias=False,
+                    quant_config=get_diffusion_quant_config(),
+                ),
                 nn.Dropout(dropout),
             ]
         )
@@ -188,14 +200,31 @@ class StableAudioCrossAttention(nn.Module):
         self.num_kv_groups = num_attention_heads // num_key_value_attention_heads
 
         # Q outputs inner_dim, K/V output kv_dim (GQA)
-        self.to_q = ReplicatedLinear(dim, self.inner_dim, bias=False)
-        self.to_k = ReplicatedLinear(cross_attention_dim, self.kv_dim, bias=False)
-        self.to_v = ReplicatedLinear(cross_attention_dim, self.kv_dim, bias=False)
+        self.to_q = ReplicatedLinear(
+            dim, self.inner_dim, bias=False, quant_config=get_diffusion_quant_config()
+        )
+        self.to_k = ReplicatedLinear(
+            cross_attention_dim,
+            self.kv_dim,
+            bias=False,
+            quant_config=get_diffusion_quant_config(),
+        )
+        self.to_v = ReplicatedLinear(
+            cross_attention_dim,
+            self.kv_dim,
+            bias=False,
+            quant_config=get_diffusion_quant_config(),
+        )
 
         # Output projection
         self.to_out = nn.ModuleList(
             [
-                ReplicatedLinear(self.inner_dim, dim, bias=False),
+                ReplicatedLinear(
+                    self.inner_dim,
+                    dim,
+                    bias=False,
+                    quant_config=get_diffusion_quant_config(),
+                ),
                 nn.Dropout(dropout),
             ]
         )

@@ -22,6 +22,7 @@ from vllm_omni.diffusion.distributed.sp_plan import (
     SequenceParallelInput,
     SequenceParallelOutput,
 )
+from vllm_omni.diffusion.utils.quant_utils import get_diffusion_quant_config
 
 logger = init_logger(__name__)
 
@@ -230,6 +231,7 @@ class WanSelfAttention(nn.Module):
             total_num_heads=num_heads,
             bias=True,
             disable_tp=True,
+            quant_config=get_diffusion_quant_config(),
         )
 
         # QK normalization using vLLM's RMSNorm
@@ -239,7 +241,12 @@ class WanSelfAttention(nn.Module):
         # Output projection
         self.to_out = nn.ModuleList(
             [
-                ReplicatedLinear(self.inner_dim, dim, bias=True),
+                ReplicatedLinear(
+                    self.inner_dim,
+                    dim,
+                    bias=True,
+                    quant_config=get_diffusion_quant_config(),
+                ),
                 nn.Dropout(dropout),
             ]
         )
@@ -312,11 +319,26 @@ class WanCrossAttention(nn.Module):
         self.kv_inner_dim = head_dim * num_heads  # For cross-attention, K/V come from encoder
 
         # Query projection
-        self.to_q = ReplicatedLinear(dim, self.inner_dim, bias=True)
+        self.to_q = ReplicatedLinear(
+            dim,
+            self.inner_dim,
+            bias=True,
+            quant_config=get_diffusion_quant_config(),
+        )
 
         # Separate K and V projections for cross-attention
-        self.to_k = ReplicatedLinear(dim, self.kv_inner_dim, bias=True)
-        self.to_v = ReplicatedLinear(dim, self.kv_inner_dim, bias=True)
+        self.to_k = ReplicatedLinear(
+            dim,
+            self.kv_inner_dim,
+            bias=True,
+            quant_config=get_diffusion_quant_config(),
+        )
+        self.to_v = ReplicatedLinear(
+            dim,
+            self.kv_inner_dim,
+            bias=True,
+            quant_config=get_diffusion_quant_config(),
+        )
 
         # QK normalization
         self.norm_q = RMSNorm(self.inner_dim, eps=eps)
@@ -325,8 +347,18 @@ class WanCrossAttention(nn.Module):
         # Optional added KV projections for I2V (image embeddings)
         self.added_kv_proj_dim = added_kv_proj_dim
         if added_kv_proj_dim is not None:
-            self.add_k_proj = ReplicatedLinear(added_kv_proj_dim, self.inner_dim, bias=True)
-            self.add_v_proj = ReplicatedLinear(added_kv_proj_dim, self.inner_dim, bias=True)
+            self.add_k_proj = ReplicatedLinear(
+                added_kv_proj_dim,
+                self.inner_dim,
+                bias=True,
+                quant_config=get_diffusion_quant_config(),
+            )
+            self.add_v_proj = ReplicatedLinear(
+                added_kv_proj_dim,
+                self.inner_dim,
+                bias=True,
+                quant_config=get_diffusion_quant_config(),
+            )
             self.norm_added_k = RMSNorm(self.inner_dim, eps=eps)
         else:
             self.add_k_proj = None
@@ -336,7 +368,12 @@ class WanCrossAttention(nn.Module):
         # Output projection
         self.to_out = nn.ModuleList(
             [
-                ReplicatedLinear(self.inner_dim, dim, bias=True),
+                ReplicatedLinear(
+                    self.inner_dim,
+                    dim,
+                    bias=True,
+                    quant_config=get_diffusion_quant_config(),
+                ),
                 nn.Dropout(dropout),
             ]
         )

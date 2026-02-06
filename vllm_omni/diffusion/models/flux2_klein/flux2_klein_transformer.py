@@ -40,6 +40,7 @@ from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.layer import Attention
 from vllm_omni.diffusion.layers.rope import RotaryEmbedding
+from vllm_omni.diffusion.utils.quant_utils import get_diffusion_quant_config
 
 
 class Flux2SwiGLU(nn.Module):
@@ -73,6 +74,7 @@ class Flux2FeedForward(nn.Module):
             [inner_dim, inner_dim],
             bias=bias,
             return_bias=False,
+            quant_config=get_diffusion_quant_config(),
         )
         self.act_fn = Flux2SwiGLU()
         self.linear_out = RowParallelLinear(
@@ -81,6 +83,7 @@ class Flux2FeedForward(nn.Module):
             bias=bias,
             input_is_parallel=True,
             return_bias=False,
+            quant_config=get_diffusion_quant_config(),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -118,6 +121,7 @@ class Flux2Attention(nn.Module):
             head_size=self.head_dim,
             total_num_heads=self.heads,
             bias=bias,
+            quant_config=get_diffusion_quant_config(),
         )
         self.query_num_heads = self.to_qkv.num_heads
         self.kv_num_heads = self.to_qkv.num_kv_heads
@@ -133,6 +137,7 @@ class Flux2Attention(nn.Module):
                     bias=out_bias,
                     input_is_parallel=True,
                     return_bias=False,
+                    quant_config=get_diffusion_quant_config(),
                 ),
                 nn.Dropout(dropout),
             ]
@@ -146,6 +151,7 @@ class Flux2Attention(nn.Module):
                 head_size=self.head_dim,
                 total_num_heads=self.heads,
                 bias=added_proj_bias,
+                quant_config=get_diffusion_quant_config(),
             )
             self.add_query_num_heads = self.add_kv_proj.num_heads
             self.add_kv_num_heads = self.add_kv_proj.num_kv_heads
@@ -155,6 +161,7 @@ class Flux2Attention(nn.Module):
                 bias=out_bias,
                 input_is_parallel=True,
                 return_bias=False,
+                quant_config=get_diffusion_quant_config(),
             )
 
         self.rope = RotaryEmbedding(is_neox_style=False)
@@ -269,6 +276,7 @@ class Flux2ParallelSelfAttention(nn.Module):
             self.inner_dim * 3 + self.mlp_hidden_dim * self.mlp_mult_factor,
             bias=bias,
             gather_output=True,
+            quant_config=get_diffusion_quant_config(),
         )
         self.mlp_act_fn = Flux2SwiGLU()
 
@@ -280,6 +288,7 @@ class Flux2ParallelSelfAttention(nn.Module):
             self.out_dim,
             bias=out_bias,
             gather_output=True,
+            quant_config=get_diffusion_quant_config(),
         )
         self.rope = RotaryEmbedding(is_neox_style=False)
         self.attn = Attention(

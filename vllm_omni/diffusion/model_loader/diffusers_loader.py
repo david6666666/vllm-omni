@@ -7,21 +7,25 @@ import time
 from collections.abc import Generator, Iterable
 from pathlib import Path
 from typing import cast
-
 import torch
 from torch import nn
 from vllm.config import ModelConfig
 from vllm.config.load import LoadConfig
 from vllm.logger import init_logger
+from vllm.model_executor.model_loader.utils import process_weights_after_loading
 from vllm.model_executor.model_loader.weight_utils import (
     download_safetensors_index_file_from_hf,
+    download_gguf,
     download_weights_from_hf,
     filter_duplicate_safetensors_files,
     filter_files_not_needed_for_inference,
+    gguf,
     maybe_download_from_modelscope,
     safetensors_weights_iterator,
+    gguf_quant_weights_iterator,
 )
 from vllm.utils.torch_utils import set_default_torch_dtype
+from huggingface_hub import hf_hub_download
 
 from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.registry import initialize_model
@@ -100,6 +104,12 @@ class DiffusersPipelineLoader:
         if load_format == "auto":
             load_format = "hf"
 
+        if load_format == "gguf":
+            return self._prepare_gguf_file(
+                model_name_or_path,
+                revision=revision,
+            )
+
         # Some quantized models use .pt files for storing the weights.
         if load_format == "hf":
             allow_patterns = ["*.safetensors", "*.bin"]
@@ -167,8 +177,41 @@ class DiffusersPipelineLoader:
 
         return hf_folder, hf_weights_files, use_safetensors
 
+    def _prepare_gguf_file(
+        self,
+        model_name_or_path: Path,
+        revision: str | None,
+    ) -> tuple[str, list[str], bool]:
+        model_name_or_path = str(model_name_or_path)
+        if os.path.isfile(model_name_or_path):
+            return model_name_or_path, [model_name_or_path], False
+        if model_name_or_path.startswith(("http://", "https://")) and model_name_or_path.endswith(".gguf"):
+            local_path = hf_hub_download(url=model_name_or_path)
+            return local_path, [local_path], False
+        if "/" in model_name_or_path and model_name_or_path.endswith(".gguf"):
+            repo_id, filename = model_name_or_path.rsplit("/", 1)
+            local_path = hf_hub_download(repo_id=repo_id, filename=filename, revision=revision)
+            return local_path, [local_path], False
+        if "/" in model_name_or_path and ":" in model_name_or_path:
+            repo_id, quant_type = model_name_or_path.rsplit(":", 1)
+            local_path = download_gguf(
+                repo_id,
+                quant_type,
+                cache_dir=self.load_config.download_dir,
+                revision=revision,
+                ignore_patterns=self.load_config.ignore_patterns,
+            )
+            return local_path, [local_path], False
+        raise ValueError(
+            f"Unrecognized GGUF reference: {model_name_or_path} "
+            "(expected local file, raw URL, <repo_id>/<filename>.gguf, "
+            "or <repo_id>:<quant_type>)"
+        )
+
     def _get_weights_iterator(self, source: "ComponentSource") -> Generator[tuple[str, torch.Tensor], None, None]:
         """Get an iterator for the model weights based on the load format."""
+        if self.load_config.load_format == "gguf":
+            raise RuntimeError("GGUF weights should be loaded via load_weights() path.")
         hf_folder, hf_weights_files, use_safetensors = self._prepare_weights(
             source.model_or_path,
             source.subfolder,
@@ -217,11 +260,50 @@ class DiffusersPipelineLoader:
             logger.debug("Loading weights on %s ...", load_device)
             # Quantization does not happen in `load_weights` but after it
             self.load_weights(model)
+            model_config_like = type("ModelConfigLike", (), {})()
+            model_config_like.dtype = od_config.dtype
+            model_config_like.quantization = od_config.quantization
+            process_weights_after_loading(model, model_config_like, target_device)
         return model.eval()
 
     def load_weights(self, model: nn.Module) -> None:
-        weights_to_load = {name for name, _ in model.named_parameters()}
-        loaded_weights = model.load_weights(self.get_all_weights(model))
+        if self.load_config.load_format == "gguf":
+            sources = cast(
+                Iterable[DiffusersPipelineLoader.ComponentSource],
+                getattr(model, "weights_sources", ()),
+            )
+            sources = list(sources)
+            if len(sources) != 1:
+                raise ValueError("GGUF loading currently supports a single ComponentSource.")
+            source = sources[0]
+            if self.counter_before_loading_weights == 0.0:
+                self.counter_before_loading_weights = time.perf_counter()
+            gguf_file, _, _ = self._prepare_gguf_file(Path(source.model_or_path), source.revision)
+
+            model_params = set(model.state_dict().keys())
+            prefix = source.prefix or ""
+            gguf_to_hf_name_map: dict[str, str] = {}
+            reader = gguf.GGUFReader(gguf_file)
+            for tensor in reader.tensors:
+                gguf_name = tensor.name
+                if gguf_name in model_params:
+                    gguf_to_hf_name_map[gguf_name] = gguf_name
+                elif prefix and f"{prefix}{gguf_name}" in model_params:
+                    gguf_to_hf_name_map[gguf_name] = f"{prefix}{gguf_name}"
+
+            if not gguf_to_hf_name_map:
+                raise ValueError(
+                    "No GGUF tensor names matched model parameters. "
+                    "Ensure GGUF tensor names align with model state_dict (optionally with the prefix)."
+                )
+
+            weights_to_load = {name for name, _ in model.named_parameters()}
+            loaded_weights = model.load_weights(
+                gguf_quant_weights_iterator(gguf_file, gguf_to_hf_name_map)
+            )
+        else:
+            weights_to_load = {name for name, _ in model.named_parameters()}
+            loaded_weights = model.load_weights(self.get_all_weights(model))
 
         self.counter_after_loading_weights = time.perf_counter()
         logger.info_once(

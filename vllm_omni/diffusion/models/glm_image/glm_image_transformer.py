@@ -18,6 +18,7 @@ from vllm_omni.diffusion.attention.layer import Attention
 from vllm_omni.diffusion.cache.base import CachedTransformer
 from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.layers.rope import RotaryEmbedding
+from vllm_omni.diffusion.utils.quant_utils import get_diffusion_quant_config
 
 logger = init_logger(__name__)
 
@@ -342,6 +343,7 @@ class GlmImageAttention(nn.Module):
             total_num_heads=num_heads,
             disable_tp=True,
             bias=True,
+            quant_config=get_diffusion_quant_config(),
         )
 
         # QK normalization (LayerNorm, not RMSNorm for GLM-Image)

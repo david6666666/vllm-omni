@@ -29,6 +29,10 @@ from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineL
 from vllm_omni.diffusion.offload import apply_offload_hooks
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.distributed.omni_connectors.kv_transfer_manager import OmniKVTransferManager
+from vllm_omni.model_executor.model_loader.quant_utils import (
+    infer_diffusion_quantization_method,
+    resolve_diffusion_quant_config,
+)
 from vllm_omni.platforms import current_omni_platform
 
 logger = init_logger(__name__)
@@ -89,6 +93,35 @@ class DiffusionModelRunner:
         # Load model within forward context
         with set_forward_context(vllm_config=self.vllm_config, omni_diffusion_config=self.od_config):
             load_config = LoadConfig()
+            requested_quantization = self.od_config.quantization
+            resolved_quantization = infer_diffusion_quantization_method(
+                quantization=self.od_config.quantization,
+                quantization_config_file=self.od_config.quantization_config_file,
+                quantization_config_dict_json=self.od_config.quantization_config_dict_json,
+                model=self.od_config.model,
+            )
+            if requested_quantization is None and resolved_quantization is not None:
+                logger.info(
+                    "Auto-detected diffusion quantization method '%s' from model config.",
+                    resolved_quantization,
+                )
+            self.od_config.quantization = resolved_quantization
+
+            load_format = self.od_config.load_format or "auto"
+            if resolved_quantization == "gguf" and load_format == "auto":
+                load_format = "gguf"
+            load_config.load_format = load_format
+
+            quant_config = resolve_diffusion_quant_config(
+                quantization=resolved_quantization,
+                quantization_config_file=self.od_config.quantization_config_file,
+                quantization_config_dict_json=self.od_config.quantization_config_dict_json,
+                model=self.od_config.model,
+                load_format=load_format,
+            )
+            self.od_config.quant_config = quant_config
+            self.vllm_config.quant_config = quant_config
+
             model_loader = DiffusersPipelineLoader(load_config)
             time_before_load = time.perf_counter()
 

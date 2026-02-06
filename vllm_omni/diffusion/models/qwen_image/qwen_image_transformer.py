@@ -36,6 +36,7 @@ from vllm_omni.diffusion.distributed.sp_plan import (
 from vllm_omni.diffusion.forward_context import get_forward_context
 from vllm_omni.diffusion.layers.adalayernorm import AdaLayerNorm
 from vllm_omni.diffusion.layers.rope import RotaryEmbedding
+from vllm_omni.diffusion.utils.quant_utils import get_diffusion_quant_config
 
 logger = init_logger(__name__)
 
@@ -398,6 +399,7 @@ class ColumnParallelApproxGELU(nn.Module):
             bias=bias,
             gather_output=False,
             return_bias=False,
+            quant_config=get_diffusion_quant_config(),
         )
         self.approximate = approximate
 
@@ -431,6 +433,7 @@ class FeedForward(nn.Module):
                 dim_out,
                 input_is_parallel=True,
                 return_bias=False,
+                quant_config=get_diffusion_quant_config(),
             ),
         ]
 
@@ -471,6 +474,7 @@ class QwenImageCrossAttention(nn.Module):
             hidden_size=dim,
             head_size=self.head_dim,
             total_num_heads=num_heads,
+            quant_config=get_diffusion_quant_config(),
         )
         self.query_num_heads = self.to_qkv.num_heads
         self.kv_num_heads = self.to_qkv.num_kv_heads
@@ -485,6 +489,7 @@ class QwenImageCrossAttention(nn.Module):
             hidden_size=added_kv_proj_dim,
             head_size=head_dim,
             total_num_heads=num_heads,
+            quant_config=get_diffusion_quant_config(),
         )
         self.add_query_num_heads = self.add_kv_proj.num_heads
         self.add_kv_num_heads = self.add_kv_proj.num_kv_heads
@@ -496,6 +501,7 @@ class QwenImageCrossAttention(nn.Module):
             bias=out_bias,
             input_is_parallel=True,
             return_bias=False,
+            quant_config=get_diffusion_quant_config(),
         )
 
         assert not pre_only
@@ -505,6 +511,7 @@ class QwenImageCrossAttention(nn.Module):
             bias=out_bias,
             input_is_parallel=True,
             return_bias=False,
+            quant_config=get_diffusion_quant_config(),
         )
 
         self.norm_added_q = RMSNorm(head_dim, eps=eps)

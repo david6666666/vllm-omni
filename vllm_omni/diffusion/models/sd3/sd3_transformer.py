@@ -14,6 +14,7 @@ from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
 from vllm_omni.diffusion.attention.layer import Attention
 from vllm_omni.diffusion.data import OmniDiffusionConfig
+from vllm_omni.diffusion.utils.quant_utils import get_diffusion_quant_config
 
 logger = init_logger(__name__)
 
@@ -78,6 +79,7 @@ class SD3CrossAttention(nn.Module):
             head_size=self.head_dim,
             total_num_heads=num_heads,
             disable_tp=True,
+            quant_config=get_diffusion_quant_config(),
         )
         self.norm_q = RMSNorm(head_dim, eps=eps) if qk_norm else nn.Identity()
         self.norm_k = RMSNorm(head_dim, eps=eps) if qk_norm else nn.Identity()
@@ -89,16 +91,29 @@ class SD3CrossAttention(nn.Module):
                 head_size=self.inner_kv_dim // self.num_heads,
                 total_num_heads=self.num_heads,
                 disable_tp=True,
+                quant_config=get_diffusion_quant_config(),
             )
 
         if not context_pre_only:
-            self.to_add_out = ReplicatedLinear(self.inner_dim, self.dim, bias=out_bias)
+            self.to_add_out = ReplicatedLinear(
+                self.inner_dim,
+                self.dim,
+                bias=out_bias,
+                quant_config=get_diffusion_quant_config(),
+            )
         else:
             self.to_add_out = None
 
         if not pre_only:
             self.to_out = nn.ModuleList([])
-            self.to_out.append(ReplicatedLinear(self.inner_dim, self.dim, bias=out_bias))
+            self.to_out.append(
+                ReplicatedLinear(
+                    self.inner_dim,
+                    self.dim,
+                    bias=out_bias,
+                    quant_config=get_diffusion_quant_config(),
+                )
+            )
         else:
             self.to_out = None
 
