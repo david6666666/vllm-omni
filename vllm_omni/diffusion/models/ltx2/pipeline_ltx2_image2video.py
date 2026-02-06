@@ -105,6 +105,16 @@ class LTX2ImageToVideoPipeline(LTX2Pipeline):
         if image is None:
             raise ValueError("`image` must be provided when `latents` is None.")
 
+        image_batch_size = image.shape[0]
+        if image_batch_size == 0:
+            raise ValueError("`image` batch is empty.")
+        if batch_size % image_batch_size != 0:
+            raise ValueError(
+                f"`batch_size` ({batch_size}) must be divisible by image batch size ({image_batch_size}) "
+                "for image-to-video outputs."
+            )
+        num_videos_per_prompt = batch_size // image_batch_size
+
         if isinstance(generator, list):
             if len(generator) != batch_size:
                 raise ValueError(
@@ -112,9 +122,10 @@ class LTX2ImageToVideoPipeline(LTX2Pipeline):
                     f" batch size of {batch_size}. Make sure the batch size matches the length of the generators."
                 )
 
+            image_generators = [generator[i * num_videos_per_prompt] for i in range(image_batch_size)]
             init_latents = [
-                retrieve_latents(self.vae.encode(image[i].unsqueeze(0).unsqueeze(2)), generator[i], "argmax")
-                for i in range(batch_size)
+                retrieve_latents(self.vae.encode(image[i].unsqueeze(0).unsqueeze(2)), image_generators[i], "argmax")
+                for i in range(image_batch_size)
             ]
         else:
             init_latents = [
@@ -122,6 +133,8 @@ class LTX2ImageToVideoPipeline(LTX2Pipeline):
             ]
 
         init_latents = torch.cat(init_latents, dim=0).to(dtype)
+        if num_videos_per_prompt > 1:
+            init_latents = init_latents.repeat_interleave(num_videos_per_prompt, dim=0)
         init_latents = self._normalize_latents(init_latents, self.vae.latents_mean, self.vae.latents_std)
         init_latents = init_latents.repeat(1, 1, num_frames, 1, 1)
 
