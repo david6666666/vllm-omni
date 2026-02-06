@@ -196,9 +196,11 @@ class LTX2FeedForward(nn.Module):
         inner_dim = inner_dim or int(dim * mult)
         dim_out = dim_out or dim
 
+        dropout_layer: nn.Module = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+
         layers: list[nn.Module] = [
             ColumnParallelApproxGELU(dim, inner_dim, approximate="tanh", bias=bias),
-            nn.Dropout(dropout),
+            dropout_layer,
             RowParallelLinear(
                 inner_dim,
                 dim_out,
@@ -207,7 +209,7 @@ class LTX2FeedForward(nn.Module):
             ),
         ]
         if final_dropout:
-            layers.append(nn.Dropout(dropout))
+            layers.append(nn.Dropout(dropout) if dropout > 0 else nn.Identity())
 
         self.net = nn.ModuleList(layers)
 
@@ -304,6 +306,103 @@ class LTX2AudioVideoAttnProcessor:
             attention_mask = attention_mask.to(torch.bool)
         return attention_mask
 
+    @staticmethod
+    def _is_sp_enabled() -> bool:
+        if not is_forward_context_available():
+            return False
+        try:
+            od_config = get_forward_context().omni_diffusion_config
+            parallel_config = getattr(od_config, "parallel_config", None) if od_config is not None else None
+            return getattr(parallel_config, "sequence_parallel_size", 1) > 1
+        except Exception:
+            return False
+
+    def _prepare_attention_mask(
+        self,
+        attn: "LTX2Attention",
+        hidden_states: torch.Tensor,
+        encoder_hidden_states: torch.Tensor | None,
+        attention_mask: torch.Tensor | None,
+        batch_size: int,
+        sequence_length: int,
+    ) -> torch.Tensor | None:
+        if attention_mask is None:
+            return None
+
+        if self._is_sp_enabled():
+            # In SP, Ulysses expects a 2D padding mask that matches query length.
+            # For cross-attention, encoder sequence length != query length, so drop the mask.
+            if encoder_hidden_states is not None and encoder_hidden_states.shape[1] != hidden_states.shape[1]:
+                return None
+            return self._to_padding_mask(attention_mask)
+
+        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+        attention_mask = attention_mask.view(batch_size, attn.heads, -1, attention_mask.shape[-1])
+        if attn.attn.attn_backend.get_name().upper() == "FLASH_ATTN":
+            attention_mask = self._to_padding_mask(attention_mask)
+        return attention_mask
+
+    @staticmethod
+    def _project_qkv(
+        attn: "LTX2Attention",
+        hidden_states: torch.Tensor,
+        encoder_hidden_states: torch.Tensor | None,
+        is_self_attention: bool,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if is_self_attention and attn.to_qkv is not None:
+            qkv, _ = attn.to_qkv(hidden_states)
+            q_heads = getattr(attn, "query_num_heads", attn.heads)
+            kv_heads = getattr(attn, "kv_num_heads", attn.heads)
+            q_size = q_heads * attn.head_dim
+            kv_size = kv_heads * attn.head_dim
+            query, key, value = qkv.split([q_size, kv_size, kv_size], dim=-1)
+            return query, key, value
+
+        query = attn.to_q(hidden_states)
+        if isinstance(query, tuple):
+            query = query[0]
+        if encoder_hidden_states is None:
+            raise ValueError("encoder_hidden_states is required for cross-attention projection.")
+        key = attn.to_k(encoder_hidden_states)
+        if isinstance(key, tuple):
+            key = key[0]
+        value = attn.to_v(encoder_hidden_states)
+        if isinstance(value, tuple):
+            value = value[0]
+        return query, key, value
+
+    @staticmethod
+    def _slice_rope_for_tp(
+        rope: tuple[torch.Tensor, torch.Tensor] | None,
+        attn_module: "LTX2Attention",
+    ) -> tuple[torch.Tensor, torch.Tensor] | None:
+        if rope is None:
+            return None
+        cos, sin = rope
+        tp_size = get_tensor_model_parallel_world_size()
+        if tp_size <= 1:
+            return rope
+        tp_rank = get_tensor_model_parallel_rank()
+
+        if cos.ndim == 4:
+            if cos.shape[1] != attn_module.heads:
+                local_heads = cos.shape[1] // tp_size
+                if local_heads == attn_module.heads:
+                    start = tp_rank * local_heads
+                    end = start + local_heads
+                    cos = cos[:, start:end, :, :]
+                    sin = sin[:, start:end, :, :]
+        elif cos.ndim == 3:
+            local_dim = attn_module.heads * attn_module.head_dim
+            if cos.shape[-1] != local_dim:
+                if cos.shape[-1] == local_dim * tp_size:
+                    start = tp_rank * local_dim
+                    end = start + local_dim
+                    cos = cos[..., start:end]
+                    sin = sin[..., start:end]
+
+        return cos, sin
+
     def __call__(
         self,
         attn: "LTX2Attention",
@@ -316,88 +415,32 @@ class LTX2AudioVideoAttnProcessor:
         is_self_attention = encoder_hidden_states is None
         batch_size, sequence_length, _ = hidden_states.shape if is_self_attention else encoder_hidden_states.shape
 
-        if attention_mask is not None:
-            sp_enabled = False
-            if is_forward_context_available():
-                try:
-                    od_config = get_forward_context().omni_diffusion_config
-                    parallel_config = getattr(od_config, "parallel_config", None) if od_config is not None else None
-                    sp_enabled = getattr(parallel_config, "sequence_parallel_size", 1) > 1
-                except Exception:
-                    sp_enabled = False
-
-            if sp_enabled:
-                # In SP, Ulysses expects a 2D padding mask that matches query length.
-                # For cross-attention, encoder sequence length != query length, so drop the mask.
-                if encoder_hidden_states is not None and encoder_hidden_states.shape[1] != hidden_states.shape[1]:
-                    attention_mask = None
-                else:
-                    attention_mask = self._to_padding_mask(attention_mask)
-            else:
-                attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
-                attention_mask = attention_mask.view(batch_size, attn.heads, -1, attention_mask.shape[-1])
-                if attn.attn.attn_backend.get_name().upper() == "FLASH_ATTN":
-                    attention_mask = self._to_padding_mask(attention_mask)
+        attention_mask = self._prepare_attention_mask(
+            attn=attn,
+            hidden_states=hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            attention_mask=attention_mask,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+        )
 
         if is_self_attention:
             encoder_hidden_states = hidden_states
 
-        if is_self_attention and attn.to_qkv is not None:
-            qkv, _ = attn.to_qkv(hidden_states)
-            q_heads = getattr(attn, "query_num_heads", attn.heads)
-            kv_heads = getattr(attn, "kv_num_heads", attn.heads)
-            q_size = q_heads * attn.head_dim
-            kv_size = kv_heads * attn.head_dim
-            query, key, value = qkv.split([q_size, kv_size, kv_size], dim=-1)
-        else:
-            query = attn.to_q(hidden_states)
-            if isinstance(query, tuple):
-                query = query[0]
-            key = attn.to_k(encoder_hidden_states)
-            if isinstance(key, tuple):
-                key = key[0]
-            value = attn.to_v(encoder_hidden_states)
-            if isinstance(value, tuple):
-                value = value[0]
+        query, key, value = self._project_qkv(
+            attn=attn,
+            hidden_states=hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            is_self_attention=is_self_attention,
+        )
 
         query = attn.norm_q(query)
         key = attn.norm_k(key)
 
-        def _slice_rope_for_tp(
-            rope: tuple[torch.Tensor, torch.Tensor] | None,
-            attn_module: "LTX2Attention",
-        ) -> tuple[torch.Tensor, torch.Tensor] | None:
-            if rope is None:
-                return None
-            cos, sin = rope
-            tp_size = get_tensor_model_parallel_world_size()
-            if tp_size <= 1:
-                return rope
-            tp_rank = get_tensor_model_parallel_rank()
-
-            if cos.ndim == 4:
-                if cos.shape[1] != attn_module.heads:
-                    local_heads = cos.shape[1] // tp_size
-                    if local_heads == attn_module.heads:
-                        start = tp_rank * local_heads
-                        end = start + local_heads
-                        cos = cos[:, start:end, :, :]
-                        sin = sin[:, start:end, :, :]
-            elif cos.ndim == 3:
-                local_dim = attn_module.heads * attn_module.head_dim
-                if cos.shape[-1] != local_dim:
-                    if cos.shape[-1] == local_dim * tp_size:
-                        start = tp_rank * local_dim
-                        end = start + local_dim
-                        cos = cos[..., start:end]
-                        sin = sin[..., start:end]
-
-            return cos, sin
-
         if query_rotary_emb is not None:
-            query_rotary_emb = _slice_rope_for_tp(query_rotary_emb, attn)
+            query_rotary_emb = self._slice_rope_for_tp(query_rotary_emb, attn)
             if key_rotary_emb is not None:
-                key_rotary_emb = _slice_rope_for_tp(key_rotary_emb, attn)
+                key_rotary_emb = self._slice_rope_for_tp(key_rotary_emb, attn)
             if attn.rope_type == "interleaved":
                 query = apply_interleaved_rotary_emb(query, query_rotary_emb)
                 key = apply_interleaved_rotary_emb(
@@ -530,7 +573,7 @@ class LTX2Attention(torch.nn.Module, AttentionModuleMixin):
                     input_is_parallel=True,
                     return_bias=False,
                 ),
-                torch.nn.Dropout(dropout),
+                torch.nn.Dropout(dropout) if dropout > 0 else torch.nn.Identity(),
             ]
         )
         self.attn = Attention(
