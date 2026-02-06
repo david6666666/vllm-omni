@@ -1,175 +1,208 @@
-# Diffusion Quantization (FP8 + GGUF)
-Date: 2026-02-06
-Status: Design
+# vLLM-Omni Diffusion Quantization Feature Design Doc
 
-## Summary
-This document defines quantization support for diffusion models in vLLM-Omni,
-limited to FP8 and GGUF. It also standardizes quantization inputs and behavior
-across Omni (AR) and Diffusion stages.
+# 1 Overview
+Enable diffusion models in vLLM-Omni to support FP8 (native checkpoint + online fallback) and GGUF with unified stage-level configuration and consistent runtime behavior.
 
-## Goals
-- Support FP8 and GGUF for diffusion models.
-- Keep quantization inputs and behavior consistent across Omni and Stage.
-- FP8 supports both native FP8 checkpoints and online quantization fallback.
-- GGUF supports load_format=gguf.
-- Default diffusion scope is transformer-only.
+## 1.1 Motivation
+Before this feature, diffusion quantization support was incomplete and not aligned with how users publish diffusion checkpoints in the ecosystem. In practice, users frequently need:
+- Native FP8 checkpoint loading (for example: `unsloth/Qwen-Image-2512-FP8`)
+- GGUF checkpoint loading (for example: `unsloth/Qwen-Image-2512-GGUF:<quant_type>`)
 
-## Non-Goals
-- No AWQ/GPTQ/bitsandbytes/INT8 in this phase.
-- No quantization for diffusion text encoders or VAE.
-- No new quantization algorithms.
+Two gaps existed:
+- Diffusion path lacked a complete native FP8 auto-detection flow from model `quantization_config`.
+- Diffusion path lacked a complete GGUF loading flow (reference parsing, tensor mapping, and post-load handling).
 
-## Unified Quantization Inputs
-All stages (Omni/AR and Diffusion) accept the same set of inputs:
-- quantization: "fp8" | "gguf" | "auto" | None
-- quantization_config_file: str | None
-- quantization_config_dict_json: str | None
-- quantization_scope: str = "transformer_only"
-- load_format: str = "auto"
+This feature closes those gaps and aligns diffusion behavior with Omni stage-level quantization semantics.
 
-Entry points:
-- Stage config: engine_args.*
-- Python API: OmniLLM(...) / OmniDiffusion(...)
+## 1.2 Target
+### Feature
+In scope:
+- Diffusion quantization methods: `fp8`, `gguf`.
+- Native FP8 auto-detection from model config when `quantization` is unset/`auto`.
+- FP8 online fallback when user requests FP8 but no FP8 serialized config is present.
+- GGUF loading with enforced `load_format=gguf`.
+- Unified diffusion quantization inputs in `OmniDiffusionConfig`.
+- Quantization config propagation into diffusion transformer linear layers.
 
-## Consistency Rules
-| Input | Omni (AR) | Diffusion |
-|---|---|---|
-| quantization=None + no quant config | no quant | no quant |
-| quantization=None + fp8 quant config | auto-detect fp8 | auto-detect fp8 |
-| quantization="fp8" | fp8 (native or online fallback) | fp8 (native or online fallback) |
-| quantization="gguf" | gguf loader | gguf loader |
-| quantization="gguf" + load_format!=gguf | error | error |
+Out of scope:
+- AWQ/GPTQ/bitsandbytes/INT8 for diffusion.
+- Quantizing non-transformer diffusion modules (text encoders, VAE) in this phase.
+- New quantization kernels or algorithm changes.
 
-## Architecture Changes
-### 1) Unified Quantization Resolver
-Add a small utility to resolve quantization settings consistently:
+### Accuracy
+Correctness criteria:
+- Native FP8 checkpoint path must preserve checkpoint quantization semantics (`Fp8Config.from_config`).
+- FP8 online fallback must only happen when explicit FP8 is requested and no serialized FP8 config exists.
+- GGUF path must fail fast for invalid format coupling (`quantization=gguf` with non-gguf `load_format`).
+- GGUF tensor names must map to model parameter names (or prefixed names), otherwise fail with clear error.
+- Existing non-quantized diffusion loading behavior must remain unchanged when no quantization is requested/detected.
 
-Path (new):
-- vllm_omni/model_executor/model_loader/quant_utils.py
+### Performance
+Expected behavior and trade-offs:
+- Native FP8: lower memory footprint than BF16/FP16 checkpoints with limited post-load cost.
+- FP8 online fallback: additional peak memory and load-time overhead (high-precision load + quantize after loading).
+- GGUF: reduced memory footprint; compatibility and speed depend on model tensor naming/layout and backend support.
 
-Behavior:
-- fp8: resolve to Fp8Config (from config file/json or HF config).
-- gguf: validate load_format=gguf, return GGUFConfig.
-- auto-detect: when quantization is None or "auto", inspect
-  `quantization_config` from model config and infer fp8 if available.
+Performance constraints:
+- No regression to non-quantized load path.
+- Quantized path must keep load-time observability (`Loading weights took ... seconds`).
 
-### 2) Diffusion Loader
-File:
-- vllm_omni/diffusion/model_loader/diffusers_loader.py
+# 2 Design
+## 2.1 Overview of Design
+Design principles:
+- Single resolver for diffusion quantization method + quant config materialization.
+- Keep runtime behavior explicit: detect -> validate -> load -> post-process.
+- Inject quant config at model-construction boundary (linear layers) via forward context.
 
-Changes:
-- Add GGUF loading branch when load_format=="gguf".
-- After load_weights, call process_weights_after_loading for FP8 online quant.
+High-level data/control flow:
+1. User provides `engine_args` / `OmniDiffusion` kwargs.
+2. `OmniDiffusionConfig` carries quantization fields.
+3. `DiffusionModelRunner` resolves quantization method and quant config.
+4. `DiffusersPipelineLoader` chooses load path (`hf` or `gguf`) and loads weights.
+5. `process_weights_after_loading` finalizes quantized modules.
+6. During model construction, transformer linear layers consume `od_config.quant_config`.
 
-### 3) Diffusion Transformer Construction
-Files:
-- vllm_omni/diffusion/models/*/*transformer*.py
-
-Changes:
-- Pass quant_config to vLLM linear layers:
-  - ColumnParallelLinear
-  - RowParallelLinear
-  - QKVParallelLinear
-- Provide correct prefix names for quant skip logic.
-
-### 4) Forward Context
-Use set_current_vllm_config during diffusion model init and forward
-to enable vLLM CustomOp dispatch with quant_config.
-
-## FP8 Flow (Diffusion)
-### Native FP8 checkpoint (preferred)
-1) quantization is None/"auto" or "fp8".
-2) Resolver reads `quantization_config` from config file/json or HF config.
-3) Build diffusion transformer with quant_config injected.
-4) load_weights loads FP8-serialized weights and scales.
-5) process_weights_after_loading runs post-processing/repacking only.
-
-### Online FP8 fallback
-1) quantization="fp8" and no FP8 quantization_config exists.
-2) Resolver returns default Fp8Config (non-serialized checkpoint).
-3) load_weights loads high precision weights.
-4) process_weights_after_loading triggers online FP8 conversion.
-
-Notes:
-- Requires device capability support for FP8 to gain speedup.
-- Online fallback needs enough memory to load FP16/BF16 weights first.
-
-## GGUF Flow (Diffusion)
-1) Resolve quantization="gguf" and enforce load_format="gguf".
-2) Loader uses gguf download + gguf iterator.
-3) GGUFConfig is used to enable gguf-aware weight handling.
-
-Notes:
-- GGUF is a model weight format, not a quantization algorithm.
-- Works as weight-only quantization in practice.
-
-### GGUF Variant Selection (e.g., Q8_0 vs Q4_K_M)
-- `Q8_0`: 8-bit quantization; usually best quality, larger model size, higher memory use.
-- `Q4_K_M`: 4-bit K-quant mixed variant; smaller model size and memory footprint, larger quality loss than Q8_0.
-- Name hints:
-  - `Q4` / `Q8`: approximate bit width level.
-  - `_K`: K-quant family.
-  - `_M`: mixed/medium variant, typically keeps key tensors at relatively higher precision.
-- Practical guidance:
-  - Prefer `Q8_0` when memory allows and quality is priority.
-  - Use `Q4_K_M` when memory is tight and some quality drop is acceptable.
-
-## Testing Plan
-Unit:
-- quantization=None + fp8 quantization_config -> auto-detect fp8.
-- quantization="fp8" ensures quant_method exists on linear layers.
-- quantization="gguf" ensures gguf loader path is chosen.
-
-Integration:
-- Run a small diffusion pipeline (or mock weights) to ensure:
-  - load succeeds
-  - native FP8 and online FP8 fallback both work
-
-## Risks and Mitigations
-- FP8 online quant may increase peak memory.
-  - Mitigation: document requirement, allow CPU offload.
-- GGUF compatibility depends on model structure and GGUF file layout.
-  - Mitigation: clear error messages and validation.
-- Incorrect prefixes may skip quantization or mis-apply it.
-  - Mitigation: consistent prefix construction and tests.
-
-## Open Questions
-- Future: allow quantization_scope to include text encoders or VAE?
-- Should GGUF be allowed for non-diffuser pipelines beyond current set?
-
-## Example Commands
-Offline inference (native FP8 checkpoint):
-```bash
-python examples/offline_inference/text_to_image/text_to_image.py \
-  --model unsloth/Qwen-Image-2512-FP8 \
-  --prompt "cinematic photo of an arctic fox under aurora" \
-  --height 1328 \
-  --width 1328 \
-  --num_inference_steps 30 \
-  --output outputs/qwen_image_fp8.png
+Conceptual diagram:
+```text
+User/Stage Args
+    -> OmniDiffusionConfig(quantization, load_format, quantization_config_*)
+        -> DiffusionModelRunner.load_model()
+            -> infer_diffusion_quantization_method()
+            -> resolve_diffusion_quant_config()
+            -> DiffusersPipelineLoader(load_format)
+                -> HF safetensors iterator  OR  GGUF iterator
+            -> process_weights_after_loading()
+            -> Ready pipeline
 ```
 
-Offline inference (GGUF checkpoint):
-```bash
-python examples/offline_inference/text_to_image/text_to_image.py \
-  --model "unsloth/Qwen-Image-2512-GGUF:Q8_0" \
-  --quantization gguf \
-  --load_format gguf \
-  --prompt "a watercolor painting of tokyo in the rain" \
-  --height 1024 \
-  --width 1024 \
-  --num_inference_steps 28 \
-  --output outputs/qwen_image_gguf.png
-```
+Rationale:
+- Native FP8 detection is based on authoritative model metadata (`quantization_config`) to avoid accidental online quantization.
+- GGUF path is explicit and validated to reduce ambiguous behavior.
+- Quant config injection via forward context minimizes invasive constructor signature changes across many transformer implementations.
 
-Online serving (native FP8 checkpoint):
-```bash
-vllm serve unsloth/Qwen-Image-2512-FP8 --omni --port 8091
-```
+## 2.2 Use Cases
+1. Native FP8 checkpoint serving (primary)
+- Scenario: user serves `unsloth/Qwen-Image-2512-FP8`.
+- Config: no explicit `--quantization` required.
+- Benefit: auto-detect FP8 serialized checkpoint and run native FP8 path directly.
 
-Online serving (GGUF checkpoint):
-```bash
-vllm serve "unsloth/Qwen-Image-2512-GGUF:Q8_0" --omni --port 8091 \
-  --quantization gguf \
-  --load-format gguf
-```
+2. Memory-constrained GGUF deployment (secondary)
+- Scenario: user serves GGUF variant in low-memory environment.
+- Config: `--quantization gguf --load-format gguf`, model reference as `<repo_id>:<quant_type>` or `<repo_id>/<file>.gguf`.
+- Benefit: lower memory footprint with explicit and validated GGUF loading behavior.
+
+## 2.3 API Design
+### Current Component Changes
+`vllm_omni/diffusion/data.py`
+- Change: add quantization-related fields in `OmniDiffusionConfig`:
+  - `quantization`, `quantization_config_file`, `quantization_config_dict_json`,
+    `quantization_scope`, `load_format`, `quant_config`.
+- Why: unify stage config inputs and runtime state carrier.
+- Impact: diffusion stages can accept and propagate quantization intent consistently.
+
+`vllm_omni/model_executor/model_loader/quant_utils.py`
+- Change: centralized method inference and quant config resolution for diffusion.
+- Why: avoid duplicated logic and make native FP8 auto-detect explicit.
+- Impact: deterministic selection of `None` / `fp8` / `gguf` and corresponding config object.
+
+`vllm_omni/diffusion/worker/diffusion_model_runner.py`
+- Change: resolve quantization method before load, auto-set `load_format` for GGUF, store `quant_config` in both `od_config` and `vllm_config`.
+- Why: runner is the correct boundary between config and concrete loader behavior.
+- Impact: consistent runtime behavior across offline inference and online serving.
+
+`vllm_omni/diffusion/model_loader/diffusers_loader.py`
+- Change: add GGUF load path:
+  - parse GGUF references (local file / URL / `<repo>/<file>.gguf` / `<repo>:<quant_type>`)
+  - iterate GGUF tensors and map to model state dict keys
+  - run `process_weights_after_loading` after weight load
+- Why: diffusion loader previously only handled HF-style weights.
+- Impact: diffusion models can now load GGUF checkpoints with validation and post-processing.
+
+`vllm_omni/diffusion/utils/quant_utils.py` + `vllm_omni/diffusion/models/*_transformer.py`
+- Change: add `get_diffusion_quant_config()` and inject it into vLLM linear layers (`ColumnParallelLinear`, `RowParallelLinear`, `QKVParallelLinear`, `MergedColumnParallelLinear`, `ReplicatedLinear`) in diffusion transformers.
+- Why: quant method attachment happens at layer creation time.
+- Impact: quantization method is applied consistently across supported diffusion transformer variants.
+
+### New APIs
+`vllm_omni.model_executor.model_loader.quant_utils.infer_diffusion_quantization_method(...) -> str | None`
+- Purpose: infer effective quantization method from explicit args and model quantization metadata.
+- Inputs:
+  - `quantization`, `quantization_config_file`, `quantization_config_dict_json`, `model`.
+- Output:
+  - `None`, `"fp8"`, `"gguf"` (or explicit supported method).
+
+`vllm_omni.model_executor.model_loader.quant_utils.resolve_diffusion_quant_config(...) -> object | None`
+- Purpose: materialize runtime quant config object.
+- Outputs:
+  - `Fp8Config` for FP8 path.
+  - `GGUFConfig` for GGUF path.
+  - `None` when quantization is not used.
+
+`vllm_omni.diffusion.utils.quant_utils.get_diffusion_quant_config()`
+- Purpose: access current diffusion quant config via forward context.
+- Output: `od_config.quant_config` or `None`.
+
+`OmniDiffusionConfig` new public fields
+- `quantization`, `quantization_config_file`, `quantization_config_dict_json`,
+  `quantization_scope`, `load_format`, `quant_config`.
+
+## 2.4 API call dependency
+Main call graph (offline/online share this path):
+1. User creates `Omni(...)` / starts `vllm serve ... --omni`.
+2. Stage config fields are collected into `OmniDiffusionConfig` (`_build_od_config` path).
+3. `DiffusionModelRunner.load_model()`:
+   - calls `infer_diffusion_quantization_method(...)`.
+   - applies GGUF coupling rule (`gguf` -> `load_format=gguf` when auto).
+   - calls `resolve_diffusion_quant_config(...)`.
+   - writes `od_config.quant_config` and `vllm_config.quant_config`.
+4. `DiffusersPipelineLoader.load_model()`:
+   - initializes model with diffusion registry.
+   - `load_weights()` chooses HF or GGUF path.
+   - calls `process_weights_after_loading(...)`.
+5. During module construction, diffusion transformer layers call
+   `get_diffusion_quant_config()` and bind quant method.
+
+Error paths:
+- `quantization="gguf"` and `load_format != "gguf"` -> `ValueError`.
+- Unsupported quantization method -> `ValueError`.
+- GGUF reference parse failure -> `ValueError`.
+- GGUF tensor name mapping failure -> `ValueError`.
+
+# 3 Test cases
+## 3.1 Unit Test (UT) design
+Existing UT in this feature:
+- File: `tests/diffusion/test_quant_utils.py`
+1. `test_infer_diffusion_quantization_method_auto_detect_fp8`
+   - Verifies native FP8 is auto-detected from mocked HF quant config.
+2. `test_infer_diffusion_quantization_method_no_quant_config`
+   - Verifies method inference returns `None` when quant config is absent.
+3. `test_resolve_diffusion_quant_config_native_fp8`
+   - Verifies native FP8 path builds `Fp8Config` with serialized checkpoint semantics.
+4. `test_resolve_diffusion_quant_config_online_fp8_fallback`
+   - Verifies explicit `quantization="fp8"` with no metadata falls back to online FP8 config.
+
+Recommended additional UT:
+- GGUF format coupling validation (`gguf` + non-gguf load format should fail).
+- GGUF name mapping fail-fast path in loader.
+
+## 3.2 Smoke Test (ST) design
+1. Offline native FP8 smoke
+- Command:
+  - `python examples/offline_inference/text_to_image/text_to_image.py --model unsloth/Qwen-Image-2512-FP8 ...`
+- Expectation:
+  - model loads successfully;
+  - log indicates auto-detected FP8;
+  - generated image is produced.
+
+2. Online GGUF smoke
+- Command:
+  - `vllm serve "unsloth/Qwen-Image-2512-GGUF:Q8_0" --omni --quantization gguf --load-format gguf ...`
+- Expectation:
+  - server boots without quantization-format mismatch errors;
+  - `/v1/images/generations` returns valid base64 image payload.
+
+3. Negative smoke for validation
+- Command:
+  - `vllm serve "unsloth/Qwen-Image-2512-GGUF:Q8_0" --omni --quantization gguf --load-format hf`
+- Expectation:
+  - fail-fast with clear `GGUF requires load_format='gguf'` error.
