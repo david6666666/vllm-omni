@@ -603,7 +603,7 @@ class LTX2ImageToVideoPipeline(LTX2Pipeline):
                 timestep = t.expand(latent_model_input.shape[0])
                 video_timestep = timestep.unsqueeze(-1) * (1 - conditioning_mask)
 
-                with self.transformer.cache_context("cond_uncond"):
+                with self._transformer_cache_context("cond_uncond"):
                     noise_pred_video, noise_pred_audio = self.transformer(
                         hidden_states=latent_model_input,
                         audio_hidden_states=audio_latent_model_input,

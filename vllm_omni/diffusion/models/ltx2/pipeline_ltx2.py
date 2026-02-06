@@ -8,6 +8,7 @@ import inspect
 import json
 import os
 from collections.abc import Iterable
+from contextlib import nullcontext
 from typing import Any
 
 import numpy as np
@@ -615,8 +616,14 @@ class LTX2Pipeline(nn.Module, CFGParallelMixin):
     def _is_cfg_parallel_enabled(self, do_true_cfg: bool) -> bool:
         return do_true_cfg and get_classifier_free_guidance_world_size() > 1
 
+    def _transformer_cache_context(self, context_name: str):
+        cache_context = getattr(self.transformer, "cache_context", None)
+        if callable(cache_context):
+            return cache_context(context_name)
+        return nullcontext()
+
     def _predict_noise_av(self, **kwargs) -> tuple[torch.Tensor, torch.Tensor]:
-        with self.transformer.cache_context("cond_uncond"):
+        with self._transformer_cache_context("cond_uncond"):
             noise_pred_video, noise_pred_audio = self.transformer(**kwargs)
         return noise_pred_video, noise_pred_audio
 
@@ -1069,7 +1076,7 @@ class LTX2Pipeline(nn.Module, CFGParallelMixin):
 
                 timestep = t.expand(latent_model_input.shape[0])
 
-                with self.transformer.cache_context("cond_uncond"):
+                with self._transformer_cache_context("cond_uncond"):
                     noise_pred_video, noise_pred_audio = self.transformer(
                         hidden_states=latent_model_input,
                         audio_hidden_states=audio_latent_model_input,
