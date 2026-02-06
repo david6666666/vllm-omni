@@ -94,7 +94,9 @@ python text_to_image.py \
 
 ```bash
 python text_to_image.py \
-  --model unsloth/Qwen-Image-2512-FP8 \
+  --model Qwen/Qwen-Image-2512 \
+  --quantized_weights unsloth/Qwen-Image-2512-FP8 \
+  --quantization fp8 \
   --prompt "cinematic photo of an arctic fox under aurora" \
   --height 1328 \
   --width 1328 \
@@ -103,14 +105,17 @@ python text_to_image.py \
 ```
 
 Notes:
-- Keep `--quantization` unset to enable auto-detection from the model's `quantization_config`.
-- You can still force the path with `--quantization fp8`.
+- Native FP8 auto-detection requires `quantization_config` metadata in the source repo
+  (or an explicit quantization config override).
+- For `unsloth/Qwen-Image-2512-FP8` (weights-only repo), use `--quantization fp8`
+  to select FP8 online fallback.
 
 ### GGUF checkpoint example
 
 ```bash
 python text_to_image.py \
-  --model unsloth/Qwen-Image-2512-GGUF:Q8_0 \
+  --model Qwen/Qwen-Image-2512 \
+  --quantized_weights unsloth/Qwen-Image-2512-GGUF:Q8_0 \
   --quantization gguf \
   --load_format gguf \
   --prompt "a watercolor painting of tokyo in the rain" \
@@ -123,6 +128,24 @@ python text_to_image.py \
 Notes:
 - Replace `Q8_0` with the quant type that exists in the GGUF repository.
 - If you already know the exact filename, you can also use `<repo_id>/<filename>.gguf`.
+- Keep `--model` on the base diffusion repo and pass quantized transformer weights through `--quantized_weights`.
+
+### Online serving FP8 example
+
+```bash
+vllm serve Qwen/Qwen-Image-2512 --omni --port 8091 \
+  --quantized-weights unsloth/Qwen-Image-2512-FP8 \
+  --quantization fp8
+```
+
+### Online serving GGUF example
+
+```bash
+vllm serve Qwen/Qwen-Image-2512 --omni --port 8091 \
+  --quantized-weights unsloth/Qwen-Image-2512-GGUF:Q8_0 \
+  --quantization gguf \
+  --load-format gguf
+```
 
 Key arguments:
 

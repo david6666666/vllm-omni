@@ -236,6 +236,8 @@ class DiffusionCacheConfig:
 class OmniDiffusionConfig:
     # Model and path configuration (for convenience)
     model: str | None = None
+    # Optional external source for quantized transformer weights.
+    quantized_weights: str | None = None
 
     model_class_name: str | None = None
 

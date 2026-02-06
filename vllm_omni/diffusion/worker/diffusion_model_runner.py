@@ -99,11 +99,22 @@ class DiffusionModelRunner:
                 quantization_config_file=self.od_config.quantization_config_file,
                 quantization_config_dict_json=self.od_config.quantization_config_dict_json,
                 model=self.od_config.model,
+                quantized_weights=self.od_config.quantized_weights,
             )
             if requested_quantization is None and resolved_quantization is not None:
                 logger.info(
                     "Auto-detected diffusion quantization method '%s' from model config.",
                     resolved_quantization,
+                )
+            if (
+                resolved_quantization is None
+                and self.od_config.quantized_weights is not None
+                and requested_quantization in (None, "auto")
+            ):
+                logger.warning(
+                    "Could not auto-detect quantization method from quantized_weights='%s'. "
+                    "Set --quantization explicitly (for example: fp8 or gguf).",
+                    self.od_config.quantized_weights,
                 )
             self.od_config.quantization = resolved_quantization
 
@@ -118,6 +129,7 @@ class DiffusionModelRunner:
                 quantization_config_dict_json=self.od_config.quantization_config_dict_json,
                 model=self.od_config.model,
                 load_format=load_format,
+                quantized_weights=self.od_config.quantized_weights,
             )
             self.od_config.quant_config = quant_config
             self.vllm_config.quant_config = quant_config

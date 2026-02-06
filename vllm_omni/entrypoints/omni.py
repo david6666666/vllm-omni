@@ -221,6 +221,20 @@ class OmniBase:
                     continue
                 if not hasattr(cfg, "engine_args") or cfg.engine_args is None:
                     cfg.engine_args = OmegaConf.create({})
+                # Keep diffusion quantization args consistent across Omni and Stage modes.
+                for key in (
+                    "quantization",
+                    "load_format",
+                    "quantization_config_file",
+                    "quantization_config_dict_json",
+                    "quantization_scope",
+                    "quantized_weights",
+                ):
+                    value = kwargs.get(key)
+                    if value is None:
+                        continue
+                    if not hasattr(cfg.engine_args, key) or getattr(cfg.engine_args, key) is None:
+                        setattr(cfg.engine_args, key, value)
                 if kwargs.get("lora_path") is not None:
                     if not hasattr(cfg.engine_args, "lora_path") or cfg.engine_args.lora_path is None:
                         cfg.engine_args.lora_path = kwargs["lora_path"]

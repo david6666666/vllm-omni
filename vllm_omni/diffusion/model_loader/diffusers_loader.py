@@ -70,6 +70,8 @@ class DiffusersPipelineLoader:
 
     def __init__(self, load_config: LoadConfig):
         self.load_config = load_config
+        self.quantized_weights: str | None = None
+        self.quantization_scope: str = "transformer_only"
 
         # TODO(Isotr0py): Enable multithreaded weight loading
         # extra_config = load_config.model_loader_extra_config
@@ -80,6 +82,23 @@ class DiffusersPipelineLoader:
         #     raise ValueError(
         #         f"Unexpected extra config keys for load format {load_config.load_format}: {unexpected_keys}"
         #     )
+
+    def _is_transformer_source(self, source: "ComponentSource") -> bool:
+        if source.subfolder is not None and source.subfolder.startswith("transformer"):
+            return True
+        return source.prefix.startswith("transformer.")
+
+    def _uses_external_quantized_source(self, source: "ComponentSource") -> bool:
+        if self.quantized_weights is None:
+            return False
+        if self.quantization_scope != "transformer_only":
+            return False
+        return self._is_transformer_source(source)
+
+    def _resolve_component_source(self, source: "ComponentSource") -> "ComponentSource":
+        if not self._uses_external_quantized_source(source):
+            return source
+        return dataclasses.replace(source, model_or_path=self.quantized_weights)
 
     def _prepare_weights(
         self,
@@ -212,13 +231,34 @@ class DiffusersPipelineLoader:
         """Get an iterator for the model weights based on the load format."""
         if self.load_config.load_format == "gguf":
             raise RuntimeError("GGUF weights should be loaded via load_weights() path.")
-        hf_folder, hf_weights_files, use_safetensors = self._prepare_weights(
-            source.model_or_path,
-            source.subfolder,
-            source.revision,
-            source.fall_back_to_pt,
-            source.allow_patterns_overrides,
-        )
+        source = self._resolve_component_source(source)
+        try:
+            hf_folder, hf_weights_files, use_safetensors = self._prepare_weights(
+                source.model_or_path,
+                source.subfolder,
+                source.revision,
+                source.fall_back_to_pt,
+                source.allow_patterns_overrides,
+            )
+        except RuntimeError as e:
+            # Some quantized transformer repos keep weights at repository root
+            # (no "transformer/" subfolder). Retry once without subfolder.
+            if self._uses_external_quantized_source(source) and source.subfolder is not None:
+                logger.info(
+                    "No weights found under subfolder '%s' in quantized source '%s'; retrying repository root.",
+                    source.subfolder,
+                    source.model_or_path,
+                )
+                source = dataclasses.replace(source, subfolder=None)
+                hf_folder, hf_weights_files, use_safetensors = self._prepare_weights(
+                    source.model_or_path,
+                    source.subfolder,
+                    source.revision,
+                    source.fall_back_to_pt,
+                    source.allow_patterns_overrides,
+                )
+            else:
+                raise
         weights_iterator = safetensors_weights_iterator(
             hf_weights_files,
             self.load_config.use_tqdm_on_load,
@@ -252,6 +292,13 @@ class DiffusersPipelineLoader:
 
     def load_model(self, od_config: OmniDiffusionConfig, load_device: str) -> nn.Module:
         """Load a model with the given configurations."""
+        self.quantized_weights = od_config.quantized_weights
+        self.quantization_scope = od_config.quantization_scope
+        if self.quantized_weights and self.quantization_scope != "transformer_only":
+            logger.warning(
+                "quantized_weights currently supports quantization_scope='transformer_only', got '%s'.",
+                self.quantization_scope,
+            )
         target_device = torch.device(load_device)
         with set_default_torch_dtype(od_config.dtype):
             with target_device:
@@ -275,7 +322,7 @@ class DiffusersPipelineLoader:
             sources = list(sources)
             if len(sources) != 1:
                 raise ValueError("GGUF loading currently supports a single ComponentSource.")
-            source = sources[0]
+            source = self._resolve_component_source(sources[0])
             if self.counter_before_loading_weights == 0.0:
                 self.counter_before_loading_weights = time.perf_counter()
             gguf_file, _, _ = self._prepare_gguf_file(Path(source.model_or_path), source.revision)

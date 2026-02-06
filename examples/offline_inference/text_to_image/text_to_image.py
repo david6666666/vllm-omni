@@ -21,8 +21,18 @@ def parse_args() -> argparse.Namespace:
         "--model",
         default="Qwen/Qwen-Image",
         help="Diffusion model name or local path. Supported models: "
-        "Qwen/Qwen-Image, Tongyi-MAI/Z-Image-Turbo, Qwen/Qwen-Image-2512, "
-        "unsloth/Qwen-Image-2512-FP8, unsloth/Qwen-Image-2512-GGUF:<quant_type>",
+        "Qwen/Qwen-Image, Tongyi-MAI/Z-Image-Turbo, Qwen/Qwen-Image-2512. "
+        "For quantized checkpoints, keep --model as base repo and use --quantized_weights.",
+    )
+    parser.add_argument(
+        "--quantized_weights",
+        type=str,
+        default=None,
+        help=(
+            "Optional external source for quantized transformer weights. "
+            "Examples: unsloth/Qwen-Image-2512-FP8, "
+            "unsloth/Qwen-Image-2512-GGUF:<quant_type>."
+        ),
     )
     parser.add_argument(
         "--quantization",
@@ -214,6 +224,7 @@ def main():
 
     omni_kwargs = {
         "model": args.model,
+        "quantized_weights": args.quantized_weights,
         "enable_layerwise_offload": args.enable_layerwise_offload,
         "layerwise_num_gpu_layers": args.layerwise_num_gpu_layers,
         "vae_use_slicing": args.vae_use_slicing,
@@ -245,6 +256,7 @@ def main():
     print(f"\n{'=' * 60}")
     print("Generation Configuration:")
     print(f"  Model: {args.model}")
+    print(f"  Quantized weights: {args.quantized_weights or 'None'}")
     print(f"  Quantization: {args.quantization if args.quantization is not None else 'auto-detect'}")
     print(f"  Load format: {args.load_format}")
     print(f"  Inference steps: {args.num_inference_steps}")

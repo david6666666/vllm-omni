@@ -145,6 +145,16 @@ class OmniServeCommand(CLISubcommand):
             help="Number of GPUs to use for diffusion model inference.",
         )
         omni_config_group.add_argument(
+            "--quantized-weights",
+            type=str,
+            default=None,
+            help=(
+                "Optional external source for quantized transformer weights. "
+                "Recommended with diffusion quantization: keep --model on base repo "
+                "and pass GGUF/FP8 source here."
+            ),
+        )
+        omni_config_group.add_argument(
             "--usp",
             "--ulysses-degree",
             dest="ulysses_degree",

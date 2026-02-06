@@ -51,6 +51,7 @@ def infer_diffusion_quantization_method(
     quantization_config_file: str | None,
     quantization_config_dict_json: str | None,
     model: str | None,
+    quantized_weights: str | None = None,
 ) -> str | None:
     if quantization is not None:
         quantization = quantization.lower()
@@ -61,6 +62,8 @@ def infer_diffusion_quantization_method(
         quantization_config_file,
         quantization_config_dict_json,
     )
+    if cfg is None:
+        cfg = _maybe_get_hf_quant_config(quantized_weights)
     if cfg is None:
         cfg = _maybe_get_hf_quant_config(model)
     if _is_fp8_quant_config(cfg):
@@ -75,12 +78,14 @@ def resolve_diffusion_quant_config(
     quantization_config_dict_json: str | None,
     model: str | None,
     load_format: str | None,
+    quantized_weights: str | None = None,
 ) -> object | None:
     quantization = infer_diffusion_quantization_method(
         quantization=quantization,
         quantization_config_file=quantization_config_file,
         quantization_config_dict_json=quantization_config_dict_json,
         model=model,
+        quantized_weights=quantized_weights,
     )
     if quantization is None:
         return None
@@ -97,6 +102,8 @@ def resolve_diffusion_quant_config(
             quantization_config_file,
             quantization_config_dict_json,
         )
+        if cfg is None:
+            cfg = _maybe_get_hf_quant_config(quantized_weights)
         if cfg is None:
             cfg = _maybe_get_hf_quant_config(model)
         if cfg is not None:
