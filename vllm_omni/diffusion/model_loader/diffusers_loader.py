@@ -213,6 +213,25 @@ class DiffusersPipelineLoader:
             return local_path, [local_path], False
         if "/" in model_name_or_path and ":" in model_name_or_path:
             repo_id, quant_type = model_name_or_path.rsplit(":", 1)
+            if os.path.isdir(repo_id):
+                # Support local directory + quant type, e.g. /path/to/repo:Q8_0
+                # matching the same filename patterns used by download_gguf.
+                allow_patterns = [
+                    f"*-{quant_type}.gguf",
+                    f"*-{quant_type}-*.gguf",
+                    f"*/*-{quant_type}.gguf",
+                    f"*/*-{quant_type}-*.gguf",
+                ]
+                local_files: list[str] = []
+                for pattern in allow_patterns:
+                    local_files.extend(glob.glob(os.path.join(repo_id, pattern)))
+                if not local_files:
+                    raise ValueError(
+                        f"Could not find local GGUF file in {repo_id!r} for quant_type {quant_type!r}"
+                    )
+                local_files = sorted(set(local_files), key=lambda x: (x.count("-"), x))
+                local_path = local_files[0]
+                return local_path, [local_path], False
             local_path = download_gguf(
                 repo_id,
                 quant_type,
