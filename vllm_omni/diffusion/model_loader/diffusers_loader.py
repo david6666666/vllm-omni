@@ -101,6 +101,88 @@ class DiffusersPipelineLoader:
         return dataclasses.replace(source, model_or_path=self.quantized_weights)
 
     @staticmethod
+    def _normalize_gguf_tensor_name(name: str) -> str:
+        """Best-effort normalization from GGUF/legacy names to model param names."""
+        replacements = [
+            # FLUX.2 legacy naming
+            ("double_blocks.", "transformer_blocks."),
+            ("single_blocks.", "single_transformer_blocks."),
+            (".img_attn.norm.query_norm.scale", ".attn.norm_q.weight"),
+            (".img_attn.norm.key_norm.scale", ".attn.norm_k.weight"),
+            (".txt_attn.norm.query_norm.scale", ".attn.norm_added_q.weight"),
+            (".txt_attn.norm.key_norm.scale", ".attn.norm_added_k.weight"),
+            (".txt_attn.to_q.", ".attn.add_q_proj."),
+            (".txt_attn.to_k.", ".attn.add_k_proj."),
+            (".txt_attn.to_v.", ".attn.add_v_proj."),
+            (".txt_attn.to_out.", ".attn.to_add_out."),
+            (".img_attn.to_out.", ".attn.to_out.0."),
+            (".img_attn.", ".attn."),
+            (".txt_attn.", ".attn."),
+        ]
+        for src, dst in replacements:
+            name = name.replace(src, dst)
+
+        if name.endswith(".scale"):
+            name = name[:-6] + ".weight"
+        if ".to_out." in name and ".to_out.0." not in name:
+            name = name.replace(".to_out.", ".to_out.0.")
+        return name
+
+    def _candidate_hf_param_names(self, gguf_name: str, prefix: str) -> list[str]:
+        """Generate candidate model parameter names for a GGUF tensor name."""
+        candidates: list[str] = []
+
+        def _add(cand: str) -> None:
+            if cand and cand not in candidates:
+                candidates.append(cand)
+
+        seeds = [gguf_name, self._normalize_gguf_tensor_name(gguf_name)]
+        for seed in list(seeds):
+            for lead in ("model.", "diffusion_model.", "transformer."):
+                if seed.startswith(lead):
+                    stripped = seed[len(lead) :]
+                    seeds.append(stripped)
+                    seeds.append(self._normalize_gguf_tensor_name(stripped))
+
+        for seed in seeds:
+            _add(seed)
+            norm = self._normalize_gguf_tensor_name(seed)
+            _add(norm)
+            if prefix:
+                if not seed.startswith(prefix):
+                    _add(f"{prefix}{seed}")
+                if not norm.startswith(prefix):
+                    _add(f"{prefix}{norm}")
+                if seed.startswith(prefix):
+                    _add(seed[len(prefix) :])
+                if norm.startswith(prefix):
+                    _add(norm[len(prefix) :])
+
+        return candidates
+
+    @staticmethod
+    def _match_unique_suffix(model_params: set[str], candidates: list[str]) -> str | None:
+        """Fallback: match a single model param by suffix."""
+        for cand in candidates:
+            suffix_matches = [
+                p for p in model_params if p == cand or p.endswith(f".{cand}")
+            ]
+            if len(suffix_matches) == 1:
+                return suffix_matches[0]
+        return None
+
+    @staticmethod
+    def _select_fallback_candidate(candidates: list[str], prefix: str) -> str | None:
+        """Pick a stable fallback name when direct param matching is unavailable."""
+        if not candidates:
+            return None
+        if prefix:
+            for cand in candidates:
+                if cand.startswith(prefix):
+                    return cand
+        return candidates[0]
+
+    @staticmethod
     def _get_model_weight_names(model: nn.Module) -> set[str]:
         """Collect parameter/buffer names without materializing state_dict.
 
@@ -367,19 +449,45 @@ class DiffusersPipelineLoader:
             model_params = self._get_model_weight_names(model)
             prefix = source.prefix or ""
             gguf_to_hf_name_map: dict[str, str] = {}
+            exact_match_count = 0
+            suffix_match_count = 0
+            fallback_match_count = 0
             reader = gguf.GGUFReader(gguf_file)
             for tensor in reader.tensors:
                 gguf_name = tensor.name
-                if gguf_name in model_params:
-                    gguf_to_hf_name_map[gguf_name] = gguf_name
-                elif prefix and f"{prefix}{gguf_name}" in model_params:
-                    gguf_to_hf_name_map[gguf_name] = f"{prefix}{gguf_name}"
+                candidates = self._candidate_hf_param_names(gguf_name, prefix)
+                mapped_name = next((cand for cand in candidates if cand in model_params), None)
+                if mapped_name is None:
+                    mapped_name = self._match_unique_suffix(model_params, candidates)
+                    if mapped_name is not None:
+                        suffix_match_count += 1
+                else:
+                    exact_match_count += 1
+                if mapped_name is None:
+                    mapped_name = self._select_fallback_candidate(candidates, prefix)
+                    if mapped_name is not None:
+                        fallback_match_count += 1
+                if mapped_name is not None:
+                    gguf_to_hf_name_map[gguf_name] = mapped_name
 
             if not gguf_to_hf_name_map:
                 raise ValueError(
                     "No GGUF tensor names matched model parameters. "
                     "Ensure GGUF tensor names align with model state_dict (optionally with the prefix)."
                 )
+            if exact_match_count + suffix_match_count == 0:
+                logger.warning(
+                    "No GGUF tensor names directly matched model params; "
+                    "using heuristic name mapping for %d tensors.",
+                    fallback_match_count,
+                )
+            logger.info(
+                "Prepared GGUF name map: exact=%d, suffix=%d, heuristic=%d, total=%d",
+                exact_match_count,
+                suffix_match_count,
+                fallback_match_count,
+                len(gguf_to_hf_name_map),
+            )
 
             weights_to_load = {name for name, _ in model.named_parameters()}
             loaded_weights = model.load_weights(
