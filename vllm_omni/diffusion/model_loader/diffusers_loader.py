@@ -100,6 +100,24 @@ class DiffusersPipelineLoader:
             return source
         return dataclasses.replace(source, model_or_path=self.quantized_weights)
 
+    @staticmethod
+    def _get_model_weight_names(model: nn.Module) -> set[str]:
+        """Collect parameter/buffer names without materializing state_dict.
+
+        GGUF loading can involve uninitialized parameters; calling state_dict()
+        would trigger detach() on those tensors and fail.
+        """
+        names: set[str] = set()
+        try:
+            names.update(name for name, _ in model.named_parameters(remove_duplicate=False))
+        except TypeError:
+            names.update(name for name, _ in model.named_parameters())
+        try:
+            names.update(name for name, _ in model.named_buffers(remove_duplicate=False))
+        except TypeError:
+            names.update(name for name, _ in model.named_buffers())
+        return names
+
     def _prepare_weights(
         self,
         model_name_or_path: Path,
@@ -346,7 +364,7 @@ class DiffusersPipelineLoader:
                 self.counter_before_loading_weights = time.perf_counter()
             gguf_file, _, _ = self._prepare_gguf_file(Path(source.model_or_path), source.revision)
 
-            model_params = set(model.state_dict().keys())
+            model_params = self._get_model_weight_names(model)
             prefix = source.prefix or ""
             gguf_to_hf_name_map: dict[str, str] = {}
             reader = gguf.GGUFReader(gguf_file)
