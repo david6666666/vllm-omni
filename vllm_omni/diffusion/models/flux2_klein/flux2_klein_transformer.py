@@ -28,6 +28,7 @@ from diffusers.models.embeddings import (
 )
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 from diffusers.models.normalization import AdaLayerNormContinuous
+from vllm.logger import init_logger
 from vllm.model_executor.layers.layernorm import RMSNorm
 from vllm.model_executor.layers.linear import (
     ColumnParallelLinear,
@@ -41,6 +42,8 @@ from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.layer import Attention
 from vllm_omni.diffusion.layers.rope import RotaryEmbedding
 from vllm_omni.diffusion.utils.quant_utils import get_diffusion_quant_config
+
+logger = init_logger(__name__)
 
 
 class Flux2SwiGLU(nn.Module):
@@ -736,6 +739,26 @@ class Flux2Transformer2DModel(nn.Module):
         return Transformer2DModelOutput(sample=output)
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        def _normalize_weight_name(name: str) -> str:
+            replacements = [
+                # Legacy FLUX.2 naming to vllm-omni naming.
+                ("double_blocks.", "transformer_blocks."),
+                ("single_blocks.", "single_transformer_blocks."),
+                (".img_attn.norm.query_norm.scale", ".attn.norm_q.weight"),
+                (".img_attn.norm.key_norm.scale", ".attn.norm_k.weight"),
+                (".txt_attn.norm.query_norm.scale", ".attn.norm_added_q.weight"),
+                (".txt_attn.norm.key_norm.scale", ".attn.norm_added_k.weight"),
+                (".txt_attn.to_q.", ".attn.add_q_proj."),
+                (".txt_attn.to_k.", ".attn.add_k_proj."),
+                (".txt_attn.to_v.", ".attn.add_v_proj."),
+                (".txt_attn.to_out.", ".attn.to_add_out."),
+                (".img_attn.", ".attn."),
+                (".txt_attn.", ".attn."),
+            ]
+            for src, dst in replacements:
+                name = name.replace(src, dst)
+            return name
+
         stacked_params_mapping = [
             (".to_qkv", ".to_q", "q"),
             (".to_qkv", ".to_k", "k"),
@@ -752,10 +775,16 @@ class Flux2Transformer2DModel(nn.Module):
                 params_dict[name] = buffer
 
         loaded_params: set[str] = set()
+        skipped_params: list[str] = []
         for name, loaded_weight in weights:
+            original_name = name
+            name = _normalize_weight_name(name)
             if "to_qkvkv_mlp_proj" in name:
                 name = name.replace("to_qkvkv_mlp_proj", "to_qkv_mlp_proj")
             if "to_qkv_mlp_proj" in name:
+                if name not in params_dict:
+                    skipped_params.append(original_name)
+                    continue
                 param = params_dict[name]
                 weight_loader = getattr(param, "weight_loader", default_weight_loader)
                 weight_loader(param, loaded_weight)
@@ -765,13 +794,47 @@ class Flux2Transformer2DModel(nn.Module):
                 if weight_name not in name:
                     continue
                 name = name.replace(weight_name, param_name)
+                if name not in params_dict:
+                    if name.endswith(".scale"):
+                        maybe_weight_name = name[:-6] + ".weight"
+                        if maybe_weight_name in params_dict:
+                            name = maybe_weight_name
+                        else:
+                            skipped_params.append(original_name)
+                            break
+                    else:
+                        skipped_params.append(original_name)
+                        break
                 param = params_dict[name]
                 weight_loader = param.weight_loader
                 weight_loader(param, loaded_weight, shard_id)
                 break
             else:
+                if name not in params_dict:
+                    if name.endswith(".scale"):
+                        maybe_weight_name = name[:-6] + ".weight"
+                        if maybe_weight_name in params_dict:
+                            name = maybe_weight_name
+                        else:
+                            skipped_params.append(original_name)
+                            continue
+                    else:
+                        skipped_params.append(original_name)
+                        continue
                 param = params_dict[name]
                 weight_loader = getattr(param, "weight_loader", default_weight_loader)
                 weight_loader(param, loaded_weight)
             loaded_params.add(name)
+
+        if not loaded_params:
+            raise ValueError(
+                "No transformer weights were loaded for Flux2Klein. "
+                "The quantized checkpoint may use an unsupported parameter naming format."
+            )
+        if skipped_params:
+            logger.warning(
+                "Skipped %d unmatched Flux2Klein weights (showing up to 5): %s",
+                len(skipped_params),
+                skipped_params[:5],
+            )
         return loaded_params
