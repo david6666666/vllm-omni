@@ -279,10 +279,23 @@ class DiffusersPipelineLoader:
         quant_config = od_config.quantization_config
         if quant_config is None:
             return False
+        # Fast path: mapping-style config (e.g., DictConfig)
+        if isinstance(quant_config, dict):
+            method = str(quant_config.get("method", "")).lower()
+            if method != "gguf":
+                return False
+            gguf_model = quant_config.get("gguf_model")
+            if not gguf_model:
+                raise ValueError("GGUF quantization requires quantization_config.gguf_model")
+            return True
+
+        # Normal path: DiffusionQuantizationConfig
         try:
             is_gguf = quant_config.get_name() == "gguf"
         except Exception:
-            return False
+            # Fallback: if it carries gguf_model, treat as GGUF
+            gguf_model = getattr(quant_config, "gguf_model", None)
+            return bool(gguf_model)
         if not is_gguf:
             return False
         gguf_model = getattr(quant_config, "gguf_model", None)
