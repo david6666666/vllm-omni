@@ -309,8 +309,11 @@ class DiffusersPipelineLoader:
         return source.prefix.startswith("transformer.")
 
     def _get_model_loadable_names(self, model: nn.Module) -> set[str]:
-        # Use state_dict keys to include both parameters and buffers.
-        return set(model.state_dict().keys())
+        # Avoid model.state_dict() here because GGUF uses UninitializedParameter
+        # which raises during detach(). Collect names directly.
+        names = {name for name, _ in model.named_parameters()}
+        names.update(name for name, _ in model.named_buffers())
+        return names
 
     def _resolve_gguf_model_path(self, gguf_model: str, revision: str | None) -> str:
         if os.path.isfile(gguf_model):
