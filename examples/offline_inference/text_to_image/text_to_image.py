@@ -129,10 +129,20 @@ def parse_args() -> argparse.Namespace:
         "--quantization",
         type=str,
         default=None,
-        choices=["fp8"],
+        choices=["fp8", "gguf"],
         help="Quantization method for the transformer. "
-        "Options: 'fp8' (FP8 W8A8 on Ada/Hopper, weight-only on older GPUs). "
+        "Options: 'fp8' (FP8 W8A8 on Ada/Hopper, weight-only on older GPUs), "
+        "'gguf' (load transformer weights from a GGUF file). "
         "Default: None (no quantization, uses BF16).",
+    )
+    parser.add_argument(
+        "--gguf-model",
+        type=str,
+        default=None,
+        help=(
+            "GGUF file path or HF reference for transformer weights. "
+            "Required when --quantization gguf is set."
+        ),
     )
     parser.add_argument(
         "--ignored-layers",
@@ -204,7 +214,14 @@ def main():
     # ignored_layers is specified so the list flows through OmniDiffusionConfig
     quant_kwargs: dict[str, Any] = {}
     ignored_layers = [s.strip() for s in args.ignored_layers.split(",") if s.strip()] if args.ignored_layers else None
-    if args.quantization and ignored_layers:
+    if args.quantization == "gguf":
+        if not args.gguf_model:
+            raise ValueError("--gguf-model is required when --quantization gguf is set.")
+        quant_kwargs["quantization_config"] = {
+            "method": "gguf",
+            "gguf_model": args.gguf_model,
+        }
+    elif args.quantization and ignored_layers:
         quant_kwargs["quantization_config"] = {
             "method": args.quantization,
             "ignored_layers": ignored_layers,
