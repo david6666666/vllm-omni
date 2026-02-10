@@ -36,14 +36,16 @@ class DiffusionFp8Config(DiffusionQuantizationConfig):
         activation_scheme: str = "dynamic",
         weight_block_size: list[int] | None = None,
         ignored_layers: list[str] | None = None,
+        is_checkpoint_fp8_serialized: bool = False,
     ):
         self.activation_scheme = activation_scheme
         self.weight_block_size = weight_block_size
         self.ignored_layers = ignored_layers or []
+        self.is_checkpoint_fp8_serialized = is_checkpoint_fp8_serialized
 
         # Create underlying vLLM FP8 config
         self._vllm_config = Fp8Config(
-            is_checkpoint_fp8_serialized=False,  # Online quantization from BF16
+            is_checkpoint_fp8_serialized=is_checkpoint_fp8_serialized,
             activation_scheme=activation_scheme,
             weight_block_size=weight_block_size,
             ignored_layers=ignored_layers,

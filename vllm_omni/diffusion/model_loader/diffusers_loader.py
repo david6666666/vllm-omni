@@ -6,19 +6,22 @@ import os
 import time
 from collections.abc import Generator, Iterable
 from pathlib import Path
-from typing import cast
+from typing import Callable, cast
 
 import torch
 from torch import nn
+from huggingface_hub import hf_hub_download
 from vllm.config import ModelConfig
 from vllm.config.load import LoadConfig
 from vllm.logger import init_logger
 from vllm.model_executor.layers.quantization.base_config import QuantizeMethodBase
 from vllm.model_executor.model_loader.weight_utils import (
+    download_gguf,
     download_safetensors_index_file_from_hf,
     download_weights_from_hf,
     filter_duplicate_safetensors_files,
     filter_files_not_needed_for_inference,
+    gguf_quant_weights_iterator,
     maybe_download_from_modelscope,
     safetensors_weights_iterator,
 )
@@ -216,8 +219,11 @@ class DiffusersPipelineLoader:
                 model = initialize_model(od_config)
 
             logger.debug("Loading weights on %s ...", load_device)
-            # Quantization does not happen in `load_weights` but after it
-            self.load_weights(model)
+            if self._is_gguf_quantization(od_config):
+                self._load_weights_with_gguf(model, od_config)
+            else:
+                # Quantization does not happen in `load_weights` but after it
+                self.load_weights(model)
 
             # Process weights after loading for quantization (e.g., FP8 online quantization)
             # This is needed for vLLM's quantization methods that need to transform weights
@@ -268,3 +274,207 @@ class DiffusersPipelineLoader:
         #             "Following weights were not initialized from "
         #             f"checkpoint: {weights_not_loaded}"
         #         )
+
+    def _is_gguf_quantization(self, od_config: OmniDiffusionConfig) -> bool:
+        quant_config = od_config.quantization_config
+        if quant_config is None:
+            return False
+        try:
+            is_gguf = quant_config.get_name() == "gguf"
+        except Exception:
+            return False
+        if not is_gguf:
+            return False
+        gguf_model = getattr(quant_config, "gguf_model", None)
+        if gguf_model is None:
+            raise ValueError("GGUF quantization requires quantization_config.gguf_model")
+        return True
+
+    def _is_transformer_source(self, source: "ComponentSource") -> bool:
+        if source.subfolder == "transformer":
+            return True
+        return source.prefix.startswith("transformer.")
+
+    def _get_model_loadable_names(self, model: nn.Module) -> set[str]:
+        # Use state_dict keys to include both parameters and buffers.
+        return set(model.state_dict().keys())
+
+    def _resolve_gguf_model_path(self, gguf_model: str, revision: str | None) -> str:
+        if os.path.isfile(gguf_model):
+            return gguf_model
+        # raw HTTPS link
+        if gguf_model.startswith(("http://", "https://")) and gguf_model.endswith(".gguf"):
+            return hf_hub_download(url=gguf_model)
+        # repo_id/filename.gguf
+        if "/" in gguf_model and gguf_model.endswith(".gguf"):
+            repo_id, filename = gguf_model.rsplit("/", 1)
+            return hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                revision=revision,
+                cache_dir=self.load_config.download_dir,
+            )
+        # repo_id:quant_type
+        if "/" in gguf_model and ":" in gguf_model:
+            repo_id, quant_type = gguf_model.rsplit(":", 1)
+            return download_gguf(
+                repo_id,
+                quant_type,
+                cache_dir=self.load_config.download_dir,
+                revision=revision,
+                ignore_patterns=self.load_config.ignore_patterns,
+            )
+        raise ValueError(
+            f"Unrecognized GGUF reference: {gguf_model!r} (expected local file, "
+            "raw URL, <repo_id>/<filename>.gguf, or <repo_id>:<quant_type>)"
+        )
+
+    def _get_gguf_name_mapper(self, od_config: OmniDiffusionConfig) -> Callable[[str], str | None]:
+        model_class = od_config.model_class_name
+        if model_class in {
+            "QwenImagePipeline",
+            "QwenImageEditPipeline",
+            "QwenImageEditPlusPipeline",
+            "QwenImageLayeredPipeline",
+        }:
+            return lambda name: name
+        if model_class == "Flux2KleinPipeline":
+            return self._map_flux2_klein_gguf_name
+        raise ValueError(f"GGUF mapping is not implemented for model_class_name={model_class!r}")
+
+    @staticmethod
+    def _map_flux2_klein_gguf_name(name: str) -> str | None:
+        if name.startswith("double_stream_modulation_img.lin."):
+            return name.replace("double_stream_modulation_img.lin.", "double_stream_modulation_img.linear.", 1)
+        if name.startswith("double_stream_modulation_txt.lin."):
+            return name.replace("double_stream_modulation_txt.lin.", "double_stream_modulation_txt.linear.", 1)
+        if name.startswith("single_stream_modulation.lin."):
+            return name.replace("single_stream_modulation.lin.", "single_stream_modulation.linear.", 1)
+        if name.startswith("img_in."):
+            return name.replace("img_in.", "x_embedder.", 1)
+        if name.startswith("txt_in."):
+            return name.replace("txt_in.", "context_embedder.", 1)
+        if name.startswith("time_in.in_layer."):
+            return name.replace(
+                "time_in.in_layer.",
+                "time_guidance_embed.timestep_embedder.linear_1.",
+                1,
+            )
+        if name.startswith("time_in.out_layer."):
+            return name.replace(
+                "time_in.out_layer.",
+                "time_guidance_embed.timestep_embedder.linear_2.",
+                1,
+            )
+        if name.startswith("final_layer.adaLN_modulation.1."):
+            return name.replace("final_layer.adaLN_modulation.1.", "norm_out.linear.", 1)
+        if name.startswith("final_layer.linear."):
+            return name.replace("final_layer.linear.", "proj_out.", 1)
+
+        if name.startswith("double_blocks."):
+            name = name.replace("double_blocks.", "transformer_blocks.", 1)
+            if ".img_attn.qkv." in name:
+                return name.replace(".img_attn.qkv.", ".attn.to_qkv.", 1)
+            if ".img_attn.proj." in name:
+                return name.replace(".img_attn.proj.", ".attn.to_out.0.", 1)
+            if name.endswith(".img_attn.norm.query_norm.scale"):
+                return name.replace(".img_attn.norm.query_norm.scale", ".attn.norm_q.weight", 1)
+            if name.endswith(".img_attn.norm.key_norm.scale"):
+                return name.replace(".img_attn.norm.key_norm.scale", ".attn.norm_k.weight", 1)
+            if ".txt_attn.qkv." in name:
+                return name.replace(".txt_attn.qkv.", ".attn.add_kv_proj.", 1)
+            if ".txt_attn.proj." in name:
+                return name.replace(".txt_attn.proj.", ".attn.to_add_out.", 1)
+            if name.endswith(".txt_attn.norm.query_norm.scale"):
+                return name.replace(".txt_attn.norm.query_norm.scale", ".attn.norm_added_q.weight", 1)
+            if name.endswith(".txt_attn.norm.key_norm.scale"):
+                return name.replace(".txt_attn.norm.key_norm.scale", ".attn.norm_added_k.weight", 1)
+            if ".img_mlp.0." in name:
+                return name.replace(".img_mlp.0.", ".ff.linear_in.", 1)
+            if ".img_mlp.2." in name:
+                return name.replace(".img_mlp.2.", ".ff.linear_out.", 1)
+            if ".txt_mlp.0." in name:
+                return name.replace(".txt_mlp.0.", ".ff_context.linear_in.", 1)
+            if ".txt_mlp.2." in name:
+                return name.replace(".txt_mlp.2.", ".ff_context.linear_out.", 1)
+            return None
+
+        if name.startswith("single_blocks."):
+            name = name.replace("single_blocks.", "single_transformer_blocks.", 1)
+            if ".linear1." in name:
+                return name.replace(".linear1.", ".attn.to_qkv_mlp_proj.", 1)
+            if ".linear2." in name:
+                return name.replace(".linear2.", ".attn.to_out.", 1)
+            if name.endswith(".norm.query_norm.scale"):
+                return name.replace(".norm.query_norm.scale", ".attn.norm_q.weight", 1)
+            if name.endswith(".norm.key_norm.scale"):
+                return name.replace(".norm.key_norm.scale", ".attn.norm_k.weight", 1)
+            return None
+
+        return None
+
+    def _build_gguf_name_map(
+        self,
+        gguf_file: str,
+        od_config: OmniDiffusionConfig,
+    ) -> dict[str, str]:
+        try:
+            import gguf  # type: ignore
+        except Exception as exc:  # pragma: no cover - dependency error
+            raise RuntimeError(
+                "GGUF support requires the 'gguf' package to be installed."
+            ) from exc
+
+        mapper = self._get_gguf_name_mapper(od_config)
+        reader = gguf.GGUFReader(gguf_file)
+        gguf_to_model_map: dict[str, str] = {}
+        for tensor in reader.tensors:
+            mapped = mapper(tensor.name)
+            if mapped is None:
+                continue
+            gguf_to_model_map[tensor.name] = mapped
+        if not gguf_to_model_map:
+            raise RuntimeError(
+                f"No GGUF tensors were mapped for model_class_name={od_config.model_class_name!r}."
+            )
+        return gguf_to_model_map
+
+    def _get_gguf_weights_iterator(
+        self,
+        source: "ComponentSource",
+        od_config: OmniDiffusionConfig,
+    ) -> Generator[tuple[str, torch.Tensor], None, None]:
+        quant_config = od_config.quantization_config
+        gguf_model = getattr(quant_config, "gguf_model", None)
+        if gguf_model is None:
+            raise ValueError("GGUF quantization requires quantization_config.gguf_model")
+        gguf_file = self._resolve_gguf_model_path(gguf_model, od_config.revision)
+        gguf_name_map = self._build_gguf_name_map(gguf_file, od_config)
+        weights_iter = gguf_quant_weights_iterator(gguf_file, gguf_name_map)
+        return ((source.prefix + name, tensor) for (name, tensor) in weights_iter)
+
+    def _load_weights_with_gguf(self, model: nn.Module, od_config: OmniDiffusionConfig) -> set[str]:
+        sources = cast(
+            Iterable[DiffusersPipelineLoader.ComponentSource],
+            getattr(model, "weights_sources", ()),
+        )
+        loaded: set[str] = set()
+        loadable_names: set[str] | None = None
+
+        for source in sources:
+            if self._is_transformer_source(source):
+                loaded |= model.load_weights(self._get_gguf_weights_iterator(source, od_config))
+
+                # Load any remaining float weights (e.g., non-quantized layers)
+                # from the base HF checkpoint while skipping already-loaded names.
+                loadable_names = loadable_names or self._get_model_loadable_names(model)
+                hf_iter = self._get_weights_iterator(source)
+                hf_iter = (
+                    (name, tensor)
+                    for (name, tensor) in hf_iter
+                    if name in loadable_names and name not in loaded
+                )
+                loaded |= model.load_weights(hf_iter)
+            else:
+                loaded |= model.load_weights(self._get_weights_iterator(source))
+        return loaded
