@@ -779,8 +779,11 @@ class Flux2Transformer2DModel(nn.Module):
                 weight_loader(param, loaded_weight)
                 loaded_params.add(name)
                 continue
+            # GGUF fused QKV weights already target .to_qkv/.add_kv_proj.
+            # Avoid substring replacement that would duplicate "qkv".
+            is_fused_qkv = ".to_qkv." in name or ".add_kv_proj." in name
             for param_name, weight_name, shard_id in stacked_params_mapping:
-                if weight_name not in name:
+                if is_fused_qkv or weight_name not in name:
                     continue
                 name = name.replace(weight_name, param_name)
                 param = params_dict[name]
