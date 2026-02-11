@@ -2,9 +2,64 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """GGUF quantization config for diffusion transformers."""
 
-from vllm.model_executor.layers.quantization.gguf import GGUFConfig
+import torch
+import gguf
+from vllm.model_executor.layers.quantization.gguf import GGUFConfig, GGUFLinearMethod, is_layer_skipped_gguf, LinearBase, QuantizeMethodBase, UnquantizedLinearMethod
+from vllm import _custom_ops as ops
 
 from .base import DiffusionQuantizationConfig
+
+
+def dequant_gemm_gguf(x: torch.Tensor, qweight: torch.Tensor, qweight_type: int) -> torch.Tensor:
+    block_size, type_size = gguf.GGML_QUANT_SIZES[qweight_type]
+    shape = (qweight.shape[0], qweight.shape[1] // type_size * block_size)
+    weight = ops.ggml_dequantize(qweight, qweight_type, *shape, x.dtype)
+    return x @ weight.T
+
+
+class DiffusionGGUFLinearMethod(GGUFLinearMethod):
+    def apply(
+        self,
+        layer: torch.nn.Module,
+        x: torch.Tensor,
+        bias: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        shard_id = layer.qweight.shard_id
+
+        if shard_id:
+            # dequantize shard weights respectively
+            shard_id = ["q", "k", "v"] if "q" in shard_id else shard_id
+            qweight = layer.qweight
+            result = []
+            for idx in shard_id:
+                start, end, offset = layer.qweight.shard_offset_map[idx]
+                qweight_type = layer.qweight_type.shard_weight_type[idx]
+                result.append(
+                    dequant_gemm_gguf(
+                        x, qweight[start:end, :offset].contiguous(), qweight_type
+                    )
+                )
+            out = torch.cat(result, axis=-1)
+        else:
+            qweight = layer.qweight
+            qweight_type = layer.qweight_type.weight_type
+            out = dequant_gemm_gguf(x, qweight, qweight_type)
+        if bias is not None:
+            out.add_(bias)
+        return out
+
+
+class _GGUFConfig(GGUFConfig):
+    def get_quant_method(
+        self, layer: torch.nn.Module, prefix: str
+    ) -> "QuantizeMethodBase":
+        if isinstance(layer, LinearBase):
+            if is_layer_skipped_gguf(
+                prefix, self.unquantized_modules, self.packed_modules_mapping
+            ):
+                return UnquantizedLinearMethod()
+            return DiffusionGGUFLinearMethod(self)
+        return None
 
 
 class DiffusionGgufConfig(DiffusionQuantizationConfig):
@@ -29,4 +84,5 @@ class DiffusionGgufConfig(DiffusionQuantizationConfig):
     ) -> None:
         self.gguf_model = gguf_model
         self.unquantized_modules = unquantized_modules or []
-        self._vllm_config = GGUFConfig(unquantized_modules=self.unquantized_modules)
+
+        self._vllm_config = _GGUFConfig(unquantized_modules=self.unquantized_modules)
