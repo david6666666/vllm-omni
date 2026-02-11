@@ -53,7 +53,11 @@ class Flux2GGUFAdapter(GGUFAdapter):
 
         for tensor in reader.tensors:
             for mapped_tensor in self._map_tensor_name(tensor):
-                if mapped_tensor.name not in allowed_names:
+                if (
+                    mapped_tensor.name not in allowed_names
+                    and self._resolve_linear_qweight(mapped_tensor.name, param_names)
+                    is None
+                ):
                     continue
                 mapped.append(mapped_tensor)
 
@@ -64,13 +68,11 @@ class Flux2GGUFAdapter(GGUFAdapter):
             )
 
         for item in mapped:
-            is_linear_weight = (
-                item.name.endswith(".weight")
-                and item.name.replace(".weight", ".qweight") in param_names
-            )
+            linear_qweight = self._resolve_linear_qweight(item.name, param_names)
+            is_linear_weight = linear_qweight is not None
             if not is_linear_weight:
                 continue
-            weight_type_name = item.name.replace("weight", "qweight_type")
+            weight_type_name = linear_qweight.replace("qweight", "qweight_type")
             yield weight_type_name, torch.tensor(item.tensor_type)
 
         for item in mapped:
@@ -78,12 +80,10 @@ class Flux2GGUFAdapter(GGUFAdapter):
             if item.row_slice is not None:
                 weight = weight[item.row_slice]
             weight_type = item.tensor_type
-            is_linear_weight = (
-                item.name.endswith(".weight")
-                and item.name.replace(".weight", ".qweight") in param_names
-            )
+            linear_qweight = self._resolve_linear_qweight(item.name, param_names)
+            is_linear_weight = linear_qweight is not None
             if is_linear_weight:
-                name = item.name.replace("weight", "qweight")
+                name = linear_qweight
             else:
                 name = item.name
 
@@ -129,6 +129,26 @@ class Flux2GGUFAdapter(GGUFAdapter):
         prefix = getattr(self.source, "prefix", "")
         target = self.model.get_submodule(prefix.rstrip(".")) if prefix else self.model
         return {name for name, _ in target.named_parameters()}
+
+    def _resolve_linear_qweight(self, name: str, param_names: set[str]) -> str | None:
+        if not name.endswith(".weight"):
+            return None
+        candidate = name.replace(".weight", ".qweight")
+        if candidate in param_names:
+            return candidate
+        for src, dst in (
+            (".to_q.", ".to_qkv."),
+            (".to_k.", ".to_qkv."),
+            (".to_v.", ".to_qkv."),
+            (".add_q_proj.", ".add_kv_proj."),
+            (".add_k_proj.", ".add_kv_proj."),
+            (".add_v_proj.", ".add_kv_proj."),
+        ):
+            if src in name:
+                candidate = name.replace(src, dst).replace(".weight", ".qweight")
+                if candidate in param_names:
+                    return candidate
+        return None
 
     def _map_tensor_name(self, tensor) -> list[_MappedTensor]:
         name = tensor.name
