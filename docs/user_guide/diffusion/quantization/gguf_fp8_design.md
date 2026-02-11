@@ -233,27 +233,20 @@ outputs = omni.generate(
 vllm serve Qwen/Qwen-Image --omni --port 8000 --quantization fp8
 ```
 
-### Start Server (Native GGUF via Stage Config)
-Create a stage config YAML that injects `quantization_config` into `engine_args`.
-```yaml
-stage_args:
-  - stage_id: 0
-    runtime:
-      process: true
-      devices: "0"
-      max_batch_size: 1
-    engine_args:
-      model_stage: diffusion
-      quantization_config:
-        method: gguf
-        gguf_model: /workspace/models/unsloth/FLUX.2-klein-4B-GGUF/flux-2-klein-4b-Q8_0.gguf
-```
-Then run:
+### Start Server (Native GGUF via CLI)
 ```bash
 vllm serve /workspace/models/black-forest-labs/FLUX.2-klein-4B \
   --omni \
   --port 8000 \
-  --stage-configs-path /path/to/diffusion_gguf_stage.yaml
+  --quantization-config '{"method":"gguf","gguf_model":"/workspace/models/unsloth/FLUX.2-klein-4B-GGUF/flux-2-klein-4b-Q8_0.gguf"}'
+```
+
+### Start Server (Native FP8 via CLI)
+```bash
+vllm serve /path/to/fp8-checkpoint \
+  --omni \
+  --port 8000 \
+  --quantization-config '{"method":"fp8","is_checkpoint_fp8_serialized":true}'
 ```
 
 ### Online Request (Images API)
