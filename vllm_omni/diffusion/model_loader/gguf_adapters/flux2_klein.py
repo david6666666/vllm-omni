@@ -20,13 +20,13 @@ class _MappedTensor:
     swap_scale_shift: bool = False
 
 
-class Flux2GGUFAdapter(GGUFAdapter):
-    """GGUF adapter for Flux2 models with qkv splitting and adaLN swap."""
+class Flux2KleinGGUFAdapter(GGUFAdapter):
+    """GGUF adapter for Flux2-Klein models with qkv splitting and adaLN swap."""
 
     @staticmethod
     def is_compatible(od_config, model: torch.nn.Module, source) -> bool:
         model_class = od_config.model_class_name or ""
-        if model_class.startswith("Flux2"):
+        if model_class.startswith("Flux2Klein"):
             return True
         cfg = od_config.tf_model_config
         if cfg is not None:
