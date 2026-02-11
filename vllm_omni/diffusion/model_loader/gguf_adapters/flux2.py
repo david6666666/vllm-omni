@@ -133,21 +133,20 @@ class Flux2GGUFAdapter(GGUFAdapter):
     def _resolve_linear_qweight(self, name: str, param_names: set[str]) -> str | None:
         if not name.endswith(".weight"):
             return None
+        # Keep QKV shard names so load_weights can attach shard_id correctly.
+        for shard_token in (
+            ".to_q.",
+            ".to_k.",
+            ".to_v.",
+            ".add_q_proj.",
+            ".add_k_proj.",
+            ".add_v_proj.",
+        ):
+            if shard_token in name:
+                return name.replace(".weight", ".qweight")
         candidate = name.replace(".weight", ".qweight")
         if candidate in param_names:
             return candidate
-        for src, dst in (
-            (".to_q.", ".to_qkv."),
-            (".to_k.", ".to_qkv."),
-            (".to_v.", ".to_qkv."),
-            (".add_q_proj.", ".add_kv_proj."),
-            (".add_k_proj.", ".add_kv_proj."),
-            (".add_v_proj.", ".add_kv_proj."),
-        ):
-            if src in name:
-                candidate = name.replace(src, dst).replace(".weight", ".qweight")
-                if candidate in param_names:
-                    return candidate
         return None
 
     def _map_tensor_name(self, tensor) -> list[_MappedTensor]:
