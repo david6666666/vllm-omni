@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import torch
@@ -13,8 +14,8 @@ from .base import GGUFAdapter
 @dataclass
 class _MappedTensor:
     name: str
-    tensor
-    tensor_type
+    tensor: Any
+    tensor_type: Any
     row_slice: slice | None = None
     swap_scale_shift: bool = False
 
