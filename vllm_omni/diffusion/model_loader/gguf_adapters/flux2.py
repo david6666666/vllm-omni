@@ -48,6 +48,7 @@ class Flux2GGUFAdapter(GGUFAdapter):
 
         reader = gguf.GGUFReader(self.gguf_file)
         allowed_names = self._build_allowed_names()
+        param_names = self._build_param_names()
         mapped: list[_MappedTensor] = []
 
         for tensor in reader.tensors:
@@ -63,17 +64,25 @@ class Flux2GGUFAdapter(GGUFAdapter):
             )
 
         for item in mapped:
-            weight_type = item.tensor_type
-            if weight_type.name not in ("F32", "BF16", "F16"):
-                weight_type_name = item.name.replace("weight", "qweight_type")
-                yield weight_type_name, torch.tensor(weight_type)
+            is_linear_weight = (
+                item.name.endswith(".weight")
+                and item.name.replace(".weight", ".qweight") in param_names
+            )
+            if not is_linear_weight:
+                continue
+            weight_type_name = item.name.replace("weight", "qweight_type")
+            yield weight_type_name, torch.tensor(item.tensor_type)
 
         for item in mapped:
             weight = item.tensor.data
             if item.row_slice is not None:
                 weight = weight[item.row_slice]
             weight_type = item.tensor_type
-            if weight_type.name not in ("F32", "BF16", "F16"):
+            is_linear_weight = (
+                item.name.endswith(".weight")
+                and item.name.replace(".weight", ".qweight") in param_names
+            )
+            if is_linear_weight:
                 name = item.name.replace("weight", "qweight")
             else:
                 name = item.name
@@ -97,6 +106,11 @@ class Flux2GGUFAdapter(GGUFAdapter):
         target = self.model.get_submodule(prefix.rstrip(".")) if prefix else self.model
         allowed = {name for name, _ in target.named_parameters()}
         allowed.update(name for name, _ in target.named_buffers())
+        for name in list(allowed):
+            if name.endswith(".qweight"):
+                allowed.add(name.replace(".qweight", ".weight"))
+            elif name.endswith(".qweight_type"):
+                allowed.add(name.replace(".qweight_type", ".weight"))
 
         virtual_names = set()
         for name in allowed:
@@ -110,6 +124,11 @@ class Flux2GGUFAdapter(GGUFAdapter):
                 virtual_names.add(name.replace(".add_kv_proj.", ".add_v_proj."))
         allowed.update(virtual_names)
         return allowed
+
+    def _build_param_names(self) -> set[str]:
+        prefix = getattr(self.source, "prefix", "")
+        target = self.model.get_submodule(prefix.rstrip(".")) if prefix else self.model
+        return {name for name, _ in target.named_parameters()}
 
     def _map_tensor_name(self, tensor) -> list[_MappedTensor]:
         name = tensor.name
