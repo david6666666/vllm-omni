@@ -1,6 +1,6 @@
 ﻿# Diffusion Quantization Design: Native GGUF + FP8 (Online and Native)
 
-Date: 2026-02-10
+Date: 2026-02-11
 
 ## Goals
 1. Reuse vLLM quantization configs and weight loaders as much as possible.
@@ -16,6 +16,7 @@ Date: 2026-02-10
 1. `OmniDiffusionConfig` accepts `quantization` or `quantization_config`.
 2. Diffusion quantization wrappers (`DiffusionGgufConfig`, `DiffusionFp8Config`) produce vLLM `QuantizationConfig` objects for linear layers.
 3. `DiffusersPipelineLoader` branches on quantization method and loads either HF weights or GGUF weights for the transformer.
+4. GGUF transformer loading is routed through model-specific adapters (e.g., Flux2Klein).
 4. vLLM GGUF path uses `GGUFConfig` and `GGUFLinearMethod` for matmul; FP8 uses `Fp8Config` (online) or `is_checkpoint_fp8_serialized` for native FP8.
 
 ## Call Chain (Offline)
@@ -153,8 +154,62 @@ Notes:
 ## GGUF Weight Loading Path (Transformer-Only)
 1. `DiffusersPipelineLoader.load_model` detects `quantization_config.method == "gguf"`.
 2. `gguf_model` is resolved as one of: local file, URL, `repo/file.gguf`, or `repo:quant_type`.
-3. Name mapping is applied per-architecture (Qwen-Image, Flux2-klein).
+3. GGUF weights are routed through adapters in `vllm_omni/diffusion/model_loader/gguf_adapters/`.
+4. Name mapping is applied per-architecture (Qwen-Image, Flux2Klein).
 4. GGUF weights are loaded into transformer modules, remaining non-transformer weights come from the HF checkpoint.
+
+## GGUF Adapter Design
+1. `GGUFAdapter` (base) implements default gguf-py tensor name mapping.
+2. `Flux2KleinGGUFAdapter` implements Flux2-Klein remapping + qkv split + adaLN swap.
+3. `get_gguf_adapter(...)` selects the adapter by model class/config and returns an iterator of `(name, tensor)`.
+
+Adapter paths:
+- Base: `vllm_omni/diffusion/model_loader/gguf_adapters/base.py`
+- Flux2-Klein: `vllm_omni/diffusion/model_loader/gguf_adapters/flux2_klein.py`
+
+## Flux2-Klein GGUF Mapping (Key Rules)
+1. **Core rename (diffusers-compatible)**:
+   - `img_in` -> `x_embedder`
+   - `txt_in` -> `context_embedder`
+   - `time_in.*` -> `time_guidance_embed.timestep_embedder.*`
+   - `guidance_in.*` -> `time_guidance_embed.guidance_embedder.*`
+   - `double_stream_modulation_*` -> `double_stream_modulation_*.linear`
+   - `single_stream_modulation.lin` -> `single_stream_modulation.linear`
+   - `final_layer.linear` -> `proj_out`
+2. **Double blocks (img/txt)**:
+   - `double_blocks.{i}.img_attn.qkv.weight`
+     -> `transformer_blocks.{i}.attn.to_q/to_k/to_v`
+   - `double_blocks.{i}.txt_attn.qkv.weight`
+     -> `transformer_blocks.{i}.attn.add_q_proj/add_k_proj/add_v_proj`
+   - Other mappings:
+     - `img_attn.norm.query_norm` -> `attn.norm_q`
+     - `img_attn.norm.key_norm` -> `attn.norm_k`
+     - `img_attn.proj` -> `attn.to_out.0`
+     - `img_mlp.0` -> `ff.linear_in`
+     - `img_mlp.2` -> `ff.linear_out`
+     - `txt_attn.norm.query_norm` -> `attn.norm_added_q`
+     - `txt_attn.norm.key_norm` -> `attn.norm_added_k`
+     - `txt_attn.proj` -> `attn.to_add_out`
+     - `txt_mlp.0` -> `ff_context.linear_in`
+     - `txt_mlp.2` -> `ff_context.linear_out`
+3. **Single blocks**:
+   - `single_blocks.{i}.linear1` -> `single_transformer_blocks.{i}.attn.to_qkv_mlp_proj`
+   - `single_blocks.{i}.linear2` -> `single_transformer_blocks.{i}.attn.to_out`
+   - `single_blocks.{i}.norm.query_norm` -> `single_transformer_blocks.{i}.attn.norm_q`
+   - `single_blocks.{i}.norm.key_norm` -> `single_transformer_blocks.{i}.attn.norm_k`
+4. **AdaLN swap**:
+   - `final_layer.adaLN_modulation.1.weight` -> `norm_out.linear.weight` with (shift, scale) swapped.
+
+## Flux2-Klein GGUF Loader Logic
+1. **Iterator flow**:
+   - Read GGUF tensors via `gguf.GGUFReader`.
+   - Apply Flux2-Klein mapping rules to produce diffusers-style names.
+   - For QKV tensors, split along dim0 into Q/K/V shards.
+2. **Linear weights go to `qweight`** (both quantized and BF16/F16):
+   - Always emit `qweight_type` for linear weights.
+   - Use shard names (`to_q.qweight`, `to_k.qweight`, `to_v.qweight`) so vLLM can reassemble into `to_qkv.qweight`.
+3. **Non-linear weights** (norm/bias/scale) keep `.weight`/`.bias` names.
+4. **Remaining HF weights** are loaded after GGUF to fill gaps.
 
 ## FP8 Loading Path
 1. Online FP8: `quantization="fp8"` or `quantization_config={"method":"fp8", "ignored_layers": [...]}`.
