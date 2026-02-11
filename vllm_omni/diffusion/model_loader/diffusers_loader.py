@@ -6,7 +6,7 @@ import os
 import time
 from collections.abc import Generator, Iterable
 from pathlib import Path
-from typing import Callable, cast
+from typing import cast
 
 import torch
 from torch import nn
@@ -345,93 +345,11 @@ class DiffusersPipelineLoader:
             "raw URL, <repo_id>/<filename>.gguf, or <repo_id>:<quant_type>)"
         )
 
-    def _get_gguf_name_mapper(self, od_config: OmniDiffusionConfig) -> Callable[[str], str | None]:
-        model_class = od_config.model_class_name
-        if model_class in {
-            "QwenImagePipeline",
-            "QwenImageEditPipeline",
-            "QwenImageEditPlusPipeline",
-            "QwenImageLayeredPipeline",
-        }:
-            return lambda name: name
-        if model_class == "Flux2KleinPipeline":
-            return self._map_flux2_klein_gguf_name
-        raise ValueError(f"GGUF mapping is not implemented for model_class_name={model_class!r}")
-
-    @staticmethod
-    def _map_flux2_klein_gguf_name(name: str) -> str | None:
-        if name.startswith("double_stream_modulation_img.lin."):
-            return name.replace("double_stream_modulation_img.lin.", "double_stream_modulation_img.linear.", 1)
-        if name.startswith("double_stream_modulation_txt.lin."):
-            return name.replace("double_stream_modulation_txt.lin.", "double_stream_modulation_txt.linear.", 1)
-        if name.startswith("single_stream_modulation.lin."):
-            return name.replace("single_stream_modulation.lin.", "single_stream_modulation.linear.", 1)
-        if name.startswith("img_in."):
-            return name.replace("img_in.", "x_embedder.", 1)
-        if name.startswith("txt_in."):
-            return name.replace("txt_in.", "context_embedder.", 1)
-        if name.startswith("time_in.in_layer."):
-            return name.replace(
-                "time_in.in_layer.",
-                "time_guidance_embed.timestep_embedder.linear_1.",
-                1,
-            )
-        if name.startswith("time_in.out_layer."):
-            return name.replace(
-                "time_in.out_layer.",
-                "time_guidance_embed.timestep_embedder.linear_2.",
-                1,
-            )
-        if name.startswith("final_layer.adaLN_modulation.1."):
-            return name.replace("final_layer.adaLN_modulation.1.", "norm_out.linear.", 1)
-        if name.startswith("final_layer.linear."):
-            return name.replace("final_layer.linear.", "proj_out.", 1)
-
-        if name.startswith("double_blocks."):
-            name = name.replace("double_blocks.", "transformer_blocks.", 1)
-            if ".img_attn.qkv." in name:
-                return name.replace(".img_attn.qkv.", ".attn.to_qkv.", 1)
-            if ".img_attn.proj." in name:
-                return name.replace(".img_attn.proj.", ".attn.to_out.0.", 1)
-            if name.endswith(".img_attn.norm.query_norm.scale"):
-                return name.replace(".img_attn.norm.query_norm.scale", ".attn.norm_q.weight", 1)
-            if name.endswith(".img_attn.norm.key_norm.scale"):
-                return name.replace(".img_attn.norm.key_norm.scale", ".attn.norm_k.weight", 1)
-            if ".txt_attn.qkv." in name:
-                return name.replace(".txt_attn.qkv.", ".attn.add_kv_proj.", 1)
-            if ".txt_attn.proj." in name:
-                return name.replace(".txt_attn.proj.", ".attn.to_add_out.", 1)
-            if name.endswith(".txt_attn.norm.query_norm.scale"):
-                return name.replace(".txt_attn.norm.query_norm.scale", ".attn.norm_added_q.weight", 1)
-            if name.endswith(".txt_attn.norm.key_norm.scale"):
-                return name.replace(".txt_attn.norm.key_norm.scale", ".attn.norm_added_k.weight", 1)
-            if ".img_mlp.0." in name:
-                return name.replace(".img_mlp.0.", ".ff.linear_in.", 1)
-            if ".img_mlp.2." in name:
-                return name.replace(".img_mlp.2.", ".ff.linear_out.", 1)
-            if ".txt_mlp.0." in name:
-                return name.replace(".txt_mlp.0.", ".ff_context.linear_in.", 1)
-            if ".txt_mlp.2." in name:
-                return name.replace(".txt_mlp.2.", ".ff_context.linear_out.", 1)
-            return None
-
-        if name.startswith("single_blocks."):
-            name = name.replace("single_blocks.", "single_transformer_blocks.", 1)
-            if ".linear1." in name:
-                return name.replace(".linear1.", ".attn.to_qkv_mlp_proj.", 1)
-            if ".linear2." in name:
-                return name.replace(".linear2.", ".attn.to_out.", 1)
-            if name.endswith(".norm.query_norm.scale"):
-                return name.replace(".norm.query_norm.scale", ".attn.norm_q.weight", 1)
-            if name.endswith(".norm.key_norm.scale"):
-                return name.replace(".norm.key_norm.scale", ".attn.norm_k.weight", 1)
-            return None
-
-        return None
-
     def _build_gguf_name_map(
         self,
         gguf_file: str,
+        model: nn.Module,
+        source: "ComponentSource",
         od_config: OmniDiffusionConfig,
     ) -> dict[str, str]:
         try:
@@ -441,14 +359,102 @@ class DiffusersPipelineLoader:
                 "GGUF support requires the 'gguf' package to be installed."
             ) from exc
 
-        mapper = self._get_gguf_name_mapper(od_config)
+        def resolve_model_type() -> str:
+            cfg = od_config.tf_model_config
+            model_type = None
+            if cfg is not None:
+                model_type = cfg.get("model_type")
+            if model_type:
+                return model_type
+            model_class = od_config.model_class_name or ""
+            if model_class.startswith("QwenImage"):
+                return "qwen_image"
+            if model_class.startswith("Flux2"):
+                return "flux"
+            raise ValueError("Cannot infer gguf model_type for diffusion model.")
+
+        def resolve_arch(model_type: str):
+            for key, value in gguf.MODEL_ARCH_NAMES.items():
+                if value == model_type:
+                    return key
+            raise RuntimeError(f"Unknown gguf model_type: {model_type}")
+
+        def resolve_num_layers(target_module: nn.Module) -> int:
+            if hasattr(target_module, "transformer_blocks"):
+                return len(getattr(target_module, "transformer_blocks"))
+            if hasattr(target_module, "double_blocks"):
+                return len(getattr(target_module, "double_blocks"))
+            cfg = od_config.tf_model_config
+            if cfg is not None:
+                for key in ("num_hidden_layers", "num_layers", "n_layers"):
+                    value = cfg.get(key)
+                    if isinstance(value, int) and value > 0:
+                        return value
+            raise ValueError("Cannot infer gguf num_layers for diffusion model.")
+
+        def get_target_module(root: nn.Module, prefix: str) -> nn.Module:
+            if not prefix:
+                return root
+            prefix = prefix.rstrip(".")
+            if hasattr(root, "get_submodule"):
+                return root.get_submodule(prefix)
+            current = root
+            for part in prefix.split("."):
+                current = getattr(current, part)
+            return current
+
+        def split_name(name: str) -> tuple[str, str]:
+            if name.endswith("_weight"):
+                return name[:-7], "weight"
+            if "." in name:
+                base, suffix = name.rsplit(".", 1)
+                return base, suffix
+            return name, ""
+
         reader = gguf.GGUFReader(gguf_file)
+        gguf_tensor_names = {tensor.name for tensor in reader.tensors}
+
+        model_type = resolve_model_type()
+        arch = resolve_arch(model_type)
+        target_module = get_target_module(model, source.prefix)
+        num_layers = resolve_num_layers(target_module)
+        name_map = gguf.get_tensor_name_map(arch, num_layers)
+
         gguf_to_model_map: dict[str, str] = {}
-        for tensor in reader.tensors:
-            mapped = mapper(tensor.name)
-            if mapped is None:
+        for name, _ in target_module.named_parameters():
+            base_name, suffix = split_name(name)
+            gguf_base = name_map.get_name(base_name)
+            if gguf_base is None:
                 continue
-            gguf_to_model_map[tensor.name] = mapped
+            candidates = []
+            if suffix:
+                candidates.append(f"{gguf_base}.{suffix}")
+                if suffix == "weight":
+                    candidates.append(f"{gguf_base}.scale")
+            else:
+                candidates.append(gguf_base)
+            gguf_name = next((c for c in candidates if c in gguf_tensor_names), None)
+            if gguf_name is None:
+                continue
+            gguf_to_model_map[gguf_name] = name
+
+        for name, _ in target_module.named_buffers():
+            base_name, suffix = split_name(name)
+            gguf_base = name_map.get_name(base_name)
+            if gguf_base is None:
+                continue
+            candidates = []
+            if suffix:
+                candidates.append(f"{gguf_base}.{suffix}")
+                if suffix == "weight":
+                    candidates.append(f"{gguf_base}.scale")
+            else:
+                candidates.append(gguf_base)
+            gguf_name = next((c for c in candidates if c in gguf_tensor_names), None)
+            if gguf_name is None:
+                continue
+            gguf_to_model_map[gguf_name] = name
+
         if not gguf_to_model_map:
             raise RuntimeError(
                 f"No GGUF tensors were mapped for model_class_name={od_config.model_class_name!r}."
@@ -458,6 +464,7 @@ class DiffusersPipelineLoader:
     def _get_gguf_weights_iterator(
         self,
         source: "ComponentSource",
+        model: nn.Module,
         od_config: OmniDiffusionConfig,
     ) -> Generator[tuple[str, torch.Tensor], None, None]:
         quant_config = od_config.quantization_config
@@ -465,7 +472,7 @@ class DiffusersPipelineLoader:
         if gguf_model is None:
             raise ValueError("GGUF quantization requires quantization_config.gguf_model")
         gguf_file = self._resolve_gguf_model_path(gguf_model, od_config.revision)
-        gguf_name_map = self._build_gguf_name_map(gguf_file, od_config)
+        gguf_name_map = self._build_gguf_name_map(gguf_file, model, source, od_config)
         weights_iter = gguf_quant_weights_iterator(gguf_file, gguf_name_map)
         return ((source.prefix + name, tensor) for (name, tensor) in weights_iter)
 
@@ -479,7 +486,7 @@ class DiffusersPipelineLoader:
 
         for source in sources:
             if self._is_transformer_source(source):
-                loaded |= model.load_weights(self._get_gguf_weights_iterator(source, od_config))
+                loaded |= model.load_weights(self._get_gguf_weights_iterator(source, model, od_config))
 
                 # Load any remaining float weights (e.g., non-quantized layers)
                 # from the base HF checkpoint while skipping already-loaded names.
