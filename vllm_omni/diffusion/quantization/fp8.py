@@ -43,7 +43,7 @@ class DiffusionFp8Config(DiffusionQuantizationConfig):
 
         # Create underlying vLLM FP8 config
         self._vllm_config = Fp8Config(
-            is_checkpoint_fp8_serialized=False,
+            is_checkpoint_fp8_serialized=False,  # Online quantization from BF16
             activation_scheme=activation_scheme,
             weight_block_size=weight_block_size,
             ignored_layers=ignored_layers,
