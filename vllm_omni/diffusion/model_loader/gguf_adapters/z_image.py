@@ -214,7 +214,12 @@ class ZImageGGUFAdapter(GGUFAdapter):
             return name, ""
 
         model_type = resolve_model_type()
-        arch = resolve_arch(model_type)
+        try:
+            arch = resolve_arch(model_type)
+        except RuntimeError:
+            # Fallback: some gguf versions may not register z_image arch.
+            # In that case, rely on direct tensor names from the GGUF file.
+            return {}
         target_module = get_target_module(self.model, self.source.prefix)
         num_layers = resolve_num_layers(target_module)
         name_map = gguf.get_tensor_name_map(arch, num_layers)
