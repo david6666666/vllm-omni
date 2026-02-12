@@ -16,6 +16,7 @@ class _MappedTensor:
     name: str
     tensor: Any
     tensor_type: Any
+    row_slice: slice | None = None
 
 
 class ZImageGGUFAdapter(GGUFAdapter):
@@ -48,22 +49,19 @@ class ZImageGGUFAdapter(GGUFAdapter):
         mapped: list[_MappedTensor] = []
 
         for tensor in reader.tensors:
-            mapped_name = gguf_name_map.get(tensor.name)
-            if mapped_name is None:
-                mapped_name = self._normalize_name(tensor.name)
-            linear_qweight = self._resolve_linear_qweight(mapped_name, param_names)
-            if mapped_name not in allowed_names and linear_qweight is None:
-                continue
-            if linear_qweight is None and tensor.tensor_type.name not in ("F32", "BF16", "F16"):
-                # Skip quantized tensors that map to non-quantized parameters.
-                continue
-            mapped.append(
-                _MappedTensor(
-                    name=mapped_name,
-                    tensor=tensor,
-                    tensor_type=tensor.tensor_type,
+            for mapped_tensor in self._map_tensor_name(tensor, gguf_name_map):
+                linear_qweight = self._resolve_linear_qweight(
+                    mapped_tensor.name, param_names
                 )
-            )
+                if mapped_tensor.name not in allowed_names and linear_qweight is None:
+                    continue
+                if (
+                    linear_qweight is None
+                    and tensor.tensor_type.name not in ("F32", "BF16", "F16")
+                ):
+                    # Skip quantized tensors that map to non-quantized parameters.
+                    continue
+                mapped.append(mapped_tensor)
 
         if not mapped:
             raise RuntimeError(
@@ -80,6 +78,8 @@ class ZImageGGUFAdapter(GGUFAdapter):
 
         for item in mapped:
             weight = item.tensor.data
+            if item.row_slice is not None:
+                weight = weight[item.row_slice]
             weight_type = item.tensor_type
             linear_qweight = self._resolve_linear_qweight(item.name, param_names)
             if linear_qweight is not None:
@@ -105,6 +105,72 @@ class ZImageGGUFAdapter(GGUFAdapter):
         if ".to_out.0." in name:
             name = name.replace(".to_out.0.", ".to_out.")
         return name
+
+    def _get_patch_key(self) -> str:
+        prefix = getattr(self.source, "prefix", "")
+        target = self.model.get_submodule(prefix.rstrip(".")) if prefix else self.model
+        if hasattr(target, "all_x_embedder"):
+            keys = list(getattr(target, "all_x_embedder").keys())
+            if "2-1" in keys:
+                return "2-1"
+            if keys:
+                return sorted(keys)[0]
+        return "2-1"
+
+    def _apply_zimage_renames(self, name: str) -> str:
+        if name.startswith("model.diffusion_model."):
+            name = name.replace("model.diffusion_model.", "", 1)
+
+        patch_key = self._get_patch_key()
+        if name.startswith("x_embedder.") and not name.startswith("all_x_embedder."):
+            name = name.replace("x_embedder.", f"all_x_embedder.{patch_key}.", 1)
+        if name.startswith("final_layer.") and not name.startswith("all_final_layer."):
+            name = name.replace("final_layer.", f"all_final_layer.{patch_key}.", 1)
+
+        name = name.replace(".attention.out.bias", ".attention.to_out.0.bias")
+        name = name.replace(".attention.out.weight", ".attention.to_out.0.weight")
+        name = name.replace(".attention.k_norm.weight", ".attention.norm_k.weight")
+        name = name.replace(".attention.q_norm.weight", ".attention.norm_q.weight")
+        return name
+
+    def _map_tensor_name(self, tensor, gguf_name_map: dict[str, str]) -> list[_MappedTensor]:
+        name = gguf_name_map.get(tensor.name)
+        if name is None:
+            name = self._normalize_name(tensor.name)
+        name = self._apply_zimage_renames(name)
+
+        if ".attention.qkv.weight" in name:
+            weight = tensor.data
+            dim0 = weight.shape[0]
+            split = dim0 // 3
+            return [
+                _MappedTensor(
+                    name=name.replace(".attention.qkv.weight", ".attention.to_q.weight"),
+                    tensor=tensor,
+                    tensor_type=tensor.tensor_type,
+                    row_slice=slice(0, split),
+                ),
+                _MappedTensor(
+                    name=name.replace(".attention.qkv.weight", ".attention.to_k.weight"),
+                    tensor=tensor,
+                    tensor_type=tensor.tensor_type,
+                    row_slice=slice(split, 2 * split),
+                ),
+                _MappedTensor(
+                    name=name.replace(".attention.qkv.weight", ".attention.to_v.weight"),
+                    tensor=tensor,
+                    tensor_type=tensor.tensor_type,
+                    row_slice=slice(2 * split, 3 * split),
+                ),
+            ]
+
+        return [
+            _MappedTensor(
+                name=name,
+                tensor=tensor,
+                tensor_type=tensor.tensor_type,
+            )
+        ]
 
     def _build_allowed_names(self) -> set[str]:
         prefix = getattr(self.source, "prefix", "")
