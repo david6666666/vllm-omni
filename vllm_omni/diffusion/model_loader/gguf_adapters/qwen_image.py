@@ -51,10 +51,11 @@ class QwenImageGGUFAdapter(GGUFAdapter):
             mapped_name = gguf_name_map.get(tensor.name)
             if mapped_name is None:
                 mapped_name = self._normalize_name(tensor.name)
-            if (
-                mapped_name not in allowed_names
-                and self._resolve_linear_qweight(mapped_name, param_names) is None
-            ):
+            linear_qweight = self._resolve_linear_qweight(mapped_name, param_names)
+            if mapped_name not in allowed_names and linear_qweight is None:
+                continue
+            if linear_qweight is None and tensor.tensor_type.name not in ("F32", "BF16", "F16"):
+                # Skip quantized tensors that map to non-quantized parameters.
                 continue
             mapped.append(
                 _MappedTensor(
