@@ -130,10 +130,7 @@ def parse_args() -> argparse.Namespace:
         "--gguf-model",
         type=str,
         default=None,
-        help=(
-            "GGUF file path or HF reference for transformer weights. "
-            "Required when --quantization gguf is set."
-        ),
+        help=("GGUF file path or HF reference for transformer weights. Required when --quantization gguf is set."),
     )
     parser.add_argument(
         "--ignored-layers",

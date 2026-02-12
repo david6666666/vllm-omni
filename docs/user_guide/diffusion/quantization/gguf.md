@@ -1,4 +1,4 @@
-# Diffusion Quantization Design: Native GGUF
+# GGUF Quantization
 
 ## Goals
 1. Reuse vLLM quantization configs and weight loaders as much as possible.
@@ -107,10 +107,6 @@ ops.ggml_dequantize
   v
 x @ weight.T
 ```
-
-Notes:
-1. GGUF linear inputs are flattened to 2D inside `GGUFLinearMethod.apply` and reshaped back.
-2. As of 2026-02-10 in this branch, `_fused_mul_mat_gguf` is forced to the dequantize path.
 
 ## GGUF Weight Loading Path (Transformer-Only)
 1. `DiffusersPipelineLoader.load_model` detects `quantization_config.method == "gguf"`.
