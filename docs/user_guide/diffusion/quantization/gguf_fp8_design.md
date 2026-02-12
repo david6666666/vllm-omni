@@ -1,6 +1,6 @@
 ﻿# Diffusion Quantization Design: Native GGUF + FP8 (Online and Native)
 
-Date: 2026-02-11
+Date: 2026-02-12
 
 ## Goals
 1. Reuse vLLM quantization configs and weight loaders as much as possible.
