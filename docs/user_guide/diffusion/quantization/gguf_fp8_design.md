@@ -166,6 +166,7 @@ Notes:
 Adapter paths:
 - Base: `vllm_omni/diffusion/model_loader/gguf_adapters/base.py`
 - Qwen-Image: `vllm_omni/diffusion/model_loader/gguf_adapters/qwen_image.py`
+- Z-Image: `vllm_omni/diffusion/model_loader/gguf_adapters/z_image.py`
 - Flux2-Klein: `vllm_omni/diffusion/model_loader/gguf_adapters/flux2_klein.py`
 
 ## Flux2-Klein GGUF Mapping (Key Rules)
