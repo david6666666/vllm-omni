@@ -37,9 +37,7 @@ class QwenImageGGUFAdapter(GGUFAdapter):
         try:
             import gguf  # type: ignore
         except Exception as exc:  # pragma: no cover - dependency error
-            raise RuntimeError(
-                "GGUF support requires the 'gguf' package to be installed."
-            ) from exc
+            raise RuntimeError("GGUF support requires the 'gguf' package to be installed.") from exc
 
         reader = gguf.GGUFReader(self.gguf_file)
         gguf_name_map = self._build_gguf_name_map(reader)
@@ -161,9 +159,7 @@ class QwenImageGGUFAdapter(GGUFAdapter):
         try:
             import gguf  # type: ignore
         except Exception as exc:  # pragma: no cover - dependency error
-            raise RuntimeError(
-                "GGUF support requires the 'gguf' package to be installed."
-            ) from exc
+            raise RuntimeError("GGUF support requires the 'gguf' package to be installed.") from exc
 
         gguf_tensor_names = {tensor.name for tensor in reader.tensors}
 

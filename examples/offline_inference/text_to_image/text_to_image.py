@@ -124,10 +124,7 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         choices=["fp8", "gguf"],
-        help="Quantization method for the transformer. "
-        "Options: 'fp8' (FP8 W8A8 on Ada/Hopper, weight-only on older GPUs), "
-        "'gguf' (load transformer weights from a GGUF file). "
-        "Default: None (no quantization, uses BF16).",
+        help=("GGUF file path or HF reference for transformer weights. Required when --quantization gguf is set."),
     )
     parser.add_argument(
         "--gguf-model",

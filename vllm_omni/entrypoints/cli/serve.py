@@ -168,7 +168,7 @@ class OmniServeCommand(CLISubcommand):
             default=None,
             help=(
                 "JSON string for diffusion quantization_config. "
-                "Example: '{\"method\":\"gguf\",\"gguf_model\":\"/path/to/model.gguf\"}'."
+                'Example: \'{"method":"gguf","gguf_model":"/path/to/model.gguf"}\'.'
             ),
         )
 

@@ -474,7 +474,6 @@ class OmniDiffusionConfig:
         if self.quantization is not None or self.quantization_config is not None:
             from vllm_omni.diffusion.quantization import (
                 DiffusionQuantizationConfig,
-                get_diffusion_quant_config,
             )
 
             # Handle dict or DictConfig (from OmegaConf) - use Mapping for broader compatibility

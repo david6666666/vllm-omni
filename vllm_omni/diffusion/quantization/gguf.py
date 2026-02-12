@@ -2,18 +2,18 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """GGUF quantization config for diffusion transformers."""
 
-import torch
 import gguf
+import torch
+from vllm import _custom_ops as ops
 from vllm.model_executor.layers.quantization.gguf import (
+    UNQUANTIZED_TYPES,
     GGUFConfig,
     GGUFLinearMethod,
-    UNQUANTIZED_TYPES,
-    is_layer_skipped_gguf,
     LinearBase,
     QuantizeMethodBase,
     UnquantizedLinearMethod,
+    is_layer_skipped_gguf,
 )
-from vllm import _custom_ops as ops
 
 from .base import DiffusionQuantizationConfig
 
@@ -47,11 +47,7 @@ class DiffusionGGUFLinearMethod(GGUFLinearMethod):
             for idx in shard_id:
                 start, end, offset = layer.qweight.shard_offset_map[idx]
                 qweight_type = layer.qweight_type.shard_weight_type[idx]
-                result.append(
-                    dequant_gemm_gguf(
-                        x, qweight[start:end, :offset].contiguous(), qweight_type
-                    )
-                )
+                result.append(dequant_gemm_gguf(x, qweight[start:end, :offset].contiguous(), qweight_type))
             out = torch.cat(result, axis=-1)
         else:
             qweight = layer.qweight
@@ -63,13 +59,9 @@ class DiffusionGGUFLinearMethod(GGUFLinearMethod):
 
 
 class _GGUFConfig(GGUFConfig):
-    def get_quant_method(
-        self, layer: torch.nn.Module, prefix: str
-    ) -> "QuantizeMethodBase":
+    def get_quant_method(self, layer: torch.nn.Module, prefix: str) -> "QuantizeMethodBase":
         if isinstance(layer, LinearBase):
-            if is_layer_skipped_gguf(
-                prefix, self.unquantized_modules, self.packed_modules_mapping
-            ):
+            if is_layer_skipped_gguf(prefix, self.unquantized_modules, self.packed_modules_mapping):
                 return UnquantizedLinearMethod()
             return DiffusionGGUFLinearMethod(self)
         return None

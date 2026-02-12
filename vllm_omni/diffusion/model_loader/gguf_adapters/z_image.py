@@ -38,9 +38,7 @@ class ZImageGGUFAdapter(GGUFAdapter):
         try:
             import gguf  # type: ignore
         except Exception as exc:  # pragma: no cover - dependency error
-            raise RuntimeError(
-                "GGUF support requires the 'gguf' package to be installed."
-            ) from exc
+            raise RuntimeError("GGUF support requires the 'gguf' package to be installed.") from exc
 
         reader = gguf.GGUFReader(self.gguf_file)
         gguf_name_map = self._build_gguf_name_map(reader)
@@ -50,23 +48,17 @@ class ZImageGGUFAdapter(GGUFAdapter):
 
         for tensor in reader.tensors:
             for mapped_tensor in self._map_tensor_name(tensor, gguf_name_map):
-                linear_qweight = self._resolve_linear_qweight(
-                    mapped_tensor.name, param_names
-                )
+                linear_qweight = self._resolve_linear_qweight(mapped_tensor.name, param_names)
                 if mapped_tensor.name not in allowed_names and linear_qweight is None:
                     continue
-                if (
-                    linear_qweight is None
-                    and tensor.tensor_type.name not in ("F32", "BF16", "F16")
-                ):
+                if linear_qweight is None and tensor.tensor_type.name not in ("F32", "BF16", "F16"):
                     # Skip quantized tensors that map to non-quantized parameters.
                     continue
                 mapped.append(mapped_tensor)
 
         if not mapped:
             raise RuntimeError(
-                "No GGUF tensors were mapped for Z-Image GGUF loader. "
-                "Please verify the GGUF file and model structure."
+                "No GGUF tensors were mapped for Z-Image GGUF loader. Please verify the GGUF file and model structure."
             )
 
         for item in mapped:
@@ -228,9 +220,7 @@ class ZImageGGUFAdapter(GGUFAdapter):
         try:
             import gguf  # type: ignore
         except Exception as exc:  # pragma: no cover - dependency error
-            raise RuntimeError(
-                "GGUF support requires the 'gguf' package to be installed."
-            ) from exc
+            raise RuntimeError("GGUF support requires the 'gguf' package to be installed.") from exc
 
         gguf_tensor_names = {tensor.name for tensor in reader.tensors}
 

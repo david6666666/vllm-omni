@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import cast
 
 import torch
-from torch import nn
 from huggingface_hub import hf_hub_download
+from torch import nn
 from vllm.config import ModelConfig
 from vllm.config.load import LoadConfig
 from vllm.logger import init_logger
@@ -377,9 +377,7 @@ class DiffusersPipelineLoader:
                 loadable_names = loadable_names or self._get_model_loadable_names(model)
                 hf_iter = self._get_weights_iterator(source)
                 hf_iter = (
-                    (name, tensor)
-                    for (name, tensor) in hf_iter
-                    if name in loadable_names and name not in loaded
+                    (name, tensor) for (name, tensor) in hf_iter if name in loadable_names and name not in loaded
                 )
                 loaded |= model.load_weights(hf_iter)
             else:

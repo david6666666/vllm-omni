@@ -30,9 +30,7 @@ class GGUFAdapter:
         try:
             import gguf  # type: ignore
         except Exception as exc:  # pragma: no cover - dependency error
-            raise RuntimeError(
-                "GGUF support requires the 'gguf' package to be installed."
-            ) from exc
+            raise RuntimeError("GGUF support requires the 'gguf' package to be installed.") from exc
 
         def resolve_model_type() -> str:
             cfg = self.od_config.tf_model_config
@@ -131,7 +129,5 @@ class GGUFAdapter:
             gguf_to_model_map[gguf_name] = name
 
         if not gguf_to_model_map:
-            raise RuntimeError(
-                f"No GGUF tensors were mapped for model_class_name={self.od_config.model_class_name!r}."
-            )
+            raise RuntimeError(f"No GGUF tensors were mapped for model_class_name={self.od_config.model_class_name!r}.")
         return gguf_to_model_map
