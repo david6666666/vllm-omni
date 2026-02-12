@@ -1,7 +1,5 @@
 # Diffusion Quantization Design: Native GGUF
 
-Date: 2026-02-12
-
 ## Goals
 1. Reuse vLLM quantization configs and weight loaders as much as possible.
 2. Add native GGUF support to diffusion transformers without changing model definitions.
@@ -134,50 +132,6 @@ Adapter paths:
 - Z-Image: `vllm_omni/diffusion/model_loader/gguf_adapters/z_image.py`
 - Flux2-Klein: `vllm_omni/diffusion/model_loader/gguf_adapters/flux2_klein.py`
 
-## Flux2-Klein GGUF Mapping (Key Rules)
-1. **Core rename (diffusers-compatible)**:
-   - `img_in` -> `x_embedder`
-   - `txt_in` -> `context_embedder`
-   - `time_in.*` -> `time_guidance_embed.timestep_embedder.*`
-   - `guidance_in.*` -> `time_guidance_embed.guidance_embedder.*`
-   - `double_stream_modulation_*` -> `double_stream_modulation_*.linear`
-   - `single_stream_modulation.lin` -> `single_stream_modulation.linear`
-   - `final_layer.linear` -> `proj_out`
-2. **Double blocks (img/txt)**:
-   - `double_blocks.{i}.img_attn.qkv.weight`
-     -> `transformer_blocks.{i}.attn.to_q/to_k/to_v`
-   - `double_blocks.{i}.txt_attn.qkv.weight`
-     -> `transformer_blocks.{i}.attn.add_q_proj/add_k_proj/add_v_proj`
-   - Other mappings:
-     - `img_attn.norm.query_norm` -> `attn.norm_q`
-     - `img_attn.norm.key_norm` -> `attn.norm_k`
-     - `img_attn.proj` -> `attn.to_out.0`
-     - `img_mlp.0` -> `ff.linear_in`
-     - `img_mlp.2` -> `ff.linear_out`
-     - `txt_attn.norm.query_norm` -> `attn.norm_added_q`
-     - `txt_attn.norm.key_norm` -> `attn.norm_added_k`
-     - `txt_attn.proj` -> `attn.to_add_out`
-     - `txt_mlp.0` -> `ff_context.linear_in`
-     - `txt_mlp.2` -> `ff_context.linear_out`
-3. **Single blocks**:
-   - `single_blocks.{i}.linear1` -> `single_transformer_blocks.{i}.attn.to_qkv_mlp_proj`
-   - `single_blocks.{i}.linear2` -> `single_transformer_blocks.{i}.attn.to_out`
-   - `single_blocks.{i}.norm.query_norm` -> `single_transformer_blocks.{i}.attn.norm_q`
-   - `single_blocks.{i}.norm.key_norm` -> `single_transformer_blocks.{i}.attn.norm_k`
-4. **AdaLN swap**:
-   - `final_layer.adaLN_modulation.1.weight` -> `norm_out.linear.weight` with (shift, scale) swapped.
-
-## Flux2-Klein GGUF Loader Logic
-1. **Iterator flow**:
-   - Read GGUF tensors via `gguf.GGUFReader`.
-   - Apply Flux2-Klein mapping rules to produce diffusers-style names.
-   - For QKV tensors, split along dim0 into Q/K/V shards.
-2. **Linear weights go to `qweight`** (both quantized and BF16/F16):
-   - Always emit `qweight_type` for linear weights.
-   - Use shard names (`to_q.qweight`, `to_k.qweight`, `to_v.qweight`) so vLLM can reassemble into `to_qkv.qweight`.
-3. **Non-linear weights** (norm/bias/scale) keep `.weight`/`.bias` names.
-4. **Remaining HF weights** are loaded after GGUF to fill gaps.
-
 ## User Usage (Offline)
 
 ### Baseline BF16
@@ -235,8 +189,3 @@ curl -X POST http://localhost:8000/v1/images/generations \
     "num_inference_steps": 4
   }'
 ```
-
-## Validation Checklist
-1. Fix the date in logs and docs for comparisons.
-2. Use the same prompt, size, steps, and seed for BF16 vs GGUF comparisons.
-3. Expect accuracy differences for Q8_0 GGUF; verify mapping with F16/BF16 GGUF if needed.
