@@ -1,23 +1,23 @@
-﻿# Diffusion Quantization Design: Native GGUF + FP8 (Online and Native)
+# Diffusion Quantization Design: Native GGUF
 
 Date: 2026-02-12
 
 ## Goals
 1. Reuse vLLM quantization configs and weight loaders as much as possible.
-2. Add native GGUF and FP8 support to diffusion transformers without changing model definitions.
+2. Add native GGUF support to diffusion transformers without changing model definitions.
 3. Keep user-facing knobs minimal and consistent across offline and online flows.
 
 ## Scope
-1. Models: Qwen-Image and Flux2-klein are first-class targets.
+1. Models: Qwen-Image, Z-Image, and Flux2-klein.
 2. Components: diffusion transformer weights, loader paths, and quantization configs.
-3. Modes: native GGUF, online FP8, native FP8 (pre-serialized FP8 checkpoint).
+3. Modes: native GGUF (transformer-only weights).
 
 ## Architecture Overview
 1. `OmniDiffusionConfig` accepts `quantization` or `quantization_config`.
-2. Diffusion quantization wrappers (`DiffusionGgufConfig`, `DiffusionFp8Config`) produce vLLM `QuantizationConfig` objects for linear layers.
+2. Diffusion quantization wrapper (`DiffusionGgufConfig`) produces vLLM `QuantizationConfig` objects for linear layers.
 3. `DiffusersPipelineLoader` branches on quantization method and loads either HF weights or GGUF weights for the transformer.
 4. GGUF transformer loading is routed through model-specific adapters (e.g., Flux2Klein).
-4. vLLM GGUF path uses `GGUFConfig` and `GGUFLinearMethod` for matmul; FP8 uses `Fp8Config` (online) or `is_checkpoint_fp8_serialized` for native FP8.
+5. vLLM GGUF path uses `GGUFConfig` and `GGUFLinearMethod` for matmul.
 
 ## Call Chain (Offline)
 ```
@@ -39,7 +39,7 @@ DiffusionModelRunner
 DiffusersPipelineLoader
   |
   v
-Pipeline.forward (Flux2/Qwen)
+Pipeline.forward (Flux2/Qwen/Z-Image)
   |
   v
 DiffusionEngine
@@ -83,13 +83,10 @@ Client
 
 ## Call Chain (GGUF Operator Path)
 ```
-Pipeline.forward (Flux2/Qwen)
+Pipeline.forward (Flux2/Qwen/Z-Image)
   |
   v
 Transformer blocks
-  |
-  v
-Flux2Attention / Flux2ParallelSelfAttention
   |
   v
 QKVParallelLinear / ColumnParallelLinear / RowParallelLinear
@@ -117,51 +114,19 @@ Notes:
 1. GGUF linear inputs are flattened to 2D inside `GGUFLinearMethod.apply` and reshaped back.
 2. As of 2026-02-10 in this branch, `_fused_mul_mat_gguf` is forced to the dequantize path.
 
-## Call Chain (FP8 Operator Path)
-```
-Pipeline.forward (Flux2/Qwen)
-  |
-  v
-Transformer blocks
-  |
-  v
-QKVParallelLinear / ColumnParallelLinear / RowParallelLinear
-  |
-  v
-LinearBase.forward
-  |
-  v
-QuantMethod.apply (Fp8LinearMethod.apply or Fp8OnlineLinearMethod.apply)
-  |
-  +--> apply_fp8_marlin_linear (weight-only path on older GPUs)
-  |
-  +--> W8A8BlockFp8LinearOp.apply (block quant path)
-  |
-  +--> fp8_linear.apply_weights
-          |
-          v
-          init_fp8_linear_kernel
-            |
-            v
-          FlashInferFP8ScaledMMLinearKernel / CutlassFP8ScaledMMLinearKernel /
-          Torch FP8 ScaledMM kernels
-```
-
-Notes:
-1. Online FP8 differs at load time; runtime operator path matches native FP8.
-2. The kernel selection is platform and capability dependent.
-
 ## GGUF Weight Loading Path (Transformer-Only)
 1. `DiffusersPipelineLoader.load_model` detects `quantization_config.method == "gguf"`.
 2. `gguf_model` is resolved as one of: local file, URL, `repo/file.gguf`, or `repo:quant_type`.
 3. GGUF weights are routed through adapters in `vllm_omni/diffusion/model_loader/gguf_adapters/`.
-4. Name mapping is applied per-architecture (Qwen-Image, Flux2Klein).
-4. GGUF weights are loaded into transformer modules, remaining non-transformer weights come from the HF checkpoint.
+4. Name mapping is applied per-architecture (Qwen-Image, Z-Image, Flux2Klein).
+5. GGUF weights are loaded into transformer modules, remaining non-transformer weights come from the HF checkpoint.
 
 ## GGUF Adapter Design
 1. `GGUFAdapter` (base) implements default gguf-py tensor name mapping.
 2. `Flux2KleinGGUFAdapter` implements Flux2-Klein remapping + qkv split + adaLN swap.
-3. `get_gguf_adapter(...)` selects the adapter by model class/config and returns an iterator of `(name, tensor)`.
+3. `QwenImageGGUFAdapter` implements Qwen-Image qkv shard handling and linear qweight routing.
+4. `ZImageGGUFAdapter` implements Z-Image qkv + ffn shard handling and linear qweight routing.
+5. `get_gguf_adapter(...)` selects the adapter by model class/config and returns an iterator of `(name, tensor)`.
 
 Adapter paths:
 - Base: `vllm_omni/diffusion/model_loader/gguf_adapters/base.py`
@@ -213,10 +178,6 @@ Adapter paths:
 3. **Non-linear weights** (norm/bias/scale) keep `.weight`/`.bias` names.
 4. **Remaining HF weights** are loaded after GGUF to fill gaps.
 
-## FP8 Loading Path
-1. Online FP8: `quantization="fp8"` or `quantization_config={"method":"fp8", "ignored_layers": [...]}`.
-2. Native FP8: `quantization_config={"method":"fp8", "is_checkpoint_fp8_serialized": True}` to load an FP8-serialized checkpoint.
-
 ## User Usage (Offline)
 
 ### Baseline BF16
@@ -253,42 +214,7 @@ Notes for GGUF:
 1. Many GGUF repos do not ship `model_index.json` and configs. Use the base repo for `--model` and only pass the GGUF file via `--gguf-model`.
 2. `gguf_model` supports local path, URL, `repo/file.gguf`, or `repo:quant_type`.
 
-### Online FP8 (Runtime Quantization)
-```bash
-python examples/offline_inference/text_to_image/text_to_image.py \
-  --model Qwen/Qwen-Image \
-  --quantization fp8 \
-  --prompt "a cup of coffee on the table" \
-  --height 1024 \
-  --width 1024
-```
-
-### Native FP8 (Serialized Checkpoint)
-Use the Python API to pass `is_checkpoint_fp8_serialized`.
-```python
-from vllm_omni import Omni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
-
-omni = Omni(
-    model="/path/to/fp8-checkpoint",
-    quantization_config={
-        "method": "fp8",
-        "is_checkpoint_fp8_serialized": True,
-    },
-)
-
-outputs = omni.generate(
-    "a cup of coffee on the table",
-    OmniDiffusionSamplingParams(num_inference_steps=4),
-)
-```
-
 ## User Usage (Online)
-
-### Start Server (Online FP8)
-```bash
-vllm serve Qwen/Qwen-Image --omni --port 8000 --quantization fp8
-```
 
 ### Start Server (Native GGUF via CLI)
 ```bash
@@ -296,14 +222,6 @@ vllm serve /workspace/models/black-forest-labs/FLUX.2-klein-4B \
   --omni \
   --port 8000 \
   --quantization-config '{"method":"gguf","gguf_model":"/workspace/models/unsloth/FLUX.2-klein-4B-GGUF/flux-2-klein-4b-Q8_0.gguf"}'
-```
-
-### Start Server (Native FP8 via CLI)
-```bash
-vllm serve /path/to/fp8-checkpoint \
-  --omni \
-  --port 8000 \
-  --quantization-config '{"method":"fp8","is_checkpoint_fp8_serialized":true}'
 ```
 
 ### Online Request (Images API)
@@ -320,5 +238,5 @@ curl -X POST http://localhost:8000/v1/images/generations \
 
 ## Validation Checklist
 1. Fix the date in logs and docs for comparisons.
-2. Use the same prompt, size, steps, and seed for BF16 vs GGUF/FP8 comparisons.
+2. Use the same prompt, size, steps, and seed for BF16 vs GGUF comparisons.
 3. Expect accuracy differences for Q8_0 GGUF; verify mapping with F16/BF16 GGUF if needed.

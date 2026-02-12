@@ -34,8 +34,7 @@ outputs = omni.generate(
 )
 ```
 
-2. **CLI**: pass `--quantization fp8` and optionally `--ignored-layers`. You can also pass
-`--quantization-config` as a JSON string for more control.
+2. **CLI**: pass `--quantization fp8` and optionally `--ignored-layers`.
 
 ```bash
 # All layers
@@ -46,14 +45,11 @@ python text_to_image.py --model <your-model> --quantization fp8 --ignored-layers
 
 # Online serving
 vllm serve <your-model> --omni --quantization fp8
-
-# Online serving with quantization-config (same effect, explicit JSON)
-vllm serve <your-model> --omni --quantization-config '{"method":"fp8","ignored_layers":["img_mlp"]}'
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `method` | str | `None` | Quantization method (`"fp8"`) |
+| `method` | str | — | Quantization method (`"fp8"`) |
 | `ignored_layers` | list[str] | `[]` | Layer name patterns to keep in BF16 |
 | `activation_scheme` | str | `"dynamic"` | `"dynamic"` (no calibration) or `"static"` |
 | `weight_block_size` | list[int] \| None | `None` | Block size for block-wise weight quantization |
@@ -79,4 +75,3 @@ omni = Omni(
     cache_config={"rel_l1_thresh": 0.2},
 )
 ```
-
