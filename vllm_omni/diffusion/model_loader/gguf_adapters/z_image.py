@@ -205,8 +205,14 @@ class ZImageGGUFAdapter(GGUFAdapter):
     def _resolve_linear_qweight(self, name: str, param_names: set[str]) -> str | None:
         if not name.endswith(".weight"):
             return None
+        candidate = name.replace(".weight", ".qweight")
+        if candidate in param_names:
+            return candidate
         if ".to_out.0." in name:
-            name = name.replace(".to_out.0.", ".to_out.")
+            alt_name = name.replace(".to_out.0.", ".to_out.")
+            candidate = alt_name.replace(".weight", ".qweight")
+            if candidate in param_names:
+                return candidate
         for shard_token in (
             ".to_q.",
             ".to_k.",
@@ -216,9 +222,6 @@ class ZImageGGUFAdapter(GGUFAdapter):
         ):
             if shard_token in name:
                 return name.replace(".weight", ".qweight")
-        candidate = name.replace(".weight", ".qweight")
-        if candidate in param_names:
-            return candidate
         return None
 
     def _build_gguf_name_map(self, reader) -> dict[str, str]:
