@@ -4,7 +4,6 @@ from __future__ import annotations
 from collections.abc import Generator
 
 import torch
-
 from vllm.model_executor.model_loader.weight_utils import gguf_quant_weights_iterator
 
 
