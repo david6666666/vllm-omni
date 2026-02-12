@@ -4,13 +4,23 @@
 
 import torch
 import gguf
-from vllm.model_executor.layers.quantization.gguf import GGUFConfig, GGUFLinearMethod, is_layer_skipped_gguf, LinearBase, QuantizeMethodBase, UnquantizedLinearMethod
+from vllm.model_executor.layers.quantization.gguf import (
+    GGUFConfig,
+    GGUFLinearMethod,
+    UNQUANTIZED_TYPES,
+    is_layer_skipped_gguf,
+    LinearBase,
+    QuantizeMethodBase,
+    UnquantizedLinearMethod,
+)
 from vllm import _custom_ops as ops
 
 from .base import DiffusionQuantizationConfig
 
 
 def dequant_gemm_gguf(x: torch.Tensor, qweight: torch.Tensor, qweight_type: int) -> torch.Tensor:
+    if qweight_type in UNQUANTIZED_TYPES:
+        return x @ qweight.T
     block_size, type_size = gguf.GGML_QUANT_SIZES[qweight_type]
     shape = (qweight.shape[0], qweight.shape[1] // type_size * block_size)
     weight = ops.ggml_dequantize(qweight, qweight_type, *shape, x.dtype)
