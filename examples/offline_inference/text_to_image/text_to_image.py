@@ -26,19 +26,19 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--prompt", default="a cup of coffee on the table", help="Text prompt for image generation.")
     parser.add_argument(
-        "--negative_prompt",
+        "--negative-prompt",
         default=None,
         help="negative prompt for classifier-free conditional guidance.",
     )
     parser.add_argument("--seed", type=int, default=142, help="Random seed for deterministic results.")
     parser.add_argument(
-        "--cfg_scale",
+        "--cfg-scale",
         type=float,
         default=4.0,
         help="True classifier-free guidance scale specific to Qwen-Image.",
     )
     parser.add_argument(
-        "--guidance_scale",
+        "--guidance-scale",
         type=float,
         default=1.0,
         help="Classifier-free guidance scale.",
@@ -52,19 +52,19 @@ def parse_args() -> argparse.Namespace:
         help="Path to save the generated image (PNG).",
     )
     parser.add_argument(
-        "--num_images_per_prompt",
+        "--num-images-per-prompt",
         type=int,
         default=1,
         help="Number of images to generate for the given prompt.",
     )
     parser.add_argument(
-        "--num_inference_steps",
+        "--num-inference-steps",
         type=int,
         default=50,
         help="Number of denoising steps for the diffusion sampler.",
     )
     parser.add_argument(
-        "--cache_backend",
+        "--cache-backend",
         type=str,
         default=None,
         choices=["cache_dit", "tea_cache"],
@@ -80,26 +80,26 @@ def parse_args() -> argparse.Namespace:
         help="Enable cache-dit summary logging after diffusion forward passes.",
     )
     parser.add_argument(
-        "--ulysses_degree",
+        "--ulysses-degree",
         type=int,
         default=1,
         help="Number of GPUs used for ulysses sequence parallelism.",
     )
     parser.add_argument(
-        "--ring_degree",
+        "--ring-degree",
         type=int,
         default=1,
         help="Number of GPUs used for ring sequence parallelism.",
     )
     parser.add_argument(
-        "--cfg_parallel_size",
+        "--cfg-parallel-size",
         type=int,
         default=1,
         choices=[1, 2],
         help="Number of GPUs used for classifier free guidance parallel size.",
     )
     parser.add_argument(
-        "--enforce_eager",
+        "--enforce-eager",
         action="store_true",
         help="Disable torch.compile and force eager execution.",
     )
@@ -120,10 +120,13 @@ def parse_args() -> argparse.Namespace:
         help="Number of ready layers (blocks) to keep on GPU during generation.",
     )
     parser.add_argument(
-        "--tensor_parallel_size",
-        type=int,
-        default=1,
-        help="Number of GPUs used for tensor parallelism (TP) inside the DiT.",
+        "--quantization",
+        type=str,
+        default=None,
+        choices=["fp8"],
+        help="Quantization method for the transformer. "
+        "Options: 'fp8' (FP8 W8A8 on Ada/Hopper, weight-only on older GPUs). "
+        "Default: None (no quantization, uses BF16).",
     )
     parser.add_argument(
         "--quantization",
@@ -154,14 +157,26 @@ def parse_args() -> argparse.Namespace:
         "Example: --ignored-layers 'add_kv_proj,to_add_out'",
     )
     parser.add_argument(
-        "--vae_use_slicing",
+        "--vae-use-slicing",
         action="store_true",
         help="Enable VAE slicing for memory optimization.",
     )
     parser.add_argument(
-        "--vae_use_tiling",
+        "--vae-use-tiling",
         action="store_true",
         help="Enable VAE tiling for memory optimization.",
+    )
+    parser.add_argument(
+        "--tensor-parallel-size",
+        type=int,
+        default=1,
+        help="Number of GPUs used for tensor parallelism (TP) inside the DiT.",
+    )
+    parser.add_argument(
+        "--vae-patch-parallel-size",
+        type=int,
+        default=1,
+        help="Number of ranks used for VAE patch/tile parallelism (decode/encode).",
     )
     return parser.parse_args()
 
@@ -205,6 +220,7 @@ def main():
         ring_degree=args.ring_degree,
         cfg_parallel_size=args.cfg_parallel_size,
         tensor_parallel_size=args.tensor_parallel_size,
+        vae_patch_parallel_size=args.vae_patch_parallel_size,
     )
 
     # Check if profiling is requested via environment variable
@@ -259,8 +275,10 @@ def main():
         print(f"  Ignored layers: {ignored_layers}")
     print(
         f"  Parallel configuration: tensor_parallel_size={args.tensor_parallel_size}, "
-        f"ulysses_degree={args.ulysses_degree}, ring_degree={args.ring_degree}, cfg_parallel_size={args.cfg_parallel_size}"
+        f"ulysses_degree={args.ulysses_degree}, ring_degree={args.ring_degree}, cfg_parallel_size={args.cfg_parallel_size}, "
+        f"vae_patch_parallel_size={args.vae_patch_parallel_size}"
     )
+    print(f"  CPU offload: {args.enable_cpu_offload}")
     print(f"  Image size: {args.width}x{args.height}")
     print(f"{'=' * 60}\n")
 
