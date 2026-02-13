@@ -63,6 +63,7 @@ class OmniEngineArgs(EngineArgs):
             If None, default processing is used.
         stage_connector_spec: Extra configuration for stage connector
         async_chunk: If set to True, perform async chunk
+        worker_type: Model Type, e.g., "ar" or "generation"
     """
 
     stage_id: int = 0
@@ -75,6 +76,7 @@ class OmniEngineArgs(EngineArgs):
     async_chunk: bool = False
     omni_kv_config: dict | None = None
     quantization_config: Any | None = None
+    worker_type: str | None = None
 
     def draw_hf_text_config(self, config_dict: dict) -> Qwen3OmniMoeTextConfig:
         # transformers' get_text_config method is used to get the text config from thinker_config.
@@ -130,6 +132,7 @@ class OmniEngineArgs(EngineArgs):
         config_dict["async_chunk"] = self.async_chunk
         config_dict["model_stage"] = self.model_stage
         config_dict["model_arch"] = self.model_arch
+        config_dict["worker_type"] = self.worker_type
         config_dict["engine_output_type"] = self.engine_output_type
         # Build stage_connector_config from stage_connector_spec
         stage_connector_config = {
@@ -166,6 +169,7 @@ class AsyncOmniEngineArgs(AsyncEngineArgs):
             Used to route outputs to appropriate processors (e.g., "image",
             "audio", "latents"). If None, output type is inferred.
         stage_connector_spec: Extra configuration for stage connector
+        worker_type: Model Type, e.g., "ar" or "generation"
     """
 
     stage_id: int = 0
@@ -178,6 +182,7 @@ class AsyncOmniEngineArgs(AsyncEngineArgs):
     async_chunk: bool = False
     omni_kv_config: dict | None = None
     quantization_config: Any | None = None
+    worker_type: str | None = None
 
     def draw_hf_text_config(self, config_dict: dict) -> Qwen3OmniMoeTextConfig:
         # transformers' get_text_config method is used to get the text config from thinker_config.
@@ -223,6 +228,7 @@ class AsyncOmniEngineArgs(AsyncEngineArgs):
         config_dict["async_chunk"] = self.async_chunk
         config_dict["model_stage"] = self.model_stage
         config_dict["model_arch"] = self.model_arch
+        config_dict["worker_type"] = self.worker_type
         config_dict["engine_output_type"] = self.engine_output_type
         stage_connector_config = {
             "name": self.stage_connector_spec.get("name", "SharedMemoryConnector"),
