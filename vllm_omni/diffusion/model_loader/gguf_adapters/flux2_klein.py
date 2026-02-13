@@ -2,26 +2,27 @@
 from __future__ import annotations
 
 from collections.abc import Generator
-from dataclasses import dataclass
-from typing import Any
 
 import numpy as np
 import torch
 
-from .base import GGUFAdapter
-
-
-@dataclass
-class _MappedTensor:
-    name: str
-    tensor: Any
-    tensor_type: Any
-    row_slice: slice | None = None
-    swap_scale_shift: bool = False
+from .base import GGUFAdapter, MappedTensor
 
 
 class Flux2KleinGGUFAdapter(GGUFAdapter):
     """GGUF adapter for Flux2-Klein models with qkv splitting and adaLN swap."""
+
+    _include_qkv_virtuals = True
+    _include_add_kv_proj_virtuals = True
+    _include_to_out_virtuals = True
+    _shard_tokens = (
+        ".to_q.",
+        ".to_k.",
+        ".to_v.",
+        ".add_q_proj.",
+        ".add_k_proj.",
+        ".add_v_proj.",
+    )
 
     @staticmethod
     def is_compatible(od_config, model: torch.nn.Module, source) -> bool:
@@ -47,7 +48,7 @@ class Flux2KleinGGUFAdapter(GGUFAdapter):
         reader = gguf.GGUFReader(self.gguf_file)
         allowed_names = self._build_allowed_names()
         param_names = self._build_param_names()
-        mapped: list[_MappedTensor] = []
+        mapped: list[MappedTensor] = []
 
         for tensor in reader.tensors:
             for mapped_tensor in self._map_tensor_name(tensor):
@@ -97,55 +98,7 @@ class Flux2KleinGGUFAdapter(GGUFAdapter):
 
             yield name, param
 
-    def _build_allowed_names(self) -> set[str]:
-        prefix = getattr(self.source, "prefix", "")
-        target = self.model.get_submodule(prefix.rstrip(".")) if prefix else self.model
-        allowed = {name for name, _ in target.named_parameters()}
-        allowed.update(name for name, _ in target.named_buffers())
-        for name in list(allowed):
-            if name.endswith(".qweight"):
-                allowed.add(name.replace(".qweight", ".weight"))
-            elif name.endswith(".qweight_type"):
-                allowed.add(name.replace(".qweight_type", ".weight"))
-
-        virtual_names = set()
-        for name in allowed:
-            if ".to_qkv." in name:
-                virtual_names.add(name.replace(".to_qkv.", ".to_q."))
-                virtual_names.add(name.replace(".to_qkv.", ".to_k."))
-                virtual_names.add(name.replace(".to_qkv.", ".to_v."))
-            if ".add_kv_proj." in name:
-                virtual_names.add(name.replace(".add_kv_proj.", ".add_q_proj."))
-                virtual_names.add(name.replace(".add_kv_proj.", ".add_k_proj."))
-                virtual_names.add(name.replace(".add_kv_proj.", ".add_v_proj."))
-        allowed.update(virtual_names)
-        return allowed
-
-    def _build_param_names(self) -> set[str]:
-        prefix = getattr(self.source, "prefix", "")
-        target = self.model.get_submodule(prefix.rstrip(".")) if prefix else self.model
-        return {name for name, _ in target.named_parameters()}
-
-    def _resolve_linear_qweight(self, name: str, param_names: set[str]) -> str | None:
-        if not name.endswith(".weight"):
-            return None
-        # Keep QKV shard names so load_weights can attach shard_id correctly.
-        for shard_token in (
-            ".to_q.",
-            ".to_k.",
-            ".to_v.",
-            ".add_q_proj.",
-            ".add_k_proj.",
-            ".add_v_proj.",
-        ):
-            if shard_token in name:
-                return name.replace(".weight", ".qweight")
-        candidate = name.replace(".weight", ".qweight")
-        if candidate in param_names:
-            return candidate
-        return None
-
-    def _map_tensor_name(self, tensor) -> list[_MappedTensor]:
+    def _map_tensor_name(self, tensor) -> list[MappedTensor]:
         name = tensor.name
 
         if name.startswith("double_blocks."):
@@ -154,7 +107,7 @@ class Flux2KleinGGUFAdapter(GGUFAdapter):
             return self._map_single_blocks(tensor)
         if name.startswith("final_layer.adaLN_modulation.1") and name.endswith(".weight"):
             return [
-                _MappedTensor(
+                MappedTensor(
                     name="norm_out.linear.weight",
                     tensor=tensor,
                     tensor_type=tensor.tensor_type,
@@ -166,14 +119,14 @@ class Flux2KleinGGUFAdapter(GGUFAdapter):
             name = name.replace(src, dst)
 
         return [
-            _MappedTensor(
+            MappedTensor(
                 name=name,
                 tensor=tensor,
                 tensor_type=tensor.tensor_type,
             )
         ]
 
-    def _map_double_blocks(self, tensor) -> list[_MappedTensor]:
+    def _map_double_blocks(self, tensor) -> list[MappedTensor]:
         name = tensor.name
         parts = name.split(".")
         block_idx = parts[1]
@@ -198,18 +151,18 @@ class Flux2KleinGGUFAdapter(GGUFAdapter):
             dim0 = weight.shape[0]
             split = dim0 // 3
             return [
-                _MappedTensor(q_name, tensor, tensor.tensor_type, slice(0, split)),
-                _MappedTensor(k_name, tensor, tensor.tensor_type, slice(split, 2 * split)),
-                _MappedTensor(v_name, tensor, tensor.tensor_type, slice(2 * split, 3 * split)),
+                MappedTensor(q_name, tensor, tensor.tensor_type, slice(0, split)),
+                MappedTensor(k_name, tensor, tensor.tensor_type, slice(split, 2 * split)),
+                MappedTensor(v_name, tensor, tensor.tensor_type, slice(2 * split, 3 * split)),
             ]
 
         mapped_name = _FLUX2_TRANSFORMER_DOUBLE_BLOCK_KEY_MAP.get(within_block_name)
         if mapped_name is None:
             return []
         target = f"transformer_blocks.{block_idx}.{mapped_name}.{param_type}"
-        return [_MappedTensor(target, tensor, tensor.tensor_type)]
+        return [MappedTensor(target, tensor, tensor.tensor_type)]
 
-    def _map_single_blocks(self, tensor) -> list[_MappedTensor]:
+    def _map_single_blocks(self, tensor) -> list[MappedTensor]:
         name = tensor.name
         parts = name.split(".")
         block_idx = parts[1]
@@ -222,7 +175,7 @@ class Flux2KleinGGUFAdapter(GGUFAdapter):
         if mapped_name is None:
             return []
         target = f"single_transformer_blocks.{block_idx}.{mapped_name}.{param_type}"
-        return [_MappedTensor(target, tensor, tensor.tensor_type)]
+        return [MappedTensor(target, tensor, tensor.tensor_type)]
 
 
 _FLUX2_TRANSFORMER_KEYS_RENAME_DICT = {

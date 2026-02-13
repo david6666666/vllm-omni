@@ -2,24 +2,27 @@
 from __future__ import annotations
 
 from collections.abc import Generator
-from dataclasses import dataclass
-from typing import Any
 
 import numpy as np
 import torch
 
-from .base import GGUFAdapter
-
-
-@dataclass
-class _MappedTensor:
-    name: str
-    tensor: Any
-    tensor_type: Any
+from .base import GGUFAdapter, MappedTensor
 
 
 class QwenImageGGUFAdapter(GGUFAdapter):
     """GGUF adapter for Qwen-Image models with QKV shard support."""
+
+    _include_qkv_virtuals = True
+    _include_add_kv_proj_virtuals = True
+    _include_to_out_virtuals = True
+    _shard_tokens = (
+        ".to_q.",
+        ".to_k.",
+        ".to_v.",
+        ".add_q_proj.",
+        ".add_k_proj.",
+        ".add_v_proj.",
+    )
 
     @staticmethod
     def is_compatible(od_config, model: torch.nn.Module, source) -> bool:
@@ -43,7 +46,7 @@ class QwenImageGGUFAdapter(GGUFAdapter):
         gguf_name_map = self._build_gguf_name_map(reader)
         allowed_names = self._build_allowed_names()
         param_names = self._build_param_names()
-        mapped: list[_MappedTensor] = []
+        mapped: list[MappedTensor] = []
 
         for tensor in reader.tensors:
             mapped_name = gguf_name_map.get(tensor.name)
@@ -56,7 +59,7 @@ class QwenImageGGUFAdapter(GGUFAdapter):
                 # Skip quantized tensors that map to non-quantized parameters.
                 continue
             mapped.append(
-                _MappedTensor(
+                MappedTensor(
                     name=mapped_name,
                     tensor=tensor,
                     tensor_type=tensor.tensor_type,
@@ -103,57 +106,6 @@ class QwenImageGGUFAdapter(GGUFAdapter):
         if ".to_out.0." in name:
             name = name.replace(".to_out.0.", ".to_out.")
         return name
-
-    def _build_allowed_names(self) -> set[str]:
-        prefix = getattr(self.source, "prefix", "")
-        target = self.model.get_submodule(prefix.rstrip(".")) if prefix else self.model
-        allowed = {name for name, _ in target.named_parameters()}
-        allowed.update(name for name, _ in target.named_buffers())
-        for name in list(allowed):
-            if name.endswith(".qweight"):
-                allowed.add(name.replace(".qweight", ".weight"))
-            elif name.endswith(".qweight_type"):
-                allowed.add(name.replace(".qweight_type", ".weight"))
-
-        virtual_names = set()
-        for name in allowed:
-            if ".to_qkv." in name:
-                virtual_names.add(name.replace(".to_qkv.", ".to_q."))
-                virtual_names.add(name.replace(".to_qkv.", ".to_k."))
-                virtual_names.add(name.replace(".to_qkv.", ".to_v."))
-            if ".add_kv_proj." in name:
-                virtual_names.add(name.replace(".add_kv_proj.", ".add_q_proj."))
-                virtual_names.add(name.replace(".add_kv_proj.", ".add_k_proj."))
-                virtual_names.add(name.replace(".add_kv_proj.", ".add_v_proj."))
-            if ".to_out." in name:
-                virtual_names.add(name.replace(".to_out.", ".to_out.0."))
-        allowed.update(virtual_names)
-        return allowed
-
-    def _build_param_names(self) -> set[str]:
-        prefix = getattr(self.source, "prefix", "")
-        target = self.model.get_submodule(prefix.rstrip(".")) if prefix else self.model
-        return {name for name, _ in target.named_parameters()}
-
-    def _resolve_linear_qweight(self, name: str, param_names: set[str]) -> str | None:
-        if not name.endswith(".weight"):
-            return None
-        if ".to_out.0." in name:
-            name = name.replace(".to_out.0.", ".to_out.")
-        for shard_token in (
-            ".to_q.",
-            ".to_k.",
-            ".to_v.",
-            ".add_q_proj.",
-            ".add_k_proj.",
-            ".add_v_proj.",
-        ):
-            if shard_token in name:
-                return name.replace(".weight", ".qweight")
-        candidate = name.replace(".weight", ".qweight")
-        if candidate in param_names:
-            return candidate
-        return None
 
     def _build_gguf_name_map(self, reader) -> dict[str, str]:
         try:

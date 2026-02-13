@@ -2,13 +2,31 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from dataclasses import dataclass
+from typing import Any
 
 import torch
 from vllm.model_executor.model_loader.weight_utils import gguf_quant_weights_iterator
 
 
+@dataclass
+class MappedTensor:
+    name: str
+    tensor: Any
+    tensor_type: Any
+    row_slice: slice | None = None
+    swap_scale_shift: bool = False
+
+
 class GGUFAdapter:
     """Default GGUF adapter using gguf-py's tensor name mapping."""
+
+    _include_qkv_virtuals: bool = False
+    _include_add_kv_proj_virtuals: bool = False
+    _include_to_out_virtuals: bool = False
+    _include_w13_virtuals: bool = False
+    _shard_tokens: tuple[str, ...] = ()
+    _prefer_exact_qweight: bool = True
 
     def __init__(self, gguf_file: str, model: torch.nn.Module, source, od_config) -> None:
         self.gguf_file = gguf_file
@@ -24,6 +42,63 @@ class GGUFAdapter:
     def weights_iterator(self) -> Generator[tuple[str, torch.Tensor], None, None]:
         name_map = self._build_gguf_name_map()
         return gguf_quant_weights_iterator(self.gguf_file, name_map)
+
+    def _get_target_module(self) -> torch.nn.Module:
+        prefix = getattr(self.source, "prefix", "")
+        return self.model.get_submodule(prefix.rstrip(".")) if prefix else self.model
+
+    def _build_allowed_names(self) -> set[str]:
+        target = self._get_target_module()
+        allowed = {name for name, _ in target.named_parameters()}
+        allowed.update(name for name, _ in target.named_buffers())
+        for name in list(allowed):
+            if name.endswith(".qweight"):
+                allowed.add(name.replace(".qweight", ".weight"))
+            elif name.endswith(".qweight_type"):
+                allowed.add(name.replace(".qweight_type", ".weight"))
+
+        virtual_names = set()
+        for name in allowed:
+            if self._include_qkv_virtuals and ".to_qkv." in name:
+                virtual_names.add(name.replace(".to_qkv.", ".to_q."))
+                virtual_names.add(name.replace(".to_qkv.", ".to_k."))
+                virtual_names.add(name.replace(".to_qkv.", ".to_v."))
+            if self._include_add_kv_proj_virtuals and ".add_kv_proj." in name:
+                virtual_names.add(name.replace(".add_kv_proj.", ".add_q_proj."))
+                virtual_names.add(name.replace(".add_kv_proj.", ".add_k_proj."))
+                virtual_names.add(name.replace(".add_kv_proj.", ".add_v_proj."))
+            if self._include_w13_virtuals and ".w13." in name:
+                virtual_names.add(name.replace(".w13.", ".w1."))
+                virtual_names.add(name.replace(".w13.", ".w3."))
+            if self._include_to_out_virtuals and ".to_out." in name:
+                virtual_names.add(name.replace(".to_out.", ".to_out.0."))
+        allowed.update(virtual_names)
+        return allowed
+
+    def _build_param_names(self) -> set[str]:
+        target = self._get_target_module()
+        return {name for name, _ in target.named_parameters()}
+
+    def _resolve_linear_qweight(self, name: str, param_names: set[str]) -> str | None:
+        if not name.endswith(".weight"):
+            return None
+        if self._prefer_exact_qweight:
+            candidate = name.replace(".weight", ".qweight")
+            if candidate in param_names:
+                return candidate
+        if ".to_out.0." in name:
+            alt_name = name.replace(".to_out.0.", ".to_out.")
+            candidate = alt_name.replace(".weight", ".qweight")
+            if candidate in param_names:
+                return candidate
+            name = alt_name
+        for shard_token in self._shard_tokens:
+            if shard_token in name:
+                return name.replace(".weight", ".qweight")
+        candidate = name.replace(".weight", ".qweight")
+        if candidate in param_names:
+            return candidate
+        return None
 
     def _build_gguf_name_map(self) -> dict[str, str]:
         try:
