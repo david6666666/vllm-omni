@@ -224,6 +224,10 @@ class ZImageGGUFAdapter(GGUFAdapter):
             return name, ""
 
         model_type = resolve_model_type()
+        if model_type in {"z_image", "zimage", "z-image"}:
+            # gguf-py does not register a Z-Image architecture, so we rely on
+            # direct tensor names from the GGUF file.
+            return {}
         try:
             arch = resolve_arch(model_type)
         except RuntimeError:
