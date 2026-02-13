@@ -6,11 +6,11 @@ import os
 import shutil
 import tempfile
 import time
-from urllib.parse import urlparse
-from urllib.request import urlopen
 from collections.abc import Generator, Iterable
 from pathlib import Path
 from typing import cast
+from urllib.parse import urlparse
+from urllib.request import urlopen
 
 import torch
 from huggingface_hub import hf_hub_download
