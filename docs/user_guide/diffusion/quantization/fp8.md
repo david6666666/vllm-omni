@@ -1,4 +1,4 @@
-﻿# FP8 Quantization
+# FP8 Quantization
 
 ## Overview
 

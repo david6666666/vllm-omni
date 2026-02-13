@@ -74,6 +74,7 @@ class OmniEngineArgs(EngineArgs):
     stage_connector_spec: dict[str, Any] = field(default_factory=dict)
     async_chunk: bool = False
     omni_kv_config: dict | None = None
+    quantization_config: Any | None = None
 
     def draw_hf_text_config(self, config_dict: dict) -> Qwen3OmniMoeTextConfig:
         # transformers' get_text_config method is used to get the text config from thinker_config.
@@ -176,6 +177,7 @@ class AsyncOmniEngineArgs(AsyncEngineArgs):
     stage_connector_spec: dict[str, Any] = field(default_factory=dict)
     async_chunk: bool = False
     omni_kv_config: dict | None = None
+    quantization_config: Any | None = None
 
     def draw_hf_text_config(self, config_dict: dict) -> Qwen3OmniMoeTextConfig:
         # transformers' get_text_config method is used to get the text config from thinker_config.

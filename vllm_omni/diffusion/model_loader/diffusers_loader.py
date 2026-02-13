@@ -3,7 +3,11 @@
 import dataclasses
 import glob
 import os
+import shutil
+import tempfile
 import time
+from urllib.parse import urlparse
+from urllib.request import urlopen
 from collections.abc import Generator, Iterable
 from pathlib import Path
 from typing import cast
@@ -292,7 +296,7 @@ class DiffusersPipelineLoader:
         # Normal path: DiffusionQuantizationConfig
         try:
             is_gguf = quant_config.get_name() == "gguf"
-        except Exception:
+        except AttributeError:
             # Fallback: if it carries gguf_model, treat as GGUF
             gguf_model = getattr(quant_config, "gguf_model", None)
             return bool(gguf_model)
@@ -320,7 +324,7 @@ class DiffusersPipelineLoader:
             return gguf_model
         # raw HTTPS link
         if gguf_model.startswith(("http://", "https://")) and gguf_model.endswith(".gguf"):
-            return hf_hub_download(url=gguf_model)
+            return self._download_raw_gguf_url(gguf_model)
         # repo_id/filename.gguf
         if "/" in gguf_model and gguf_model.endswith(".gguf"):
             repo_id, filename = gguf_model.rsplit("/", 1)
@@ -344,6 +348,43 @@ class DiffusersPipelineLoader:
             f"Unrecognized GGUF reference: {gguf_model!r} (expected local file, "
             "raw URL, <repo_id>/<filename>.gguf, or <repo_id>:<quant_type>)"
         )
+
+    def _download_raw_gguf_url(self, url: str) -> str:
+        parsed = urlparse(url)
+        filename = os.path.basename(parsed.path)
+        if not filename:
+            raise ValueError(f"Cannot infer GGUF filename from URL: {url!r}")
+
+        cache_dir = self.load_config.download_dir
+        if cache_dir is None:
+            cache_dir = os.path.join(
+                os.path.expanduser("~"),
+                ".cache",
+                "vllm-omni",
+                "gguf",
+            )
+        os.makedirs(cache_dir, exist_ok=True)
+        target_path = os.path.join(cache_dir, filename)
+        if os.path.exists(target_path):
+            return target_path
+
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            suffix=".gguf",
+            prefix="gguf-",
+            dir=cache_dir,
+        )
+        os.close(tmp_fd)
+        try:
+            with urlopen(url) as response, open(tmp_path, "wb") as out_file:
+                shutil.copyfileobj(response, out_file)
+            os.replace(tmp_path, target_path)
+        except Exception:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            raise
+        return target_path
 
     def _get_gguf_weights_iterator(
         self,

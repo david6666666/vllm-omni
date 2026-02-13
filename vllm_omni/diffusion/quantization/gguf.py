@@ -37,7 +37,7 @@ class DiffusionGGUFLinearMethod(GGUFLinearMethod):
         # Dequantize + GEMM path: torch.matmul multiplies over the last
         # dimension and broadcasts leading dimensions, so no 2D flattening
         # is required here.
-        shard_id = layer.qweight.shard_id
+        shard_id = getattr(layer.qweight, "shard_id", None)
 
         if shard_id:
             # dequantize shard weights respectively

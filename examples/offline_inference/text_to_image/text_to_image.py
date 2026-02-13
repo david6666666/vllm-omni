@@ -124,7 +124,11 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         choices=["fp8", "gguf"],
-        help=("GGUF file path or HF reference for transformer weights. Required when --quantization gguf is set."),
+        help=(
+            "Quantization method for the transformer. "
+            "Options: 'fp8' (FP8 W8A8), 'gguf' (GGUF quantized weights). "
+            "Default: None (no quantization, uses BF16)."
+        ),
     )
     parser.add_argument(
         "--gguf-model",

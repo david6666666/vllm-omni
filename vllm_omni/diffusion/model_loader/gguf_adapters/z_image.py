@@ -104,6 +104,8 @@ class ZImageGGUFAdapter(GGUFAdapter):
         if hasattr(target, "all_x_embedder"):
             keys = list(getattr(target, "all_x_embedder").keys())
             if "2-1" in keys:
+                # Default to the standard Z-Image Turbo patch/frequency config
+                # (patch_size=2, f_patch_size=1) when available.
                 return "2-1"
             if keys:
                 return sorted(keys)[0]
