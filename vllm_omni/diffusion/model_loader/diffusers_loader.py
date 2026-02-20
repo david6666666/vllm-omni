@@ -282,12 +282,9 @@ class DiffusersPipelineLoader:
         # We only enable strict check for non-quantized models
         # that have loaded weights tracking currently.
         if loaded_weights is not None:
-            _ = weights_to_load - loaded_weights
-        #     if weights_not_loaded:
-        #         raise ValueError(
-        #             "Following weights were not initialized from "
-        #             f"checkpoint: {weights_not_loaded}"
-        #         )
+            weights_not_loaded = weights_to_load - loaded_weights
+            if weights_not_loaded:
+                raise ValueError(f"Following weights were not initialized from checkpoint: {weights_not_loaded}")
 
     def _is_gguf_quantization(self, od_config: OmniDiffusionConfig) -> bool:
         quant_config = od_config.quantization_config
@@ -433,4 +430,8 @@ class DiffusersPipelineLoader:
                 loaded |= model.load_weights(hf_iter)
             else:
                 loaded |= model.load_weights(self._get_weights_iterator(source))
-        return loaded
+
+        weights_to_load = {name for name, _ in model.named_parameters()}
+        weights_not_loaded = weights_to_load - loaded
+        if weights_not_loaded:
+            raise ValueError(f"Following weights were not initialized from checkpoint: {weights_not_loaded}")
