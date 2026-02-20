@@ -3,16 +3,17 @@ from __future__ import annotations
 
 from collections.abc import Generator
 
+import gguf
 import numpy as np
 import torch
 
 from vllm.model_executor.models.utils import WeightsMapper
-from vllm.model_executor.model_loader.weight_utils import gguf_quant_weights_iterator
 
 from .base import GGUFAdapter, MappedTensor
 
 
 FLUX2_TRANSFORMER_KEYS_RENAME_DICT = {
+    "single_blocks.": "single_transformer_blocks.",
     # Image and text input projections
     "img_in": "x_embedder",
     "txt_in": "context_embedder",
@@ -35,6 +36,7 @@ FLUX2_TRANSFORMER_ADA_LAYER_NORM_KEY_MAP = {
 }
 
 FLUX2_TRANSFORMER_DOUBLE_BLOCK_KEY_MAP = {
+    "double_blocks.": "transformer_blocks.",
     # Handle fused QKV projections separately as we need to break into Q, K, V projections
     "img_attn.norm.query_norm": "attn.norm_q",
     "img_attn.norm.key_norm": "attn.norm_k",
@@ -47,7 +49,7 @@ FLUX2_TRANSFORMER_DOUBLE_BLOCK_KEY_MAP = {
     "txt_mlp.0": "ff_context.linear_in",
     "txt_mlp.2": "ff_context.linear_out",
     # Additional for fuse qkv
-    "img_attn.qkv": "attn.to_qkv_mlp_proj",
+    "img_attn.qkv": "attn.to_qkv",
     "txt_attn.qkv": "attn.add_kv_proj",
 }
 
@@ -57,6 +59,51 @@ FLUX2_TRANSFORMER_SINGLE_BLOCK_KEY_MAP = {
     "norm.query_norm": "attn.norm_q",
     "norm.key_norm": "attn.norm_k",
 }
+
+
+def gguf_quant_weights_iterator(
+    gguf_file: str, gguf_to_hf_name_map: dict[str, str]
+) -> Generator[tuple[str, torch.Tensor], None, None]:
+    """
+    Iterate over the quant weights in the model gguf files and convert
+    them to torch tensors.
+    Be careful of the order of yielding weight types and weights data,
+    we have to yield all weight types first before yielding any weights.
+    Otherwise it would cause issue when loading weights with for packed
+    layer with different quant types.
+    """
+
+    reader = gguf.GGUFReader(gguf_file)
+
+    for tensor in reader.tensors:
+        weight_type = tensor.tensor_type
+        name = tensor.name
+
+        if weight_type.name not in ("F32", "BF16", "F16"):
+            weight_type_name = name.replace("weight", "qweight_type")
+            weight_type = torch.tensor(weight_type)
+            yield weight_type_name, weight_type
+
+    for tensor in reader.tensors:
+        weight = tensor.data
+        weight_type = tensor.tensor_type
+        name = tensor.name
+        if weight_type.name not in ("F32", "BF16", "F16"):
+            name = name.replace("weight", "qweight")
+        elif name.endswith(".scale"):
+            name = name.replace(".scale", ".weight")
+        if weight_type.name == "BF16" and tensor.data.dtype == np.uint8:
+            # BF16 is currently the only "quantization" type that isn't
+            # actually quantized but is read as a raw byte tensor.
+            # Reinterpret as `torch.bfloat16` tensor.
+            weight = weight.view(np.uint16)
+            if reader.byte_order == "S":
+                # GGUF endianness != system endianness
+                weight = weight.byteswap()
+            param = torch.tensor(weight).view(torch.bfloat16)
+        else:
+            param = torch.tensor(weight)
+        yield name, param
 
 
 class Flux2KleinGGUFAdapter(GGUFAdapter):
@@ -69,8 +116,18 @@ class Flux2KleinGGUFAdapter(GGUFAdapter):
     )
 
     def weights_iterator(self) -> Generator[tuple[str, torch.Tensor], None, None]:
+        def custom_weights_adapter(weights):
+            for name, weight in weights:
+                # Handle the special case for adaLN modulation parameters that require swapping shift and scale
+                if name == "norm_out.linear.weight":
+                    shift, scale = weight.chunk(2, dim=0)
+                    weight = torch.cat([scale, shift], dim=0)
+                    yield name, weight
+                else:
+                    yield name, weight
         weights = gguf_quant_weights_iterator(self.gguf_file, {})
-        yield from self.gguf_to_hf_mapper.apply(weights)
+        weights = self.gguf_to_hf_mapper.apply(weights)
+        yield from custom_weights_adapter(weights)
         # try:
         #     import gguf  # type: ignore
         # except Exception as exc:  # pragma: no cover - dependency error
@@ -220,6 +277,9 @@ _FLUX2_TRANSFORMER_KEYS_RENAME_DICT = {
     "double_stream_modulation_txt.lin": "double_stream_modulation_txt.linear",
     "single_stream_modulation.lin": "single_stream_modulation.linear",
     "final_layer.linear": "proj_out",
+    # prefix
+    "double_blocks.": "transformer_blocks.",
+    "single_blocks.": "single_transformer_blocks.",
 }
 
 _FLUX2_TRANSFORMER_DOUBLE_BLOCK_KEY_MAP = {
