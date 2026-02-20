@@ -7,6 +7,7 @@ import numpy as np
 import torch
 
 from vllm.model_executor.models.utils import WeightsMapper
+from vllm.model_executor.model_loader.weight_utils import gguf_quant_weights_iterator
 
 from .base import GGUFAdapter, MappedTensor
 
@@ -68,63 +69,65 @@ class Flux2KleinGGUFAdapter(GGUFAdapter):
     )
 
     def weights_iterator(self) -> Generator[tuple[str, torch.Tensor], None, None]:
-        try:
-            import gguf  # type: ignore
-        except Exception as exc:  # pragma: no cover - dependency error
-            raise RuntimeError("GGUF support requires the 'gguf' package to be installed.") from exc
+        weights = gguf_quant_weights_iterator(self.gguf_file, {})
+        yield from self.gguf_to_hf_mapper.apply(weights)
+        # try:
+        #     import gguf  # type: ignore
+        # except Exception as exc:  # pragma: no cover - dependency error
+        #     raise RuntimeError("GGUF support requires the 'gguf' package to be installed.") from exc
 
-        reader = gguf.GGUFReader(self.gguf_file)
-        allowed_names = self._build_allowed_names()
-        param_names = self._build_param_names()
-        mapped: list[MappedTensor] = []
+        # reader = gguf.GGUFReader(self.gguf_file)
+        # allowed_names = self._build_allowed_names()
+        # param_names = self._build_param_names()
+        # mapped: list[MappedTensor] = []
 
-        for tensor in reader.tensors:
-            for mapped_tensor in self._map_tensor_name(tensor):
-                if (
-                    mapped_tensor.name not in allowed_names
-                    and self._resolve_linear_qweight(mapped_tensor.name, param_names) is None
-                ):
-                    continue
-                mapped.append(mapped_tensor)
+        # for tensor in reader.tensors:
+        #     for mapped_tensor in self._map_tensor_name(tensor):
+        #         if (
+        #             mapped_tensor.name not in allowed_names
+        #             and self._resolve_linear_qweight(mapped_tensor.name, param_names) is None
+        #         ):
+        #             continue
+        #         mapped.append(mapped_tensor)
 
-        if not mapped:
-            raise RuntimeError(
-                "No GGUF tensors were mapped for Flux2 GGUF loader. Please verify the GGUF file and model structure."
-            )
+        # if not mapped:
+        #     raise RuntimeError(
+        #         "No GGUF tensors were mapped for Flux2 GGUF loader. Please verify the GGUF file and model structure."
+        #     )
 
-        for item in mapped:
-            linear_qweight = self._resolve_linear_qweight(item.name, param_names)
-            is_linear_weight = linear_qweight is not None
-            if not is_linear_weight:
-                continue
-            weight_type_name = linear_qweight.replace("qweight", "qweight_type")
-            yield weight_type_name, torch.tensor(item.tensor_type)
+        # for item in mapped:
+        #     linear_qweight = self._resolve_linear_qweight(item.name, param_names)
+        #     is_linear_weight = linear_qweight is not None
+        #     if not is_linear_weight:
+        #         continue
+        #     weight_type_name = linear_qweight.replace("qweight", "qweight_type")
+        #     yield weight_type_name, torch.tensor(item.tensor_type)
 
-        for item in mapped:
-            weight = item.tensor.data
-            if item.row_slice is not None:
-                weight = weight[item.row_slice]
-            weight_type = item.tensor_type
-            linear_qweight = self._resolve_linear_qweight(item.name, param_names)
-            is_linear_weight = linear_qweight is not None
-            if is_linear_weight:
-                name = linear_qweight
-            else:
-                name = item.name
+        # for item in mapped:
+        #     weight = item.tensor.data
+        #     if item.row_slice is not None:
+        #         weight = weight[item.row_slice]
+        #     weight_type = item.tensor_type
+        #     linear_qweight = self._resolve_linear_qweight(item.name, param_names)
+        #     is_linear_weight = linear_qweight is not None
+        #     if is_linear_weight:
+        #         name = linear_qweight
+        #     else:
+        #         name = item.name
 
-            if weight_type.name == "BF16" and weight.dtype == np.uint8:
-                weight = weight.view(np.uint16)
-                if reader.byte_order == "S":
-                    weight = weight.byteswap()
-                param = torch.tensor(weight).view(torch.bfloat16)
-            else:
-                param = torch.tensor(weight)
+        #     if weight_type.name == "BF16" and weight.dtype == np.uint8:
+        #         weight = weight.view(np.uint16)
+        #         if reader.byte_order == "S":
+        #             weight = weight.byteswap()
+        #         param = torch.tensor(weight).view(torch.bfloat16)
+        #     else:
+        #         param = torch.tensor(weight)
 
-            if item.swap_scale_shift:
-                shift, scale = param.chunk(2, dim=0)
-                param = torch.cat([scale, shift], dim=0)
+        #     if item.swap_scale_shift:
+        #         shift, scale = param.chunk(2, dim=0)
+        #         param = torch.cat([scale, shift], dim=0)
 
-            yield name, param
+        #     yield name, param
 
     def _map_tensor_name(self, tensor) -> list[MappedTensor]:
         name = tensor.name
