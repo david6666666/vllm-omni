@@ -284,10 +284,7 @@ class DiffusersPipelineLoader:
         if loaded_weights is not None:
             weights_not_loaded = weights_to_load - loaded_weights
             if weights_not_loaded:
-                raise ValueError(
-                    "Following weights were not initialized from "
-                    f"checkpoint: {weights_not_loaded}"
-                )
+                raise ValueError(f"Following weights were not initialized from checkpoint: {weights_not_loaded}")
 
     def _is_gguf_quantization(self, od_config: OmniDiffusionConfig) -> bool:
         quant_config = od_config.quantization_config
@@ -436,8 +433,5 @@ class DiffusersPipelineLoader:
 
         weights_to_load = {name for name, _ in model.named_parameters()}
         weights_not_loaded = weights_to_load - loaded
-        # if weights_not_loaded:
-        #     raise ValueError(
-        #         "Following weights were not initialized from "
-        #         f"checkpoint: {weights_not_loaded}"
-        #     )
+        if weights_not_loaded:
+            raise ValueError(f"Following weights were not initialized from checkpoint: {weights_not_loaded}")
