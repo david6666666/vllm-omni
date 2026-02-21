@@ -224,7 +224,7 @@ def gguf_quant_weights_iterator(gguf_file: str) -> Generator[tuple[str, torch.Te
         weight_type = tensor.tensor_type
         name = tensor.name
 
-        if weight_type.name not in ("F32", "BF16", "F16"):
+        if weight_type.name not in ("F32", "F16"):
             weight_type_name = name.replace("weight", "qweight_type")
             weight_type = torch.tensor(weight_type)
             yield weight_type_name, weight_type
@@ -233,7 +233,7 @@ def gguf_quant_weights_iterator(gguf_file: str) -> Generator[tuple[str, torch.Te
         weight = tensor.data
         weight_type = tensor.tensor_type
         name = tensor.name
-        if weight_type.name not in ("F32", "BF16", "F16"):
+        if weight_type.name not in ("F32", "F16"):
             name = name.replace("weight", "qweight")
         if weight_type.name == "BF16" and tensor.data.dtype == np.uint8:
             # BF16 is currently the only "quantization" type that isn't

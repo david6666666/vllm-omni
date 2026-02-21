@@ -12,10 +12,10 @@ from .base import GGUFAdapter, gguf_quant_weights_iterator
 Z_IMAGE_KEYS_RENAME_DICT = {
     "final_layer.": "all_final_layer.2-1.",
     "x_embedder.": "all_x_embedder.2-1.",
-    ".attention.out.bias": ".attention.to_out.0.bias",
-    ".attention.k_norm": ".attention.norm_k.weight",
-    ".attention.q_norm": ".attention.norm_q.weight",
-    ".attention.out.weight": ".attention.to_out.0.weight",
+    ".attention.qkv": ".attention.to_qkv",
+    ".attention.k_norm": ".attention.norm_k",
+    ".attention.q_norm": ".attention.norm_q",
+    ".attention.out": ".attention.to_out.0",
     "model.diffusion_model.": "",
 }
 
