@@ -301,12 +301,11 @@ class DiffusersPipelineLoader:
             return True
 
         # Normal path: DiffusionQuantizationConfig
-        try:
-            is_gguf = quant_config.get_name() == "gguf"
-        except AttributeError:
+        if not hasattr(quant_config, "get_name"):
             # Fallback: if it carries gguf_model, treat as GGUF
             gguf_model = getattr(quant_config, "gguf_model", None)
             return bool(gguf_model)
+        is_gguf = quant_config.get_name() == "gguf"
         if not is_gguf:
             return False
         gguf_model = getattr(quant_config, "gguf_model", None)
@@ -382,7 +381,7 @@ class DiffusersPipelineLoader:
         )
         os.close(tmp_fd)
         try:
-            with urlopen(url) as response, open(tmp_path, "wb") as out_file:
+            with urlopen(url, timeout=300) as response, open(tmp_path, "wb") as out_file:
                 shutil.copyfileobj(response, out_file)
             os.replace(tmp_path, target_path)
         except Exception:

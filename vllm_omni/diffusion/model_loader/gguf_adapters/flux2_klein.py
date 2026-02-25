@@ -60,6 +60,18 @@ FLUX2_TRANSFORMER_SINGLE_BLOCK_KEY_MAP = {
 class Flux2KleinGGUFAdapter(GGUFAdapter):
     """GGUF adapter for Flux2-Klein models with qkv splitting and adaLN swap."""
 
+    @staticmethod
+    def is_compatible(od_config, model: torch.nn.Module, source) -> bool:
+        model_class = od_config.model_class_name or ""
+        if model_class.startswith("Flux2"):
+            return True
+        cfg = od_config.tf_model_config
+        if cfg is not None:
+            model_type = str(cfg.get("model_type", "")).lower()
+            if model_type.startswith("flux"):
+                return True
+        return False
+
     gguf_to_hf_mapper = WeightsMapper(
         # double_stream_modulation
         orig_to_new_prefix=FLUX2_TRANSFORMER_KEYS_RENAME_DICT | FLUX2_TRANSFORMER_ADA_LAYER_NORM_KEY_MAP,

@@ -22,6 +22,18 @@ Z_IMAGE_KEYS_RENAME_DICT = {
 class ZImageGGUFAdapter(GGUFAdapter):
     """GGUF adapter for Z-Image models with QKV/FFN shard support."""
 
+    @staticmethod
+    def is_compatible(od_config, model: torch.nn.Module, source) -> bool:
+        model_class = od_config.model_class_name or ""
+        if model_class.startswith("ZImage"):
+            return True
+        cfg = od_config.tf_model_config
+        if cfg is not None:
+            model_type = str(cfg.get("model_type", "")).lower()
+            if model_type in {"z_image", "zimage", "z-image"}:
+                return True
+        return False
+
     gguf_to_hf_mapper = WeightsMapper(
         orig_to_new_substr=Z_IMAGE_KEYS_RENAME_DICT,
     )
