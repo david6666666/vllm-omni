@@ -29,8 +29,8 @@ from vllm.model_executor.layers.layernorm import RMSNorm
 from vllm.model_executor.layers.linear import (
     MergedColumnParallelLinear,
     QKVParallelLinear,
-    RowParallelLinear,
     ReplicatedLinear,
+    RowParallelLinear,
 )
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
@@ -210,7 +210,7 @@ def validate_zimage_tp_constraints(
 class TimestepEmbedder(nn.Module):
     def __init__(
         self, out_size, mid_size=None, frequency_embedding_size=256, quant_config: "QuantizationConfig | None" = None
-    ):        
+    ):
         super().__init__()
         if mid_size is None:
             mid_size = out_size
