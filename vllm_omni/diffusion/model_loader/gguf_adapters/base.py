@@ -101,11 +101,6 @@ class GGUFAdapter:
         return None
 
     def _build_gguf_name_map(self) -> dict[str, str]:
-        try:
-            import gguf  # type: ignore
-        except Exception as exc:  # pragma: no cover - dependency error
-            raise RuntimeError("GGUF support requires the 'gguf' package to be installed.") from exc
-
         def resolve_model_type() -> str:
             cfg = self.od_config.tf_model_config
             model_type = None

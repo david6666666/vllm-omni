@@ -208,7 +208,9 @@ def validate_zimage_tp_constraints(
 
 
 class TimestepEmbedder(nn.Module):
-    def __init__(self, out_size, mid_size=None, frequency_embedding_size=256, quant_config: "QuantizationConfig | None" = None):
+    def __init__(
+        self, out_size, mid_size=None, frequency_embedding_size=256, quant_config: "QuantizationConfig | None" = None
+    ):        
         super().__init__()
         if mid_size is None:
             mid_size = out_size
@@ -425,7 +427,9 @@ class ZImageTransformerBlock(nn.Module):
         self.modulation = modulation
         if modulation:
             self.adaLN_modulation = nn.Sequential(
-                ReplicatedLinear(min(dim, ADALN_EMBED_DIM), 4 * dim, bias=True, return_bias=False, quant_config=quant_config),
+                ReplicatedLinear(
+                    min(dim, ADALN_EMBED_DIM), 4 * dim, bias=True, return_bias=False, quant_config=quant_config
+                ),
             )
 
     def forward(
@@ -481,11 +485,15 @@ class FinalLayer(nn.Module):
     def __init__(self, hidden_size, out_channels, quant_config: "QuantizationConfig | None" = None):
         super().__init__()
         self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.linear = ReplicatedLinear(hidden_size, out_channels, bias=True, quant_config=quant_config, return_bias=False)
+        self.linear = ReplicatedLinear(
+            hidden_size, out_channels, bias=True, quant_config=quant_config, return_bias=False
+        )
 
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
-            ReplicatedLinear(min(hidden_size, ADALN_EMBED_DIM), hidden_size, bias=True, quant_config=quant_config, return_bias=False),
+            ReplicatedLinear(
+                min(hidden_size, ADALN_EMBED_DIM), hidden_size, bias=True, quant_config=quant_config, return_bias=False
+            ),
         )
 
     def forward(self, x, c):
@@ -657,10 +665,18 @@ class ZImageTransformer2DModel(CachedTransformer):
         all_x_embedder = {}
         all_final_layer = {}
         for patch_idx, (patch_size, f_patch_size) in enumerate(zip(all_patch_size, all_f_patch_size)):
-            x_embedder = ReplicatedLinear(f_patch_size * patch_size * patch_size * in_channels, dim, bias=True, quant_config=quant_config, return_bias=False)
+            x_embedder = ReplicatedLinear(
+                f_patch_size * patch_size * patch_size * in_channels,
+                dim,
+                bias=True,
+                quant_config=quant_config,
+                return_bias=False,
+            )
             all_x_embedder[f"{patch_size}-{f_patch_size}"] = x_embedder
 
-            final_layer = FinalLayer(dim, patch_size * patch_size * f_patch_size * self.out_channels, quant_config=quant_config)
+            final_layer = FinalLayer(
+                dim, patch_size * patch_size * f_patch_size * self.out_channels, quant_config=quant_config
+            )
             all_final_layer[f"{patch_size}-{f_patch_size}"] = final_layer
 
         self.all_x_embedder = nn.ModuleDict(all_x_embedder)
