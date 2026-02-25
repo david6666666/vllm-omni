@@ -6,7 +6,7 @@
 3. Keep user-facing knobs minimal and consistent across offline and online flows.
 
 ## Scope
-1. Models: Qwen-Image, Z-Image, and Flux2-klein.
+1. Models: Z-Image, and Flux2-klein.
 2. Components: diffusion transformer weights, loader paths, and quantization configs.
 3. Modes: native GGUF (transformer-only weights).
 
@@ -112,19 +112,17 @@ x @ weight.T
 1. `DiffusersPipelineLoader.load_model` detects `quantization_config.method == "gguf"`.
 2. `gguf_model` is resolved as one of: local file, URL, `repo/file.gguf`, or `repo:quant_type`.
 3. GGUF weights are routed through adapters in `vllm_omni/diffusion/model_loader/gguf_adapters/`.
-4. Name mapping is applied per-architecture (Qwen-Image, Z-Image, Flux2Klein).
+4. Name mapping is applied per-architecture (Z-Image, Flux2Klein).
 5. GGUF weights are loaded into transformer modules, remaining non-transformer weights come from the HF checkpoint.
 
 ## GGUF Adapter Design
 1. `GGUFAdapter` (base) implements default gguf-py tensor name mapping.
 2. `Flux2KleinGGUFAdapter` implements Flux2-Klein remapping + qkv split + adaLN swap.
-3. `QwenImageGGUFAdapter` implements Qwen-Image qkv shard handling and linear qweight routing.
-4. `ZImageGGUFAdapter` implements Z-Image qkv + ffn shard handling and linear qweight routing.
-5. `get_gguf_adapter(...)` selects the adapter by model class/config and returns an iterator of `(name, tensor)`.
+3. `ZImageGGUFAdapter` implements Z-Image qkv + ffn shard handling and linear qweight routing.
+4. `get_gguf_adapter(...)` selects the adapter by model class/config and returns an iterator of `(name, tensor)`.
 
 Adapter paths:
 - Base: `vllm_omni/diffusion/model_loader/gguf_adapters/base.py`
-- Qwen-Image: `vllm_omni/diffusion/model_loader/gguf_adapters/qwen_image.py`
 - Z-Image: `vllm_omni/diffusion/model_loader/gguf_adapters/z_image.py`
 - Flux2-Klein: `vllm_omni/diffusion/model_loader/gguf_adapters/flux2_klein.py`
 
