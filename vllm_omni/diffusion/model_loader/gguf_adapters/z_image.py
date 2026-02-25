@@ -8,7 +8,6 @@ from vllm.model_executor.models.utils import WeightsMapper
 
 from .base import GGUFAdapter, gguf_quant_weights_iterator
 
-
 Z_IMAGE_KEYS_RENAME_DICT = {
     "final_layer.": "all_final_layer.2-1.",
     "x_embedder.": "all_x_embedder.2-1.",
