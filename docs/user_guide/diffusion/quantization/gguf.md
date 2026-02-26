@@ -116,10 +116,10 @@ x @ weight.T
 5. GGUF weights are loaded into transformer modules, remaining non-transformer weights come from the HF checkpoint.
 
 ## GGUF Adapter Design
-1. `GGUFAdapter` (base) implements default gguf-py tensor name mapping.
+1. `GGUFAdapter` is an abstract base class for model-specific adapters.
 2. `Flux2KleinGGUFAdapter` implements Flux2-Klein remapping + qkv split + adaLN swap.
 3. `ZImageGGUFAdapter` implements Z-Image qkv + ffn shard handling and linear qweight routing.
-4. `get_gguf_adapter(...)` selects the adapter by model class/config and returns an iterator of `(name, tensor)`.
+4. `get_gguf_adapter(...)` strictly selects by model class/config; unsupported models raise an error (no fallback adapter).
 
 Adapter paths:
 - Base: `vllm_omni/diffusion/model_loader/gguf_adapters/base.py`

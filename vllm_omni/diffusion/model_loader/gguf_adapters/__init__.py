@@ -22,10 +22,19 @@ def get_gguf_adapter(
     source: DiffusersPipelineLoader.ComponentSource,
     od_config: OmniDiffusionConfig,
 ) -> GGUFAdapter:
-    for adapter_cls in (ZImageGGUFAdapter, Flux2KleinGGUFAdapter):
+    adapter_classes = (ZImageGGUFAdapter, Flux2KleinGGUFAdapter)
+    for adapter_cls in adapter_classes:
         if adapter_cls.is_compatible(od_config, model, source):
             return adapter_cls(gguf_file, model, source, od_config)
-    return GGUFAdapter(gguf_file, model, source, od_config)
+    model_type = None
+    if od_config.tf_model_config is not None:
+        model_type = od_config.tf_model_config.get("model_type")
+    supported = ", ".join(cls.__name__ for cls in adapter_classes)
+    raise ValueError(
+        "No GGUF adapter matched diffusion model "
+        f"(model_class_name={od_config.model_class_name!r}, model_type={model_type!r}). "
+        f"Supported adapters: {supported}."
+    )
 
 
 __all__ = [

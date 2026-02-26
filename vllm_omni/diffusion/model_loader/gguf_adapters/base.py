@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections.abc import Generator
 from dataclasses import dataclass
 from typing import Any
@@ -19,8 +20,8 @@ class MappedTensor:
     swap_scale_shift: bool = False
 
 
-class GGUFAdapter:
-    """Default GGUF adapter using gguf-py's tensor name mapping."""
+class GGUFAdapter(ABC):
+    """Base class for model-specific GGUF adapters."""
 
     _include_qkv_virtuals: bool = False
     _include_add_kv_proj_virtuals: bool = False
@@ -37,11 +38,11 @@ class GGUFAdapter:
 
     @staticmethod
     def is_compatible(od_config, model: torch.nn.Module, source) -> bool:
-        # Default adapter matches any model.
-        return True
+        return False
 
+    @abstractmethod
     def weights_iterator(self) -> Generator[tuple[str, torch.Tensor], None, None]:
-        return gguf_quant_weights_iterator(self.gguf_file)
+        raise NotImplementedError
 
     def _get_target_module(self) -> torch.nn.Module:
         prefix = getattr(self.source, "prefix", "")
