@@ -3,14 +3,10 @@
 import dataclasses
 import glob
 import os
-import shutil
-import tempfile
 import time
 from collections.abc import Generator, Iterable
 from pathlib import Path
 from typing import cast
-from urllib.parse import urlparse
-from urllib.request import urlopen
 
 import torch
 from huggingface_hub import hf_hub_download
@@ -328,9 +324,6 @@ class DiffusersPipelineLoader:
     def _resolve_gguf_model_path(self, gguf_model: str, revision: str | None) -> str:
         if os.path.isfile(gguf_model):
             return gguf_model
-        # raw HTTPS link
-        if gguf_model.startswith(("http://", "https://")) and gguf_model.endswith(".gguf"):
-            return self._download_raw_gguf_url(gguf_model)
         # repo_id/filename.gguf
         if "/" in gguf_model and gguf_model.endswith(".gguf"):
             repo_id, filename = gguf_model.rsplit("/", 1)
@@ -352,45 +345,8 @@ class DiffusersPipelineLoader:
             )
         raise ValueError(
             f"Unrecognized GGUF reference: {gguf_model!r} (expected local file, "
-            "raw URL, <repo_id>/<filename>.gguf, or <repo_id>:<quant_type>)"
+            "<repo_id>/<filename>.gguf, or <repo_id>:<quant_type>)"
         )
-
-    def _download_raw_gguf_url(self, url: str) -> str:
-        parsed = urlparse(url)
-        filename = os.path.basename(parsed.path)
-        if not filename:
-            raise ValueError(f"Cannot infer GGUF filename from URL: {url!r}")
-
-        cache_dir = self.load_config.download_dir
-        if cache_dir is None:
-            cache_dir = os.path.join(
-                os.path.expanduser("~"),
-                ".cache",
-                "vllm-omni",
-                "gguf",
-            )
-        os.makedirs(cache_dir, exist_ok=True)
-        target_path = os.path.join(cache_dir, filename)
-        if os.path.exists(target_path):
-            return target_path
-
-        tmp_fd, tmp_path = tempfile.mkstemp(
-            suffix=".gguf",
-            prefix="gguf-",
-            dir=cache_dir,
-        )
-        os.close(tmp_fd)
-        try:
-            with urlopen(url, timeout=300) as response, open(tmp_path, "wb") as out_file:
-                shutil.copyfileobj(response, out_file)
-            os.replace(tmp_path, target_path)
-        except Exception:
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-            raise
-        return target_path
 
     def _get_gguf_weights_iterator(
         self,
@@ -419,9 +375,15 @@ class DiffusersPipelineLoader:
             if self._is_transformer_source(source):
                 loaded |= model.load_weights(self._get_gguf_weights_iterator(source, model, od_config))
 
-                # Load any remaining float weights (e.g., non-quantized layers)
-                # from the base HF checkpoint while skipping already-loaded names.
+                # GGUF checkpoints can be transformer-only or partially quantized.
+                # Only fall back to HF if this source still has missing loadable weights.
                 loadable_names = loadable_names or self._get_model_loadable_names(model)
+                has_missing_for_source = any(
+                    name.startswith(source.prefix) and name not in loaded for name in loadable_names
+                )
+                if not has_missing_for_source:
+                    continue
+
                 hf_iter = self._get_weights_iterator(source)
                 hf_iter = (
                     (name, tensor) for (name, tensor) in hf_iter if name in loadable_names and name not in loaded

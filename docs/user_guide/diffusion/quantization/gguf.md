@@ -110,7 +110,7 @@ x @ weight.T
 
 ## GGUF Weight Loading Path (Transformer-Only)
 1. `DiffusersPipelineLoader.load_model` detects `quantization_config.method == "gguf"`.
-2. `gguf_model` is resolved as one of: local file, URL, `repo/file.gguf`, or `repo:quant_type`.
+2. `gguf_model` is resolved as one of: local file, `repo/file.gguf`, or `repo:quant_type`.
 3. GGUF weights are routed through adapters in `vllm_omni/diffusion/model_loader/gguf_adapters/`.
 4. Name mapping is applied per-architecture (Z-Image, Flux2Klein).
 5. GGUF weights are loaded into transformer modules, remaining non-transformer weights come from the HF checkpoint.
@@ -160,7 +160,7 @@ python examples/offline_inference/text_to_image/text_to_image.py \
 
 Notes for GGUF:
 1. Many GGUF repos do not ship `model_index.json` and configs. Use the base repo for `--model` and only pass the GGUF file via `--gguf-model`.
-2. `gguf_model` supports local path, URL, `repo/file.gguf`, or `repo:quant_type`.
+2. `gguf_model` supports local path, `repo/file.gguf`, or `repo:quant_type`.
 
 ## User Usage (Online)
 
