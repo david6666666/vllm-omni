@@ -196,12 +196,35 @@ class DiffusersPipelineLoader:
         self,
         model: nn.Module,
     ) -> Generator[tuple[str, torch.Tensor], None, None]:
-        sources = cast(
-            Iterable[DiffusersPipelineLoader.ComponentSource],
-            getattr(model, "weights_sources", ()),
-        )
+        sources = self._get_weight_sources(model)
         for source in sources:
             yield from self._get_weights_iterator(source)
+
+    def _get_weight_sources(self, model: nn.Module) -> tuple["ComponentSource", ...]:
+        return tuple(
+            cast(
+                Iterable[DiffusersPipelineLoader.ComponentSource],
+                getattr(model, "weights_sources", ()),
+            )
+        )
+
+    def _get_expected_parameter_names(self, model: nn.Module) -> set[str]:
+        """Return parameter names that should be covered by strict load checks."""
+        all_parameter_names = {name for name, _ in model.named_parameters()}
+        sources = self._get_weight_sources(model)
+
+        # Keep strict behavior if no source metadata exists.
+        if not sources:
+            return all_parameter_names
+
+        # Empty prefix means "root" source, i.e. entire model should be covered.
+        if any(source.prefix == "" for source in sources):
+            return all_parameter_names
+
+        source_prefixes = tuple(source.prefix for source in sources if source.prefix)
+        if not source_prefixes:
+            return all_parameter_names
+        return {name for name in all_parameter_names if name.startswith(source_prefixes)}
 
     def download_model(self, model_config: ModelConfig) -> None:
         self._prepare_weights(
@@ -265,7 +288,7 @@ class DiffusersPipelineLoader:
                     module.to(module_device)
 
     def load_weights(self, model: nn.Module) -> None:
-        weights_to_load = {name for name, _ in model.named_parameters()}
+        weights_to_load = self._get_expected_parameter_names(model)
         loaded_weights = model.load_weights(self.get_all_weights(model))
 
         self.counter_after_loading_weights = time.perf_counter()
@@ -364,10 +387,7 @@ class DiffusersPipelineLoader:
         return ((source.prefix + name, tensor) for (name, tensor) in weights_iter)
 
     def _load_weights_with_gguf(self, model: nn.Module, od_config: OmniDiffusionConfig) -> set[str]:
-        sources = cast(
-            Iterable[DiffusersPipelineLoader.ComponentSource],
-            getattr(model, "weights_sources", ()),
-        )
+        sources = self._get_weight_sources(model)
         loaded: set[str] = set()
         loadable_names: set[str] | None = None
 
@@ -392,7 +412,8 @@ class DiffusersPipelineLoader:
             else:
                 loaded |= model.load_weights(self._get_weights_iterator(source))
 
-        weights_to_load = {name for name, _ in model.named_parameters()}
+        weights_to_load = self._get_expected_parameter_names(model)
         weights_not_loaded = weights_to_load - loaded
         if weights_not_loaded:
             raise ValueError(f"Following weights were not initialized from checkpoint: {weights_not_loaded}")
+        return loaded
