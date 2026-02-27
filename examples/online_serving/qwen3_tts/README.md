@@ -9,6 +9,8 @@ This directory contains examples for running Qwen3-TTS models with vLLM-Omni's o
 | `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` | CustomVoice | Predefined speaker voices with optional style control |
 | `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign` | VoiceDesign | Natural language voice style description |
 | `Qwen/Qwen3-TTS-12Hz-1.7B-Base` | Base | Voice cloning from reference audio |
+| `Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice` | CustomVoice | Smaller/faster variant |
+| `Qwen/Qwen3-TTS-12Hz-0.6B-Base` | Base | Smaller/faster variant for voice cloning |
 
 ## Quick Start
 
@@ -24,19 +26,27 @@ This directory contains examples for running Qwen3-TTS models with vLLM-Omni's o
 ./run_server.sh Base
 ```
 
+Or launch directly with vllm serve:
+
+```bash
+vllm serve Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
+    --stage-configs-path vllm_omni/model_executor/stage_configs/qwen3_tts.yaml \
+    --omni --port 8091 --trust-remote-code --enforce-eager
+```
+
 ### 2. Run the Client
 
 ```bash
 # CustomVoice: Use predefined speaker
 python openai_speech_client.py \
     --text "你好，我是通义千问" \
-    --voice Vivian \
+    --voice vivian \
     --language Chinese
 
 # CustomVoice with style instruction
 python openai_speech_client.py \
     --text "今天天气真好" \
-    --voice Ryan \
+    --voice ryan \
     --instructions "用开心的语气说"
 
 # VoiceDesign: Describe the voice style
@@ -59,26 +69,45 @@ python openai_speech_client.py \
 
 ```bash
 # Simple TTS request
-curl -X POST http://localhost:8000/v1/audio/speech \
+curl -X POST http://localhost:8091/v1/audio/speech \
     -H "Content-Type: application/json" \
     -d '{
         "input": "Hello, how are you?",
-        "voice": "Vivian",
+        "voice": "vivian",
         "language": "English"
     }' --output output.wav
 
 # With style instruction
-curl -X POST http://localhost:8000/v1/audio/speech \
+curl -X POST http://localhost:8091/v1/audio/speech \
     -H "Content-Type: application/json" \
     -d '{
         "input": "I am so excited!",
-        "voice": "Vivian",
+        "voice": "vivian",
         "instructions": "Speak with great enthusiasm"
     }' --output excited.wav
 
 # List available voices in CustomVoice models
-curl http://localhost:8000/v1/audio/voices
+curl http://localhost:8091/v1/audio/voices
 ```
+
+## Server Configuration
+
+### TTS-Specific CLI Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `--tts-max-instructions-length` | int | 500 | Maximum character length for voice style instructions |
+
+**Example with custom instructions length:**
+
+```bash
+vllm serve Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
+    --omni \
+    --port 8000 \
+    --tts-max-instructions-length 1000
+```
+
+This is useful when you need longer voice style descriptions, especially for the VoiceDesign task type.
 
 ## API Reference
 
@@ -90,12 +119,26 @@ POST /v1/audio/speech
 
 This endpoint follows the [OpenAI Audio Speech API](https://platform.openai.com/docs/api-reference/audio/createSpeech) format with additional Qwen3-TTS parameters.
 
+### Voices Endpoint
+
+```
+GET /v1/audio/voices
+```
+
+Lists available voices for the loaded model:
+
+```json
+{
+    "voices": ["aiden", "dylan", "eric", "one_anna", "ryan", "serena", "sohee", "uncle_fu", "vivian"]
+}
+```
+
 ### Request Body
 
 ```json
 {
     "input": "Text to synthesize",
-    "voice": "Vivian",
+    "voice": "vivian",
     "response_format": "wav",
     "task_type": "CustomVoice",
     "language": "Auto",
@@ -103,7 +146,8 @@ This endpoint follows the [OpenAI Audio Speech API](https://platform.openai.com/
     "ref_audio": "URL or base64 for voice cloning",
     "ref_text": "Reference audio transcript",
     "x_vector_only_mode": false,
-    "max_new_tokens": 2048
+    "max_new_tokens": 2048,
+    "stream": false
 }
 ```
 
@@ -115,45 +159,65 @@ Returns audio data in the requested format (default: WAV).
 
 ## Parameters
 
-### Standard OpenAI Parameters
+### OpenAI Standard Parameters
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `input` | string | required | Text to synthesize |
-| `voice` | string | "Vivian" | Speaker/voice name |
+| `input` | string | **required** | Text to synthesize |
+| `model` | string | server's model | Model to use (optional, should match server if specified) |
+| `voice` | string | "vivian" | Speaker name (e.g., vivian, ryan, aiden) |
 | `response_format` | string | "wav" | Audio format: wav, mp3, flac, pcm, aac, opus |
-| `speed` | float | 1.0 | Playback speed (0.25-4.0) |
-| `model` | string | optional | Model name (optional when serving single model) |
+| `speed` | float | 1.0 | Playback speed (0.25-4.0, not supported with `stream=true`) |
 
-### Qwen3-TTS Parameters
+### vLLM-Omni Extension Parameters
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `task_type` | string | "CustomVoice" | Task: CustomVoice, VoiceDesign, or Base |
-| `language` | string | "Auto" | Language: Auto, Chinese, English, Japanese, Korean |
+| `language` | string | "Auto" | Language (see supported languages below) |
 | `instructions` | string | "" | Voice style/emotion instructions |
 | `max_new_tokens` | int | 2048 | Maximum tokens to generate |
+| `stream` | bool | false | Stream raw PCM chunks as they are decoded (requires `response_format="pcm"`) |
+
+**Supported languages:** Auto, Chinese, English, Japanese, Korean, German, French, Russian, Portuguese, Spanish, Italian
 
 ### Voice Clone Parameters (Base task)
 
-| Parameter | Type | Required | Description |
+| Parameter | Type | Default | Description |
 |-----------|------|----------|-------------|
-| `ref_audio` | string | Yes* | Reference audio (file path, URL, or base64) |
-| `ref_text` | string | No | Transcript of reference audio (for ICL mode) |
-| `x_vector_only_mode` | bool | false | Use speaker embedding only (no ICL) |
+| `ref_audio` | string | null | Reference audio (URL or base64 data URL) |
+| `ref_text` | string | null | Transcript of reference audio |
+| `x_vector_only_mode` | bool | null | Use speaker embedding only (no ICL) |
 
 ## Python Usage
+
+### Using OpenAI SDK
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8091/v1", api_key="none")
+
+response = client.audio.speech.create(
+    model="Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    voice="vivian",
+    input="Hello, how are you?",
+)
+
+response.stream_to_file("output.wav")
+```
+
+### Using httpx
 
 ```python
 import httpx
 
-# Simple request
 response = httpx.post(
-    "http://localhost:8000/v1/audio/speech",
+    "http://localhost:8091/v1/audio/speech",
     json={
-        "model": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
-        "input": "Hello world",
-        "voice": "Vivian",
+        "input": "Hello, how are you?",
+        "voice": "vivian",
+        "language": "English",
     },
     timeout=300.0,
 )
@@ -162,14 +226,43 @@ with open("output.wav", "wb") as f:
     f.write(response.content)
 ```
 
+## Streaming
+
+Set `stream=true` with `response_format="pcm"` to receive raw PCM audio chunks as they are decoded
+(one chunk per 25-frame Code2Wav window, ~2 s latency to first byte):
+
+```bash
+# Stream raw PCM and pipe directly to a player
+curl -X POST http://localhost:8091/v1/audio/speech \
+    -H "Content-Type: application/json" \
+    -d '{
+        "input": "Hello, how are you?",
+        "voice": "vivian",
+        "language": "English",
+        "stream": true,
+        "response_format": "pcm"
+    }' --no-buffer | play -t raw -r 24000 -e signed -b 16 -c 1 -
+
+# Or save the raw PCM for offline processing
+curl -X POST http://localhost:8091/v1/audio/speech \
+    -H "Content-Type: application/json" \
+    -d '{"input": "Hello!", "stream": true, "response_format": "pcm"}' \
+    --output output.pcm
+```
+
+**Constraints:**
+- `stream=true` requires `response_format="pcm"` (raw 16-bit signed PCM, 24 kHz mono).
+- `speed` adjustment is not supported when streaming (`speed` must be 1.0 or omitted).
+- Requires the server to be launched with a stage config that sets `async_chunk: true`.
+
 ## Limitations
 
-- **No streaming**: Audio is generated completely before being returned. Streaming will be supported after the pipeline is disaggregated (see RFC #938).
 - **Single request**: Batch processing is not yet optimized for online serving.
 
 ## Troubleshooting
 
-1. **Connection refused**: Make sure the server is running on the correct port
-2. **Out of memory**: Reduce `--gpu-memory-utilization` in run_server.sh
-3. **Unsupported speaker**: Check supported speakers via model documentation
-4. **Voice clone fails**: Ensure you're using the Base model variant for voice cloning
+1. **"TTS model did not produce audio output"**: Ensure you're using the correct model variant for your task type (CustomVoice task → CustomVoice model, etc.)
+2. **Connection refused**: Make sure the server is running on the correct port
+3. **Out of memory**: Use smaller model variant (`Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice`) or reduce `--gpu-memory-utilization`
+4. **Unsupported speaker**: Use `/v1/audio/voices` to list available voices for the loaded model
+5. **Voice clone fails**: Ensure you're using the Base model variant for voice cloning
