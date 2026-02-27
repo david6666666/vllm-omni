@@ -147,18 +147,6 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--ulysses-degree",
-        type=int,
-        default=1,
-        help="Number of GPUs used for ulysses sequence parallelism.",
-    )
-    parser.add_argument(
-        "--ring-degree",
-        type=int,
-        default=1,
-        help="Number of GPUs used for ring sequence parallelism.",
-    )
-    parser.add_argument(
         "--use-hsdp",
         action="store_true",
         help=("Enable Hybrid Sharded Data Parallel to shard model weights across GPUs. "),
