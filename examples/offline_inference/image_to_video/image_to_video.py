@@ -273,8 +273,6 @@ def main():
         ulysses_degree=args.ulysses_degree,
         ring_degree=args.ring_degree,
         cfg_parallel_size=args.cfg_parallel_size,
-        ulysses_degree=args.ulysses_degree,
-        ring_degree=args.ring_degree,
         tensor_parallel_size=args.tensor_parallel_size,
         use_hsdp=args.use_hsdp,
         hsdp_shard_size=args.hsdp_shard_size,
