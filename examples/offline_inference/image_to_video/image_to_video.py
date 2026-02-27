@@ -125,12 +125,6 @@ def parse_args() -> argparse.Namespace:
         help="Number of GPUs used for classifier free guidance parallel size.",
     )
     parser.add_argument(
-        "--tensor-parallel-size",
-        type=int,
-        default=1,
-        help="Number of GPUs used for tensor parallelism.",
-    )
-    parser.add_argument(
         "--enforce-eager",
         action="store_true",
         help="Disable torch.compile and force eager execution.",
