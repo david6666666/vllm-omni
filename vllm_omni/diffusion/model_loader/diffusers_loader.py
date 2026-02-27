@@ -258,8 +258,11 @@ class DiffusersPipelineLoader:
                         model_cls = resolve_obj_by_qualname(custom_pipeline_name)
                         model = model_cls(od_config=od_config)
                 logger.debug("Loading weights on %s ...", load_device)
-                # Quantization does not happen in `load_weights` but after it
-                self.load_weights(model)
+                if self._is_gguf_quantization(od_config):
+                    self._load_weights_with_gguf(model, od_config)
+                else:
+                    # Quantization does not happen in `load_weights` but after it
+                    self.load_weights(model)
 
             # Process weights after loading for quantization (e.g., FP8 online quantization)
             # This is needed for vLLM's quantization methods that need to transform weights
