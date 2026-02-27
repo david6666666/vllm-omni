@@ -28,8 +28,8 @@ from vllm.utils.import_utils import resolve_obj_by_qualname
 from vllm.utils.torch_utils import set_default_torch_dtype
 
 from vllm_omni.diffusion.data import OmniDiffusionConfig
-from vllm_omni.diffusion.model_loader.gguf_adapters import get_gguf_adapter
 from vllm_omni.diffusion.distributed.hsdp import HSDPInferenceConfig
+from vllm_omni.diffusion.model_loader.gguf_adapters import get_gguf_adapter
 from vllm_omni.diffusion.registry import initialize_model
 
 logger = init_logger(__name__)
@@ -420,7 +420,7 @@ class DiffusersPipelineLoader:
         if weights_not_loaded:
             raise ValueError(f"Following weights were not initialized from checkpoint: {weights_not_loaded}")
         return loaded
-      
+
     def _load_model_with_hsdp(
         self,
         od_config: OmniDiffusionConfig,
