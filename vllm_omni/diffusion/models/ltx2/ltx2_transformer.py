@@ -16,16 +16,15 @@
 import inspect
 from collections.abc import Iterable
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 import torch
 import torch.distributed
 import torch.nn as nn
 import torch.nn.functional as F
-from diffusers.configuration_utils import ConfigMixin, register_to_config
-from diffusers.models.attention import AttentionModuleMixin
+from torch.utils.checkpoint import checkpoint
 from diffusers.models.embeddings import PixArtAlphaCombinedTimestepSizeEmbeddings, PixArtAlphaTextProjection
-from diffusers.models.modeling_utils import ModelMixin
 from diffusers.utils import (
     BaseOutput,
     is_torch_version,
@@ -477,7 +476,7 @@ class LTX2AudioVideoAttnProcessor:
         return hidden_states
 
 
-class LTX2Attention(torch.nn.Module, AttentionModuleMixin):
+class LTX2Attention(torch.nn.Module):
     r"""
     Attention class for all LTX-2.0 attention layers. Compared to LTX-1.0, this supports specifying the query and key
     RoPE embeddings separately for audio-to-video (a2v) and video-to-audio (v2a) cross-attention.
@@ -598,6 +597,14 @@ class LTX2Attention(torch.nn.Module, AttentionModuleMixin):
         if processor is None:
             processor = self._default_processor_cls()
         self.set_processor(processor)
+
+    def set_processor(self, processor: Any) -> None:
+        if processor is None:
+            raise ValueError("processor must not be None.")
+        self.processor = processor
+
+    def get_processor(self) -> Any:
+        return self.processor
 
     def forward(
         self,
@@ -1190,7 +1197,7 @@ class LTX2AudioVideoRotaryPosEmbed(nn.Module):
         return cos_freqs, sin_freqs
 
 
-class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin):
+class LTX2VideoTransformer3DModel(nn.Module):
     r"""
     A Transformer model for video-like data used in [LTX](https://huggingface.co/Lightricks/LTX-Video).
 
@@ -1265,7 +1272,6 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin):
             "audio_proj_out": SequenceParallelOutput(gather_dim=1, expected_dims=3),
         }
 
-    @register_to_config
     def __init__(
         self,
         in_channels: int = 128,  # Video Arguments
@@ -1311,6 +1317,44 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin):
         audio_out_channels = audio_out_channels or audio_in_channels
         inner_dim = num_attention_heads * attention_head_dim
         audio_inner_dim = audio_num_attention_heads * audio_attention_head_dim
+        self.config = SimpleNamespace(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            patch_size=patch_size,
+            patch_size_t=patch_size_t,
+            num_attention_heads=num_attention_heads,
+            attention_head_dim=attention_head_dim,
+            cross_attention_dim=cross_attention_dim,
+            vae_scale_factors=vae_scale_factors,
+            pos_embed_max_pos=pos_embed_max_pos,
+            base_height=base_height,
+            base_width=base_width,
+            audio_in_channels=audio_in_channels,
+            audio_out_channels=audio_out_channels,
+            audio_patch_size=audio_patch_size,
+            audio_patch_size_t=audio_patch_size_t,
+            audio_num_attention_heads=audio_num_attention_heads,
+            audio_attention_head_dim=audio_attention_head_dim,
+            audio_cross_attention_dim=audio_cross_attention_dim,
+            audio_scale_factor=audio_scale_factor,
+            audio_pos_embed_max_pos=audio_pos_embed_max_pos,
+            audio_sampling_rate=audio_sampling_rate,
+            audio_hop_length=audio_hop_length,
+            num_layers=num_layers,
+            activation_fn=activation_fn,
+            qk_norm=qk_norm,
+            norm_elementwise_affine=norm_elementwise_affine,
+            norm_eps=norm_eps,
+            caption_channels=caption_channels,
+            attention_bias=attention_bias,
+            attention_out_bias=attention_out_bias,
+            rope_theta=rope_theta,
+            rope_double_precision=rope_double_precision,
+            causal_offset=causal_offset,
+            timestep_scale_multiplier=timestep_scale_multiplier,
+            cross_attn_timestep_scale_multiplier=cross_attn_timestep_scale_multiplier,
+            rope_type=rope_type,
+        )
 
         # 1. Patchification input projections
         self.proj_in = nn.Linear(in_channels, inner_dim)
@@ -1453,6 +1497,18 @@ class LTX2VideoTransformer3DModel(ModelMixin, ConfigMixin):
 
         self.gradient_checkpointing = False
         self._sp_plan = self._build_sp_plan(rope_type)
+
+    def _gradient_checkpointing_func(self, module: nn.Module, *inputs: Any):
+        def custom_forward(*checkpoint_inputs: Any):
+            return module(*checkpoint_inputs)
+
+        return checkpoint(custom_forward, *inputs, use_reentrant=False)
+
+    def enable_gradient_checkpointing(self) -> None:
+        self.gradient_checkpointing = True
+
+    def disable_gradient_checkpointing(self) -> None:
+        self.gradient_checkpointing = False
 
     def forward(
         self,
