@@ -649,7 +649,7 @@ class LTX2VideoTransformerBlock(nn.Module):
         super().__init__()
 
         # 1. Self-Attention (video and audio)
-        self.norm1 = RMSNorm(dim, eps=eps, elementwise_affine=elementwise_affine)
+        self.norm1 = RMSNorm(dim, eps=eps)
         self.attn1 = LTX2Attention(
             query_dim=dim,
             heads=num_attention_heads,
@@ -662,7 +662,7 @@ class LTX2VideoTransformerBlock(nn.Module):
             rope_type=rope_type,
         )
 
-        self.audio_norm1 = RMSNorm(audio_dim, eps=eps, elementwise_affine=elementwise_affine)
+        self.audio_norm1 = RMSNorm(audio_dim, eps=eps)
         self.audio_attn1 = LTX2Attention(
             query_dim=audio_dim,
             heads=audio_num_attention_heads,
@@ -676,7 +676,7 @@ class LTX2VideoTransformerBlock(nn.Module):
         )
 
         # 2. Prompt Cross-Attention
-        self.norm2 = RMSNorm(dim, eps=eps, elementwise_affine=elementwise_affine)
+        self.norm2 = RMSNorm(dim, eps=eps)
         self.attn2 = LTX2Attention(
             query_dim=dim,
             cross_attention_dim=cross_attention_dim,
@@ -689,7 +689,7 @@ class LTX2VideoTransformerBlock(nn.Module):
             rope_type=rope_type,
         )
 
-        self.audio_norm2 = RMSNorm(audio_dim, eps=eps, elementwise_affine=elementwise_affine)
+        self.audio_norm2 = RMSNorm(audio_dim, eps=eps)
         self.audio_attn2 = LTX2Attention(
             query_dim=audio_dim,
             cross_attention_dim=audio_cross_attention_dim,
@@ -704,7 +704,7 @@ class LTX2VideoTransformerBlock(nn.Module):
 
         # 3. Audio-to-Video (a2v) and Video-to-Audio (v2a) Cross-Attention
         # Audio-to-Video (a2v) Attention --> Q: Video; K,V: Audio
-        self.audio_to_video_norm = RMSNorm(dim, eps=eps, elementwise_affine=elementwise_affine)
+        self.audio_to_video_norm = RMSNorm(dim, eps=eps)
         self.audio_to_video_attn = LTX2Attention(
             query_dim=dim,
             cross_attention_dim=audio_dim,
@@ -718,7 +718,7 @@ class LTX2VideoTransformerBlock(nn.Module):
         )
 
         # Video-to-Audio (v2a) Attention --> Q: Audio; K,V: Video
-        self.video_to_audio_norm = RMSNorm(audio_dim, eps=eps, elementwise_affine=elementwise_affine)
+        self.video_to_audio_norm = RMSNorm(audio_dim, eps=eps)
         self.video_to_audio_attn = LTX2Attention(
             query_dim=audio_dim,
             cross_attention_dim=dim,
@@ -732,10 +732,10 @@ class LTX2VideoTransformerBlock(nn.Module):
         )
 
         # 4. Feedforward layers
-        self.norm3 = RMSNorm(dim, eps=eps, elementwise_affine=elementwise_affine)
+        self.norm3 = RMSNorm(dim, eps=eps)
         self.ff = LTX2FeedForward(dim, activation_fn=activation_fn)
 
-        self.audio_norm3 = RMSNorm(audio_dim, eps=eps, elementwise_affine=elementwise_affine)
+        self.audio_norm3 = RMSNorm(audio_dim, eps=eps)
         self.audio_ff = LTX2FeedForward(audio_dim, activation_fn=activation_fn)
 
         # 5. Per-Layer Modulation Parameters
