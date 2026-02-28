@@ -606,6 +606,42 @@ class LTX2Attention(torch.nn.Module):
     def get_processor(self) -> Any:
         return self.processor
 
+    def prepare_attention_mask(
+        self,
+        attention_mask: torch.Tensor | None,
+        target_length: int,
+        batch_size: int,
+        out_dim: int = 3,
+    ) -> torch.Tensor | None:
+        if attention_mask is None:
+            return None
+
+        current_length = attention_mask.shape[-1]
+        if current_length != target_length:
+            pad_length = target_length - current_length
+            if pad_length > 0:
+                attention_mask = F.pad(attention_mask, (0, pad_length), value=0.0)
+            else:
+                attention_mask = attention_mask[..., :target_length]
+
+        if out_dim == 3:
+            expected_batch = batch_size * self.heads
+            if attention_mask.shape[0] != expected_batch:
+                repeat_factor = expected_batch // attention_mask.shape[0]
+                if repeat_factor * attention_mask.shape[0] != expected_batch:
+                    raise ValueError(
+                        "attention_mask batch dimension is incompatible with the requested batch/head expansion: "
+                        f"got {attention_mask.shape[0]}, expected a divisor of {expected_batch}."
+                    )
+                attention_mask = attention_mask.repeat_interleave(repeat_factor, dim=0)
+        elif out_dim == 4:
+            attention_mask = attention_mask.unsqueeze(1)
+            attention_mask = attention_mask.repeat_interleave(self.heads, dim=1)
+        else:
+            raise ValueError(f"Unsupported out_dim={out_dim}; expected 3 or 4.")
+
+        return attention_mask
+
     def forward(
         self,
         hidden_states: torch.Tensor,
