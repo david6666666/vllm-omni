@@ -26,13 +26,13 @@ from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.attention import AttentionModuleMixin
 from diffusers.models.embeddings import PixArtAlphaCombinedTimestepSizeEmbeddings, PixArtAlphaTextProjection
 from diffusers.models.modeling_utils import ModelMixin
-from diffusers.models.normalization import RMSNorm
 from diffusers.utils import (
     BaseOutput,
     is_torch_version,
-    logging,
 )
 from vllm.distributed import get_tensor_model_parallel_rank, get_tensor_model_parallel_world_size
+from vllm.logger import init_logger
+from vllm.model_executor.layers.layernorm import RMSNorm
 from vllm.model_executor.layers.linear import (
     ColumnParallelLinear,
     QKVParallelLinear,
@@ -45,7 +45,7 @@ from vllm_omni.diffusion.attention.layer import Attention
 from vllm_omni.diffusion.distributed.sp_plan import SequenceParallelInput, SequenceParallelOutput
 from vllm_omni.diffusion.forward_context import get_forward_context, is_forward_context_available
 
-logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
+logger = init_logger(__name__)
 
 
 def apply_interleaved_rotary_emb(x: torch.Tensor, freqs: tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
