@@ -20,28 +20,12 @@ from vllm_omni.diffusion.request import OmniDiffusionRequest
 
 from .pipeline_ltx2 import (
     LTX2Pipeline,
+    _get_prompt_field,
     calculate_shift,
 )
 from .pipeline_ltx2 import (
     get_ltx2_post_process_func as _get_ltx2_post_process_func,
 )
-
-
-def _unwrap_request_tensor(value: Any) -> Any:
-    if isinstance(value, list):
-        return value[0] if value else None
-    return value
-
-
-def _get_prompt_field(prompt: Any, key: str) -> Any:
-    if isinstance(prompt, str):
-        return None
-    value = prompt.get(key)
-    if value is None:
-        additional = prompt.get("additional_information")
-        if isinstance(additional, dict):
-            value = additional.get(key)
-    return _unwrap_request_tensor(value)
 
 
 def get_ltx2_post_process_func(od_config: OmniDiffusionConfig):
