@@ -23,12 +23,12 @@ import torch
 import torch.distributed
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.checkpoint import checkpoint
 from diffusers.models.embeddings import PixArtAlphaCombinedTimestepSizeEmbeddings, PixArtAlphaTextProjection
 from diffusers.utils import (
     BaseOutput,
     is_torch_version,
 )
+from torch.utils.checkpoint import checkpoint
 from vllm.distributed import get_tensor_model_parallel_rank, get_tensor_model_parallel_world_size
 from vllm.logger import init_logger
 from vllm.model_executor.layers.layernorm import RMSNorm
