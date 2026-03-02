@@ -121,7 +121,7 @@ class DiffusionEngine:
             request_id = request.request_ids[0] if request.request_ids else ""
 
             if supports_audio_output(self.od_config.model_class_name):
-                audio_payload = outputs[0] if len(outputs) == 1 else outputs
+                request_audio_payload = outputs[0] if len(outputs) == 1 else outputs
                 return [
                     OmniRequestOutput.from_diffusion(
                         request_id=request_id,
@@ -129,7 +129,7 @@ class DiffusionEngine:
                         prompt=prompt,
                         metrics=metrics,
                         latents=output.trajectory_latents,
-                        multimodal_output={"audio": audio_payload},
+                        multimodal_output={"audio": request_audio_payload},
                         final_output_type="audio",
                     ),
                 ]
@@ -164,7 +164,7 @@ class DiffusionEngine:
                 output_idx = end_idx
 
                 if supports_audio_output(self.od_config.model_class_name):
-                    audio_payload = request_outputs[0] if len(request_outputs) == 1 else request_outputs
+                    request_audio_payload = request_outputs[0] if len(request_outputs) == 1 else request_outputs
                     results.append(
                         OmniRequestOutput.from_diffusion(
                             request_id=request_id,
@@ -172,7 +172,7 @@ class DiffusionEngine:
                             prompt=prompt,
                             metrics=metrics,
                             latents=output.trajectory_latents,
-                            multimodal_output={"audio": audio_payload},
+                            multimodal_output={"audio": request_audio_payload},
                             final_output_type="audio",
                         ),
                     )

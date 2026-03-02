@@ -118,11 +118,12 @@ class AudioVisualModelOutput(BaseOutput):
     Holds the output of an audiovisual model which produces both visual (e.g. video) and audio outputs.
 
     Args:
-        sample (`torch.Tensor` of shape `(batch_size, num_channels, num_frames, height, width)`):
-            The hidden states output conditioned on the `encoder_hidden_states` input, representing the visual output
-            of the model. This is typically a video (spatiotemporal) output.
-        audio_sample (`torch.Tensor` of shape `(batch_size, TODO)`):
-            The audio output of the audiovisual model.
+        sample (`torch.Tensor` of shape `(batch_size, num_video_tokens, out_channels)`):
+            The patchified visual output conditioned on the `encoder_hidden_states` input. This is the transformer
+            output before the pipeline unpacks it back into video latent dimensions.
+        audio_sample (`torch.Tensor` of shape `(batch_size, num_audio_tokens, audio_out_channels)`):
+            The patchified audio output of the audiovisual model before the pipeline unpacks it back into audio latent
+            dimensions.
     """
 
     sample: "torch.Tensor"  # noqa: F821
