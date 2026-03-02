@@ -91,6 +91,7 @@ def test_t2v_video_generation_form(test_client, mocker: MockerFixture):
     assert captured.height == 360
     assert captured.num_frames == 24
     assert captured.fps == 12
+    assert captured.frame_rate == 12.0
     assert fps_values == [12, 12]
 
 
@@ -119,6 +120,32 @@ def test_i2v_video_generation_form(test_client, mocker: MockerFixture):
     input_image = prompt["multi_modal_data"]["image"]
     assert isinstance(input_image, Image.Image)
     assert input_image.size == (48, 32)
+
+
+def test_i2v_video_generation_resizes_input_to_requested_dimensions(test_client, mocker: MockerFixture):
+    image_bytes = _make_test_image_bytes((48, 32))
+
+    mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video.encode_video_base64",
+        return_value="Zg==",
+    )
+    response = test_client.post(
+        "/v1/videos",
+        data={
+            "prompt": "A bear playing with yarn.",
+            "width": "96",
+            "height": "64",
+        },
+        files={"input_reference": ("input.png", image_bytes, "image/png")},
+    )
+
+    assert response.status_code == 200
+
+    engine = test_client.app.state.openai_serving_video._engine_client
+    prompt = engine.captured_prompt
+    input_image = prompt["multi_modal_data"]["image"]
+    assert isinstance(input_image, Image.Image)
+    assert input_image.size == (96, 64)
 
 
 def test_seconds_defaults_fps_and_frames(test_client, mocker: MockerFixture):

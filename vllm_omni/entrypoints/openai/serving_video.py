@@ -89,12 +89,17 @@ class OmniOpenAIServingVideo:
                 status_code=HTTPStatus.BAD_REQUEST.value,
                 detail=str(exc),
             ) from exc
-        if input_image is not None:
-            prompt["multi_modal_data"] = {"image": input_image}
 
         gen_params = OmniDiffusionSamplingParams(num_outputs_per_prompt=request.n)
 
         width, height, num_frames, fps = self._resolve_video_params(request)
+        if input_image is not None and width is not None and height is not None:
+            target_size = (width, height)
+            if input_image.size != target_size:
+                input_image = input_image.resize(target_size, Image.Resampling.LANCZOS)
+        if input_image is not None:
+            prompt["multi_modal_data"] = {"image": input_image}
+
         if width is not None and height is not None:
             gen_params.width = width
             gen_params.height = height
@@ -102,6 +107,7 @@ class OmniOpenAIServingVideo:
             gen_params.num_frames = num_frames
         if fps is not None:
             gen_params.fps = fps
+            gen_params.frame_rate = float(fps)
 
         if request.num_inference_steps is not None:
             gen_params.num_inference_steps = request.num_inference_steps
