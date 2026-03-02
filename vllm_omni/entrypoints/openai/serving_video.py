@@ -136,9 +136,21 @@ class OmniOpenAIServingVideo:
 
         result = await self._run_generation(prompt, gen_params, request_id, raw_request)
         videos = self._extract_video_outputs(result)
+        audios = self._extract_audio_outputs(result, expected_count=len(videos))
         output_fps = fps or 24
+        audio_sample_rate = 24000
 
-        video_data = [VideoData(b64_json=encode_video_base64(video, fps=output_fps)) for video in videos]
+        video_data = [
+            VideoData(
+                b64_json=encode_video_base64(
+                    video,
+                    fps=output_fps,
+                    audio=audios[idx],
+                    audio_sample_rate=audio_sample_rate if audios[idx] is not None else None,
+                )
+            )
+            for idx, video in enumerate(videos)
+        ]
         return VideoGenerationResponse(created=int(time.time()), data=video_data)
 
     def _resolve_model_name(self, raw_request: Request | None) -> str | None:
@@ -323,3 +335,35 @@ class OmniOpenAIServingVideo:
                 detail="No video outputs found in generation result.",
             )
         return normalized
+
+    @staticmethod
+    def _extract_audio_outputs(result: Any, expected_count: int) -> list[Any | None]:
+        audio = None
+        if hasattr(result, "multimodal_output") and result.multimodal_output:
+            audio = result.multimodal_output.get("audio")
+        elif hasattr(result, "request_output"):
+            request_output = result.request_output
+            if isinstance(request_output, dict) and request_output.get("multimodal_output"):
+                mm_output = request_output.get("multimodal_output") or {}
+                audio = mm_output.get("audio")
+            elif hasattr(request_output, "multimodal_output") and request_output.multimodal_output:
+                audio = request_output.multimodal_output.get("audio")
+
+        if audio is None:
+            return [None] * expected_count
+
+        if isinstance(audio, (list, tuple)):
+            if len(audio) == expected_count and any(hasattr(item, "shape") or hasattr(item, "ndim") for item in audio):
+                return list(audio)
+            if expected_count == 1:
+                return [audio]
+
+        if hasattr(audio, "ndim") and getattr(audio, "ndim", None) is not None and audio.ndim > 1:
+            first_dim = getattr(audio, "shape", [0])[0]
+            if first_dim == expected_count:
+                return [audio[i] for i in range(expected_count)]
+
+        if expected_count == 1:
+            return [audio]
+
+        return [audio] + [None] * max(expected_count - 1, 0)
