@@ -137,7 +137,7 @@ def _coerce_video_to_frames(video: Any) -> list[np.ndarray]:
 
 
 def _coerce_audio_to_waveform(audio: Any) -> torch.Tensor:
-    """Convert an audio payload into a 1D CPU float tensor."""
+    """Convert an audio payload into a 2-channel CPU float tensor for LTX2 export."""
     if isinstance(audio, torch.Tensor):
         waveform = audio.detach().cpu()
     elif isinstance(audio, np.ndarray):
@@ -147,10 +147,27 @@ def _coerce_audio_to_waveform(audio: Any) -> torch.Tensor:
     else:
         raise ValueError(f"Unsupported audio payload type: {type(audio)}")
 
+    waveform = waveform.squeeze()
+
     if waveform.ndim == 0:
         raise ValueError("Audio payload must contain at least one sample.")
-    if waveform.ndim > 1:
-        waveform = waveform[0]
+
+    if waveform.ndim == 1:
+        waveform = waveform.unsqueeze(0)
+    elif waveform.ndim == 2:
+        if waveform.shape[0] in (1, 2):
+            pass
+        elif waveform.shape[1] in (1, 2):
+            waveform = waveform.transpose(0, 1)
+        else:
+            raise ValueError(f"Unsupported audio payload shape: {tuple(waveform.shape)}")
+    else:
+        raise ValueError(f"Unsupported audio payload rank: {waveform.ndim}")
+
+    if waveform.shape[0] == 1:
+        waveform = waveform.repeat(2, 1)
+    elif waveform.shape[0] != 2:
+        raise ValueError(f"Expected mono or stereo audio, got shape {tuple(waveform.shape)}")
 
     return waveform.float().contiguous()
 
