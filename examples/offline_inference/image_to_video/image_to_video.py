@@ -20,10 +20,10 @@ Usage:
 
     # LTX2 image-to-video
     python image_to_video.py --model /path/to/LTX-2 \
-        --model_class_name LTX2ImageToVideoPipeline \
+        --model-class-name LTX2ImageToVideoPipeline \
         --image input.jpg --prompt "A cinematic dolly shot of a boat" \
-        --num_frames 121 --num_inference_steps 40 --guidance_scale 4.0 \
-        --frame_rate 24 --fps 24 --output ltx2_i2v.mp4
+        --num-frames 121 --num_inference_steps 40 --guidance_scale 4.0 \
+        --frame-rate 24 --fps 24 --output ltx2_i2v.mp4
 """
 
 import argparse
@@ -50,7 +50,7 @@ def parse_args() -> argparse.Namespace:
         help="Diffusers Wan2.2 I2V model ID or local path.",
     )
     parser.add_argument(
-        "--model_class_name",
+        "--model-class-name",
         default=None,
         help="Override model class name (e.g., LTX2ImageToVideoPipeline).",
     )

@@ -434,7 +434,9 @@ class OmniOpenAIServingVideo:
                 return sample_rate
 
         for component_name in ("vocoder", "audio_vae"):
-            component = config.get(component_name) if isinstance(config, dict) else getattr(config, component_name, None)
+            component = (
+                config.get(component_name) if isinstance(config, dict) else getattr(config, component_name, None)
+            )
             if component is None:
                 continue
 
@@ -442,7 +444,9 @@ class OmniOpenAIServingVideo:
             if sample_rate is not None:
                 return sample_rate
 
-            component_config = component.get("config") if isinstance(component, dict) else getattr(component, "config", None)
+            component_config = (
+                component.get("config") if isinstance(component, dict) else getattr(component, "config", None)
+            )
             sample_rate = cls._extract_audio_sample_rate_from_config(component_config)
             if sample_rate is not None:
                 return sample_rate

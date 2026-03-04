@@ -32,8 +32,7 @@ python text_to_video.py \
   --num_frames 121 \
   --num_inference_steps 40 \
   --guidance_scale 4.0 \
-  --frame_rate 24 \
-  --fps 24 \
+  --frame-rate 24 \
   --output ltx2_out.mp4
 ```
 
@@ -52,7 +51,7 @@ Key arguments:
 - `--cfg-parallel-size`: set it to 2 to enable CFG Parallel. See more examples in [`user_guide`](../../../docs/user_guide/diffusion/parallelism_acceleration.md#cfg-parallel).
 - `--tensor-parallel-size`: tensor parallel size (effective for models that support TP, e.g. LTX2).
 - `--enable-cpu-offload`: enable CPU offloading for diffusion models.
-- `--frame_rate`: generation FPS for pipelines that require it (e.g., LTX2).
-- `--audio_sample_rate`: audio sample rate for embedded audio (when the pipeline returns audio).
+- `--frame-rate`: generation FPS for pipelines that require it (e.g., LTX2).
+- `--audio-sample-rate`: audio sample rate for embedded audio (when the pipeline returns audio).
 
 > ℹ️ If you encounter OOM errors, try using `--vae-use-slicing` and `--vae-use-tiling` to reduce memory usage.
