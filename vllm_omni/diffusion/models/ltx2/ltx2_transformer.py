@@ -1194,8 +1194,8 @@ class LTX2AudioVideoRotaryPosEmbed(nn.Module):
         freqs = (grid.unsqueeze(-1) * 2 - 1) * freqs  # [B, num_patches, num_pos_dims, self.dim // num_elems]
         freqs = freqs.transpose(-1, -2).flatten(2)  # [B, num_patches, self.dim // 2]
 
-        # 5. Get real, interleaved (cos, sin) frequencies, padded to self.dim
-        # TODO: consider implementing this as a utility and reuse in `connectors.py`.
+        # 5. Get real, interleaved (cos, sin) frequencies, padded to self.dim.
+        # Kept inline here to stay aligned with the upstream diffusers connector logic.
         # src/diffusers/pipelines/ltx2/connectors.py
         if self.rope_type == "interleaved":
             cos_freqs = freqs.cos().repeat_interleave(2, dim=-1)

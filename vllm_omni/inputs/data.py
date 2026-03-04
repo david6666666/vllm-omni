@@ -202,8 +202,8 @@ class OmniDiffusionSamplingParams:
     # Original dimensions (before VAE scaling)
     height: int | None = None
     width: int | None = None
-    fps: int | None = None
-    frame_rate: float | None = None
+    fps: int | None = None  # Integer FPS kept for request compatibility and output encoding.
+    frame_rate: float | None = None  # Floating-point rate used by the diffusion model when it differs from `fps`.
     height_not_provided: bool = False
     width_not_provided: bool = False
 
@@ -288,6 +288,20 @@ class OmniDiffusionSamplingParams:
         # This class is changed to only represent a single prompt request
         # Only adjust batch size for number of videos per prompt
         return self.num_outputs_per_prompt
+
+    @property
+    def resolved_frame_rate(self) -> float | None:
+        if self.frame_rate is not None:
+            return float(self.frame_rate)
+
+        fps = self.fps
+        if isinstance(fps, list):
+            fps = fps[0] if fps else None
+
+        if fps is None:
+            return None
+
+        return float(fps)
 
     def __str__(self):
         return pprint.pformat(asdict(self), indent=2, width=120)

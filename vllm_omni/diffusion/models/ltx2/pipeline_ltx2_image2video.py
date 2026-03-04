@@ -261,12 +261,7 @@ class LTX2ImageToVideoPipeline(LTX2Pipeline):
         height = req.sampling_params.height or height or 512
         width = req.sampling_params.width or width or 768
         num_frames = req.sampling_params.num_frames or num_frames or 121
-        req_fps = req.sampling_params.fps
-        if isinstance(req_fps, list):
-            req_fps = req_fps[0] if req_fps else None
-        frame_rate = (
-            req.sampling_params.frame_rate or (float(req_fps) if req_fps is not None else None) or frame_rate or 24.0
-        )
+        frame_rate = req.sampling_params.resolved_frame_rate or frame_rate or 24.0
         num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps or 40
         if timesteps is None:
             num_inference_steps = max(int(num_inference_steps), 2)
