@@ -148,11 +148,15 @@ class OmniOpenAIServingVideo:
 
         video_data = [
             VideoData(
-                b64_json=encode_video_base64(
-                    video,
-                    fps=output_fps,
-                    audio=audios[idx],
-                    audio_sample_rate=audio_sample_rate if audios[idx] is not None else None,
+                b64_json=(
+                    encode_video_base64(video, fps=output_fps)
+                    if audios[idx] is None
+                    else encode_video_base64(
+                        video,
+                        fps=output_fps,
+                        audio=audios[idx],
+                        audio_sample_rate=audio_sample_rate,
+                    )
                 )
             )
             for idx, video in enumerate(videos)
