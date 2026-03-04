@@ -122,17 +122,6 @@ def parse_args() -> argparse.Namespace:
         help="Sample rate for audio output when saved (default: 24000 for LTX2).",
     )
     parser.add_argument(
-        "--cache-backend",
-        type=str,
-        default=None,
-        choices=["cache_dit", "tea_cache"],
-        help=(
-            "Cache backend to use for acceleration. "
-            "Options: 'cache_dit' (DBCache + SCM + TaylorSeer), 'tea_cache' (Timestep Embedding Aware Cache). "
-            "Default: None (no cache acceleration)."
-        ),
-    )
-
         "--vae-patch-parallel-size",
         type=int,
         default=1,

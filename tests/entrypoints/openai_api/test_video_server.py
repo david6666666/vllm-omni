@@ -5,6 +5,7 @@ Unit tests for OpenAI-compatible video generation endpoints.
 """
 
 import io
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -21,8 +22,12 @@ pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 
 class MockVideoResult:
-    def __init__(self, videos):
+    def __init__(self, videos, audios=None, sample_rate=None):
         self.multimodal_output = {"video": videos}
+        if audios is not None:
+            self.multimodal_output["audio"] = audios
+        if sample_rate is not None:
+            self.multimodal_output["audio_sample_rate"] = sample_rate
 
 
 class FakeAsyncOmni:
@@ -193,6 +198,42 @@ def test_size_param_sets_width_height(test_client, mocker: MockerFixture):
     captured = engine.captured_sampling_params_list[0]
     assert captured.width == 320
     assert captured.height == 240
+
+
+def test_audio_sample_rate_comes_from_model_config(test_client, mocker: MockerFixture):
+    audio_sample_rates = []
+
+    def _fake_encode(video, fps, audio=None, audio_sample_rate=None):
+        audio_sample_rates.append(audio_sample_rate)
+        return "Zg=="
+
+    engine = test_client.app.state.openai_serving_video._engine_client
+    engine.model_config = SimpleNamespace(
+        hf_config=SimpleNamespace(
+            vocoder=SimpleNamespace(
+                config=SimpleNamespace(output_sampling_rate=16000),
+            ),
+        ),
+    )
+
+    async def _generate(prompt, request_id, sampling_params_list):
+        engine.captured_prompt = prompt
+        engine.captured_sampling_params_list = sampling_params_list
+        yield MockVideoResult([object()], audios=[object()])
+
+    engine.generate = _generate
+
+    mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video.encode_video_base64",
+        side_effect=_fake_encode,
+    )
+    response = test_client.post(
+        "/v1/videos",
+        data={"prompt": "video with audio"},
+    )
+
+    assert response.status_code == 200
+    assert audio_sample_rates == [16000]
 
 
 def test_sampling_params_pass_through(test_client, mocker: MockerFixture):

@@ -144,7 +144,7 @@ class OmniOpenAIServingVideo:
         videos = self._extract_video_outputs(result)
         audios = self._extract_audio_outputs(result, expected_count=len(videos))
         output_fps = fps or 24
-        audio_sample_rate = 24000
+        audio_sample_rate = self._resolve_audio_sample_rate(result)
 
         video_data = [
             VideoData(
@@ -373,3 +373,91 @@ class OmniOpenAIServingVideo:
             return [audio]
 
         return [audio] + [None] * max(expected_count - 1, 0)
+
+    def _resolve_audio_sample_rate(self, result: Any) -> int:
+        result_sample_rate = self._extract_audio_sample_rate_from_result(result)
+        if result_sample_rate is not None:
+            return result_sample_rate
+
+        model_config = getattr(self._engine_client, "model_config", None)
+        hf_config = getattr(model_config, "hf_config", None)
+        config_sample_rate = self._extract_audio_sample_rate_from_config(hf_config)
+        if config_sample_rate is not None:
+            return config_sample_rate
+
+        return 24000
+
+    @classmethod
+    def _extract_audio_sample_rate_from_result(cls, result: Any) -> int | None:
+        multimodal_output = getattr(result, "multimodal_output", None)
+        if isinstance(multimodal_output, dict):
+            sample_rate = cls._coerce_audio_sample_rate(
+                multimodal_output.get("audio_sample_rate")
+                or multimodal_output.get("sample_rate")
+                or multimodal_output.get("sampling_rate")
+                or multimodal_output.get("sr")
+            )
+            if sample_rate is not None:
+                return sample_rate
+
+        request_output = getattr(result, "request_output", None)
+        if isinstance(request_output, dict):
+            multimodal_output = request_output.get("multimodal_output") or {}
+            if isinstance(multimodal_output, dict):
+                return cls._coerce_audio_sample_rate(
+                    multimodal_output.get("audio_sample_rate")
+                    or multimodal_output.get("sample_rate")
+                    or multimodal_output.get("sampling_rate")
+                    or multimodal_output.get("sr")
+                )
+        elif hasattr(request_output, "multimodal_output"):
+            multimodal_output = getattr(request_output, "multimodal_output", None)
+            if isinstance(multimodal_output, dict):
+                return cls._coerce_audio_sample_rate(
+                    multimodal_output.get("audio_sample_rate")
+                    or multimodal_output.get("sample_rate")
+                    or multimodal_output.get("sampling_rate")
+                    or multimodal_output.get("sr")
+                )
+
+        return None
+
+    @classmethod
+    def _extract_audio_sample_rate_from_config(cls, config: Any) -> int | None:
+        if config is None:
+            return None
+
+        for attr_name in ("output_sampling_rate", "audio_sample_rate", "sample_rate", "sampling_rate"):
+            raw_value = config.get(attr_name) if isinstance(config, dict) else getattr(config, attr_name, None)
+            sample_rate = cls._coerce_audio_sample_rate(raw_value)
+            if sample_rate is not None:
+                return sample_rate
+
+        for component_name in ("vocoder", "audio_vae"):
+            component = config.get(component_name) if isinstance(config, dict) else getattr(config, component_name, None)
+            if component is None:
+                continue
+
+            sample_rate = cls._extract_audio_sample_rate_from_config(component)
+            if sample_rate is not None:
+                return sample_rate
+
+            component_config = component.get("config") if isinstance(component, dict) else getattr(component, "config", None)
+            sample_rate = cls._extract_audio_sample_rate_from_config(component_config)
+            if sample_rate is not None:
+                return sample_rate
+
+        return None
+
+    @staticmethod
+    def _coerce_audio_sample_rate(value: Any) -> int | None:
+        if value is None:
+            return None
+
+        try:
+            sample_rate = value.item() if hasattr(value, "item") else value
+            sample_rate = int(sample_rate)
+        except (TypeError, ValueError):
+            return None
+
+        return sample_rate if sample_rate > 0 else None
