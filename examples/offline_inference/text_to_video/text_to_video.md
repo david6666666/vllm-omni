@@ -26,12 +26,12 @@ LTX2 example:
 python text_to_video.py \
   --model "Lightricks/LTX-2" \
   --prompt "A cinematic close-up of ocean waves at golden hour." \
-  --negative_prompt "worst quality, inconsistent motion, blurry, jittery, distorted" \
+  --negative-prompt "worst quality, inconsistent motion, blurry, jittery, distorted" \
   --height 512 \
   --width 768 \
-  --num_frames 121 \
-  --num_inference_steps 40 \
-  --guidance_scale 4.0 \
+  --num-frames 121 \
+  --num-inference-steps 40 \
+  --guidance-scale 4.0 \
   --frame-rate 24 \
   --output ltx2_out.mp4
 ```

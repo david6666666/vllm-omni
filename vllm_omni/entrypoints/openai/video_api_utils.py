@@ -189,22 +189,19 @@ def _encode_video_bytes(video: Any, fps: int, audio: Any | None = None, audio_sa
         if audio is not None:
             from diffusers.pipelines.ltx2.export_utils import encode_video as encode_ltx2_video
 
-            if encode_ltx2_video is not None:
-                frames_np = np.stack(frames, axis=0)
-                if frames_np.ndim == 4 and frames_np.shape[-1] == 4:
-                    frames_np = frames_np[..., :3]
-                frames_np = np.clip(frames_np, 0.0, 1.0)
-                frames_u8 = (frames_np * 255).round().clip(0, 255).astype("uint8")
-                video_tensor = torch.from_numpy(frames_u8)
-                encode_ltx2_video(
-                    video_tensor,
-                    fps=fps,
-                    audio=_coerce_audio_to_waveform(audio),
-                    audio_sample_rate=audio_sample_rate,
-                    output_path=tmp_file.name,
-                )
-            else:
-                export_to_video(frames, tmp_file.name, fps=fps)
+            frames_np = np.stack(frames, axis=0)
+            if frames_np.ndim == 4 and frames_np.shape[-1] == 4:
+                frames_np = frames_np[..., :3]
+            frames_np = np.clip(frames_np, 0.0, 1.0)
+            frames_u8 = (frames_np * 255).round().clip(0, 255).astype("uint8")
+            video_tensor = torch.from_numpy(frames_u8)
+            encode_ltx2_video(
+                video_tensor,
+                fps=fps,
+                audio=_coerce_audio_to_waveform(audio),
+                audio_sample_rate=audio_sample_rate,
+                output_path=tmp_file.name,
+            )
         else:
             export_to_video(frames, tmp_file.name, fps=fps)
         with open(tmp_file.name, "rb") as f:
