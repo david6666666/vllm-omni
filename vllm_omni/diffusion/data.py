@@ -14,14 +14,19 @@ from typing_extensions import Self
 from vllm.config.utils import config
 from vllm.logger import init_logger
 
-from vllm_omni.diffusion.quantization import (
-    DiffusionQuantizationConfig,
-    get_diffusion_quant_config,
-)
 from vllm_omni.diffusion.utils.network_utils import is_port_available
+from vllm_omni.quantization import (
+    build_quant_config,
+)
+from vllm_omni.quantization.compat import (
+    DiffusionQuantizationConfig,
+    get_vllm_quant_config_for_layers,
+)
 
 if TYPE_CHECKING:
-    from vllm_omni.diffusion.quantization import DiffusionQuantizationConfig
+    from vllm.model_executor.layers.quantization.base_config import (
+        QuantizationConfig,
+    )
 
 # Import after TYPE_CHECKING to avoid circular imports at runtime
 # The actual import is deferred to __post_init__ to avoid import order issues
@@ -457,9 +462,11 @@ class OmniDiffusionConfig:
     cfg_kv_collect_func: Any | None = None
 
     # Quantization settings
-    # Supported methods: "fp8" (FP8 W8A8 on Ada/Hopper, weight-only on older GPUs)
+    # Supported methods: "fp8", "gguf" (more via vllm_omni.quantization)
+    # Can be a string ("fp8"), dict ({"method": "fp8", ...}), or per-component
+    # dict ({"transformer": "fp8", "vae": None}).
     quantization: str | None = None
-    quantization_config: "DiffusionQuantizationConfig | dict[str, Any] | None" = None
+    quantization_config: "QuantizationConfig | DiffusionQuantizationConfig | dict[str, Any] | None" = None
 
     @property
     def is_moe(self) -> bool:
@@ -559,34 +566,31 @@ class OmniDiffusionConfig:
             # If it's neither dict nor DiffusionCacheConfig, convert to empty config
             self.cache_config = DiffusionCacheConfig()
 
-        # Convert quantization config (deferred import to avoid circular imports)
+        # Convert quantization config using the unified quantization framework.
+        # Accepts: str ("fp8"), dict ({"method": "fp8", ...}), per-component dict,
+        # QuantizationConfig instance, or legacy DiffusionQuantizationConfig.
         if self.quantization is not None or self.quantization_config is not None:
-            from vllm_omni.diffusion.quantization import (
-                DiffusionQuantizationConfig,
+            from vllm.model_executor.layers.quantization.base_config import (
+                QuantizationConfig,
             )
 
-            # Handle dict or DictConfig (from OmegaConf) - use Mapping for broader compatibility
-            if isinstance(self.quantization_config, Mapping):
-                # Convert DictConfig to dict if needed (OmegaConf compatibility)
+            if isinstance(self.quantization_config, QuantizationConfig):
+                # Already a proper config — passthrough
+                pass
+            elif isinstance(self.quantization_config, DiffusionQuantizationConfig):
+                # Legacy wrapper — unwrap to vLLM config
+                self.quantization_config = get_vllm_quant_config_for_layers(self.quantization_config)
+            elif isinstance(self.quantization_config, Mapping):
                 config_dict = dict(self.quantization_config)
-                # Use get() instead of pop() to avoid mutating original dict
-                quant_method = config_dict.get("method", self.quantization)
-                # Filter out "method" key for kwargs
-                quant_kwargs = {k: v for k, v in config_dict.items() if k != "method"}
-
-                # Validate conflicting methods
-                if self.quantization is not None and quant_method is not None and quant_method != self.quantization:
-                    logger.warning(
-                        f"Conflicting quantization methods: quantization={self.quantization!r}, "
-                        f"quantization_config['method']={quant_method!r}. Using quantization_config['method']."
-                    )
-
-                self.quantization_config = get_diffusion_quant_config(quant_method, **quant_kwargs)
+                # If top-level "quantization" string also provided, inject as fallback method
+                if "method" not in config_dict and self.quantization is not None:
+                    config_dict["method"] = self.quantization
+                self.quantization_config = build_quant_config(config_dict)
             elif self.quantization_config is None and self.quantization is not None:
-                self.quantization_config = get_diffusion_quant_config(self.quantization)
-            elif not isinstance(self.quantization_config, DiffusionQuantizationConfig):
+                self.quantization_config = build_quant_config(self.quantization)
+            else:
                 raise TypeError(
-                    f"quantization_config must be a DiffusionQuantizationConfig, dict, or None, "
+                    f"quantization_config must be a QuantizationConfig, dict, or None, "
                     f"got {type(self.quantization_config)!r}"
                 )
 
