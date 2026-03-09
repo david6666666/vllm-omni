@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
+from vllm_omni.diffusion.model_loader.gguf_adapters import get_gguf_adapter
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
 
@@ -71,3 +72,104 @@ def test_empty_source_prefix_keeps_full_model_strict_check():
 
     with pytest.raises(ValueError, match="vae.weight"):
         loader.load_weights(model)
+
+
+def test_gguf_model_ref_prefers_source_specific_mapping():
+    loader = object.__new__(DiffusersPipelineLoader)
+    source = DiffusersPipelineLoader.ComponentSource(
+        model_or_path="dummy",
+        subfolder="transformer_2",
+        revision=None,
+        prefix="transformer_2.",
+    )
+    quant_config = type(
+        "Config",
+        (),
+        {
+            "gguf_model": "repo/default.gguf",
+            "gguf_models": {
+                "transformer": "repo/high.gguf",
+                "transformer_2": "repo/low.gguf",
+            },
+        },
+    )()
+
+    gguf_model = loader._get_gguf_model_ref_for_source(quant_config, source)
+
+    assert gguf_model == "repo/low.gguf"
+
+
+def test_transformer_2_source_is_treated_as_transformer_source():
+    loader = object.__new__(DiffusersPipelineLoader)
+    source = DiffusersPipelineLoader.ComponentSource(
+        model_or_path="dummy",
+        subfolder="transformer_2",
+        revision=None,
+        prefix="transformer_2.",
+    )
+
+    assert loader._is_transformer_source(source) is True
+
+
+def test_gguf_model_ref_falls_back_to_default_model():
+    loader = object.__new__(DiffusersPipelineLoader)
+    source = DiffusersPipelineLoader.ComponentSource(
+        model_or_path="dummy",
+        subfolder="transformer_2",
+        revision=None,
+        prefix="transformer_2.",
+    )
+    quant_config = type(
+        "Config",
+        (),
+        {
+            "gguf_model": "repo/default.gguf",
+            "gguf_models": {"transformer": "repo/high.gguf"},
+        },
+    )()
+
+    gguf_model = loader._get_gguf_model_ref_for_source(quant_config, source)
+
+    assert gguf_model == "repo/default.gguf"
+
+
+def test_gguf_model_ref_requires_matching_source_without_fallback():
+    loader = object.__new__(DiffusersPipelineLoader)
+    source = DiffusersPipelineLoader.ComponentSource(
+        model_or_path="dummy",
+        subfolder="transformer_2",
+        revision=None,
+        prefix="transformer_2.",
+    )
+    quant_config = type(
+        "Config",
+        (),
+        {
+            "gguf_model": None,
+            "gguf_models": {"transformer": "repo/high.gguf"},
+        },
+    )()
+
+    with pytest.raises(ValueError, match="transformer_2"):
+        loader._get_gguf_model_ref_for_source(quant_config, source)
+
+
+def test_wan_model_class_selects_wan_gguf_adapter():
+    od_config = type(
+        "Config",
+        (),
+        {
+            "model_class_name": "WanPipeline",
+            "tf_model_config": {"model_type": "wan"},
+        },
+    )()
+    source = DiffusersPipelineLoader.ComponentSource(
+        model_or_path="dummy",
+        subfolder="transformer",
+        revision=None,
+        prefix="transformer.",
+    )
+
+    adapter = get_gguf_adapter("dummy.gguf", object(), source, od_config)
+
+    assert adapter.__class__.__name__ == "Wan22GGUFAdapter"

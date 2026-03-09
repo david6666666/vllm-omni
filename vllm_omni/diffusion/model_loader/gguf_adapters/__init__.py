@@ -7,6 +7,7 @@ import torch
 
 from .base import GGUFAdapter
 from .flux2_klein import Flux2KleinGGUFAdapter
+from .wan22 import Wan22GGUFAdapter
 from .z_image import ZImageGGUFAdapter
 
 if TYPE_CHECKING:
@@ -22,7 +23,7 @@ def get_gguf_adapter(
     source: DiffusersPipelineLoader.ComponentSource,
     od_config: OmniDiffusionConfig,
 ) -> GGUFAdapter:
-    adapter_classes = (ZImageGGUFAdapter, Flux2KleinGGUFAdapter)
+    adapter_classes = (Wan22GGUFAdapter, ZImageGGUFAdapter, Flux2KleinGGUFAdapter)
     for adapter_cls in adapter_classes:
         if adapter_cls.is_compatible(od_config, model, source):
             return adapter_cls(gguf_file, model, source, od_config)
@@ -40,6 +41,7 @@ def get_gguf_adapter(
 __all__ = [
     "GGUFAdapter",
     "Flux2KleinGGUFAdapter",
+    "Wan22GGUFAdapter",
     "ZImageGGUFAdapter",
     "get_gguf_adapter",
 ]

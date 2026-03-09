@@ -6,7 +6,7 @@
 3. Keep user-facing knobs minimal and consistent across offline and online flows.
 
 ## Scope
-1. Models: Z-Image, and Flux2-klein.
+1. Models: Z-Image, Flux2-klein, and Wan2.2.
 2. Components: diffusion transformer weights, loader paths, and quantization configs.
 3. Modes: native GGUF (transformer-only weights).
 
@@ -122,21 +122,23 @@ x @ weight.T
 
 ## GGUF Weight Loading Path (Transformer-Only)
 1. `DiffusersPipelineLoader.load_model` detects `quantization_config.method == "gguf"`.
-2. `gguf_model` is resolved as one of: local file, `repo/file.gguf`, or `repo:quant_type`.
+2. `gguf_model` or `gguf_models` is resolved as one of: local file, `repo/file.gguf`, or `repo:quant_type`.
 3. GGUF weights are routed through adapters in `vllm_omni/diffusion/model_loader/gguf_adapters/`.
-4. Name mapping is applied per-architecture (Z-Image, Flux2Klein).
+4. Name mapping is applied per-architecture (Z-Image, Flux2Klein, Wan2.2).
 5. GGUF weights are loaded into transformer modules, remaining non-transformer weights come from the HF checkpoint.
 
 ## GGUF Adapter Design
 1. `GGUFAdapter` is an abstract base class for model-specific adapters.
 2. `Flux2KleinGGUFAdapter` implements Flux2-Klein remapping + qkv split + adaLN swap.
 3. `ZImageGGUFAdapter` implements Z-Image qkv + ffn shard handling and linear qweight routing.
-4. `get_gguf_adapter(...)` strictly selects by model class/config; unsupported models raise an error (no fallback adapter).
+4. `Wan22GGUFAdapter` implements Wan2.2 self-attention QKV, FFN, and output remapping.
+5. `get_gguf_adapter(...)` strictly selects by model class/config; unsupported models raise an error (no fallback adapter).
 
 Adapter paths:
 - Base: `vllm_omni/diffusion/model_loader/gguf_adapters/base.py`
 - Z-Image: `vllm_omni/diffusion/model_loader/gguf_adapters/z_image.py`
 - Flux2-Klein: `vllm_omni/diffusion/model_loader/gguf_adapters/flux2_klein.py`
+- Wan2.2: `vllm_omni/diffusion/model_loader/gguf_adapters/wan22.py`
 
 ## User Usage (Offline)
 
@@ -173,6 +175,7 @@ python examples/offline_inference/text_to_image/text_to_image.py \
 Notes for GGUF:
 1. Many GGUF repos do not ship `model_index.json` and configs. Use the base repo for `--model` and only pass the GGUF file via `--gguf-model`.
 2. `gguf_model` supports local path, `repo/file.gguf`, or `repo:quant_type`.
+3. Multi-transformer models can use `gguf_models` keyed by source subfolder, for example `transformer` and `transformer_2`.
 
 ## User Usage (Online)
 
@@ -195,3 +198,26 @@ curl -X POST http://localhost:8000/v1/images/generations \
     "num_inference_steps": 4
   }'
 ```
+
+## Wan2.2 Example (2026-03-09)
+
+### Offline
+```bash
+python examples/offline_inference/text_to_video/text_to_video.py \
+  --model Wan-AI/Wan2.2-T2V-A14B-Diffusers \
+  --quantization gguf \
+  --quantization-config '{"method":"gguf","gguf_models":{"transformer":"QuantStack/Wan2.2-T2V-A14B-GGUF/HighNoise/Wan2.2-T2V-A14B-HighNoise-Q4_K_M.gguf","transformer_2":"QuantStack/Wan2.2-T2V-A14B-GGUF/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q4_K_M.gguf"}}'
+```
+
+### Online
+```bash
+vllm serve Wan-AI/Wan2.2-T2V-A14B-Diffusers \
+  --omni \
+  --port 8000 \
+  --quantization-config '{"method":"gguf","gguf_models":{"transformer":"QuantStack/Wan2.2-T2V-A14B-GGUF/HighNoise/Wan2.2-T2V-A14B-HighNoise-Q4_K_M.gguf","transformer_2":"QuantStack/Wan2.2-T2V-A14B-GGUF/LowNoise/Wan2.2-T2V-A14B-LowNoise-Q4_K_M.gguf"}}'
+```
+
+Notes:
+1. `Wan-AI/Wan2.2-T2V-A14B-Diffusers` provides the base config, scheduler, tokenizer, text encoder, and VAE.
+2. `QuantStack/Wan2.2-T2V-A14B-GGUF` provides separate GGUF weights for the high-noise `transformer` stage and the low-noise `transformer_2` stage.
+3. Single-source models can keep using `gguf_model`; Wan2.2 should prefer `gguf_models`.

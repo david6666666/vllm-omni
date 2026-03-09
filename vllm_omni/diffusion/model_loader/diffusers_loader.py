@@ -341,27 +341,36 @@ class DiffusersPipelineLoader:
             if method != "gguf":
                 return False
             gguf_model = quant_config.get("gguf_model")
-            if not gguf_model:
-                raise ValueError("GGUF quantization requires quantization_config.gguf_model")
+            gguf_models = quant_config.get("gguf_models")
+            if not gguf_model and not gguf_models:
+                raise ValueError(
+                    "GGUF quantization requires quantization_config.gguf_model "
+                    "or quantization_config.gguf_models"
+                )
             return True
 
         # Normal path: DiffusionQuantizationConfig
         if not hasattr(quant_config, "get_name"):
             # Fallback: if it carries gguf_model, treat as GGUF
             gguf_model = getattr(quant_config, "gguf_model", None)
-            return bool(gguf_model)
+            gguf_models = getattr(quant_config, "gguf_models", None)
+            return bool(gguf_model or gguf_models)
         is_gguf = quant_config.get_name() == "gguf"
         if not is_gguf:
             return False
         gguf_model = getattr(quant_config, "gguf_model", None)
-        if gguf_model is None:
-            raise ValueError("GGUF quantization requires quantization_config.gguf_model")
+        gguf_models = getattr(quant_config, "gguf_models", None)
+        if gguf_model is None and not gguf_models:
+            raise ValueError(
+                "GGUF quantization requires quantization_config.gguf_model "
+                "or quantization_config.gguf_models"
+            )
         return True
 
     def _is_transformer_source(self, source: "ComponentSource") -> bool:
-        if source.subfolder == "transformer":
+        if source.subfolder is not None and source.subfolder.startswith("transformer"):
             return True
-        return source.prefix.startswith("transformer.")
+        return source.prefix.startswith("transformer")
 
     def _get_model_loadable_names(self, model: nn.Module) -> set[str]:
         # Avoid model.state_dict() here because GGUF uses UninitializedParameter
@@ -397,6 +406,38 @@ class DiffusersPipelineLoader:
             "<repo_id>/<filename>.gguf, or <repo_id>:<quant_type>)"
         )
 
+    def _get_gguf_model_ref_for_source(
+        self,
+        quant_config,
+        source: "ComponentSource",
+    ) -> str:
+        if isinstance(quant_config, dict):
+            gguf_models = quant_config.get("gguf_models")
+            gguf_model = quant_config.get("gguf_model")
+        else:
+            gguf_models = getattr(quant_config, "gguf_models", None)
+            gguf_model = getattr(quant_config, "gguf_model", None)
+        if isinstance(gguf_models, dict):
+            source_key = source.subfolder or source.prefix.rstrip(".")
+            if source_key in gguf_models:
+                return gguf_models[source_key]
+            if gguf_models:
+                if gguf_model is not None:
+                    return gguf_model
+                raise ValueError(
+                    "GGUF quantization requires a GGUF reference for source "
+                    f"{source_key!r} in quantization_config.gguf_models"
+                )
+
+        if gguf_model is not None:
+            return gguf_model
+
+        source_key = source.subfolder or source.prefix.rstrip(".")
+        raise ValueError(
+            "GGUF quantization requires quantization_config.gguf_model "
+            f"or a source-specific quantization_config.gguf_models entry for {source_key!r}"
+        )
+
     def _get_gguf_weights_iterator(
         self,
         source: "ComponentSource",
@@ -404,9 +445,7 @@ class DiffusersPipelineLoader:
         od_config: OmniDiffusionConfig,
     ) -> Generator[tuple[str, torch.Tensor], None, None]:
         quant_config = od_config.quantization_config
-        gguf_model = getattr(quant_config, "gguf_model", None)
-        if gguf_model is None:
-            raise ValueError("GGUF quantization requires quantization_config.gguf_model")
+        gguf_model = self._get_gguf_model_ref_for_source(quant_config, source)
         gguf_file = self._resolve_gguf_model_path(gguf_model, od_config.revision)
         adapter = get_gguf_adapter(gguf_file, model, source, od_config)
         weights_iter = adapter.weights_iterator()

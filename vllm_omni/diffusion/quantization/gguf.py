@@ -75,6 +75,8 @@ class DiffusionGgufConfig(DiffusionQuantizationConfig):
 
     Args:
         gguf_model: GGUF model path or HF reference (repo/file or repo:quant_type)
+        gguf_models: Optional per-source GGUF refs keyed by component subfolder
+            such as `transformer` or `transformer_2`.
         unquantized_modules: Optional list of module name patterns to skip GGUF
             quantization. Note: diffusion linear layers often use short prefixes
             (e.g., "to_qkv"), so these patterns are matched as substrings.
@@ -85,9 +87,11 @@ class DiffusionGgufConfig(DiffusionQuantizationConfig):
     def __init__(
         self,
         gguf_model: str | None = None,
+        gguf_models: dict[str, str] | None = None,
         unquantized_modules: list[str] | None = None,
     ) -> None:
         self.gguf_model = gguf_model
+        self.gguf_models = dict(gguf_models) if gguf_models is not None else None
         self.unquantized_modules = unquantized_modules or []
 
         self._vllm_config = _GGUFConfig(unquantized_modules=self.unquantized_modules)
