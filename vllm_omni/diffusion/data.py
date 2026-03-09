@@ -6,27 +6,19 @@ import os
 import random
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import torch
 from pydantic import model_validator
 from typing_extensions import Self
 from vllm.config.utils import config
 from vllm.logger import init_logger
+from vllm.model_executor.layers.quantization.base_config import (
+    QuantizationConfig,
+)
 
 from vllm_omni.diffusion.utils.network_utils import is_port_available
-from vllm_omni.quantization import (
-    build_quant_config,
-)
-from vllm_omni.quantization.compat import (
-    DiffusionQuantizationConfig,
-    get_vllm_quant_config_for_layers,
-)
-
-if TYPE_CHECKING:
-    from vllm.model_executor.layers.quantization.base_config import (
-        QuantizationConfig,
-    )
+from vllm_omni.quantization import build_quant_config
 
 # Import after TYPE_CHECKING to avoid circular imports at runtime
 # The actual import is deferred to __post_init__ to avoid import order issues
@@ -466,7 +458,7 @@ class OmniDiffusionConfig:
     # Can be a string ("fp8"), dict ({"method": "fp8", ...}), or per-component
     # dict ({"transformer": "fp8", "vae": None}).
     quantization: str | None = None
-    quantization_config: "QuantizationConfig | DiffusionQuantizationConfig | dict[str, Any] | None" = None
+    quantization_config: QuantizationConfig | dict[str, Any] | None = None
 
     @property
     def is_moe(self) -> bool:
@@ -567,22 +559,12 @@ class OmniDiffusionConfig:
             self.cache_config = DiffusionCacheConfig()
 
         # Convert quantization config using the unified quantization framework.
-        # Accepts: str ("fp8"), dict ({"method": "fp8", ...}), per-component dict,
-        # QuantizationConfig instance, or legacy DiffusionQuantizationConfig.
+        # Accepts: str, dict, per-component dict, or QuantizationConfig instance.
         if self.quantization is not None or self.quantization_config is not None:
-            from vllm.model_executor.layers.quantization.base_config import (
-                QuantizationConfig,
-            )
-
             if isinstance(self.quantization_config, QuantizationConfig):
-                # Already a proper config — passthrough
-                pass
-            elif isinstance(self.quantization_config, DiffusionQuantizationConfig):
-                # Legacy wrapper — unwrap to vLLM config
-                self.quantization_config = get_vllm_quant_config_for_layers(self.quantization_config)
+                pass  # Already built
             elif isinstance(self.quantization_config, Mapping):
                 config_dict = dict(self.quantization_config)
-                # If top-level "quantization" string also provided, inject as fallback method
                 if "method" not in config_dict and self.quantization is not None:
                     config_dict["method"] = self.quantization
                 self.quantization_config = build_quant_config(config_dict)

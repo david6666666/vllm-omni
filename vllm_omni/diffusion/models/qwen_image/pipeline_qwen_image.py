@@ -36,7 +36,6 @@ from vllm_omni.diffusion.utils.tf_utils import get_transformer_config_kwargs
 from vllm_omni.model_executor.model_loader.weight_utils import (
     download_weights_from_hf_specific,
 )
-from vllm_omni.quantization.compat import get_vllm_quant_config_for_layers
 
 logger = logging.getLogger(__name__)
 
@@ -271,9 +270,8 @@ class QwenImagePipeline(nn.Module, QwenImageCFGParallelMixin):
             model, subfolder="vae", local_files_only=local_files_only
         ).to(self.device)
         transformer_kwargs = get_transformer_config_kwargs(od_config.tf_model_config, QwenImageTransformer2DModel)
-        quant_config = get_vllm_quant_config_for_layers(od_config.quantization_config)
         self.transformer = QwenImageTransformer2DModel(
-            od_config=od_config, quant_config=quant_config, **transformer_kwargs
+            od_config=od_config, quant_config=od_config.quantization_config, **transformer_kwargs
         )
 
         self.tokenizer = Qwen2Tokenizer.from_pretrained(model, subfolder="tokenizer", local_files_only=local_files_only)

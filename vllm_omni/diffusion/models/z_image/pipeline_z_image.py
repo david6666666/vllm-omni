@@ -41,7 +41,6 @@ from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.model_executor.model_loader.weight_utils import (
     download_weights_from_hf_specific,
 )
-from vllm_omni.quantization.compat import get_vllm_quant_config_for_layers
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -174,9 +173,7 @@ class ZImagePipeline(nn.Module):
         self.vae = DistributedAutoencoderKL.from_pretrained(
             model, subfolder="vae", local_files_only=local_files_only
         ).to(self._execution_device)
-        # Get vLLM quantization config for linear layers
-        quant_config = get_vllm_quant_config_for_layers(od_config.quantization_config)
-        self.transformer = ZImageTransformer2DModel(quant_config=quant_config)
+        self.transformer = ZImageTransformer2DModel(quant_config=od_config.quantization_config)
         self.tokenizer = AutoTokenizer.from_pretrained(model, subfolder="tokenizer", local_files_only=local_files_only)
 
         # Note: Context parallelism is applied centrally in registry.initialize_model()

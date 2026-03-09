@@ -351,9 +351,7 @@ class DiffusersPipelineLoader:
                 raise ValueError("GGUF quantization requires gguf_model")
             return True
 
-        # Legacy: DiffusionQuantizationConfig wrapper with gguf_model attr
-        gguf_model = getattr(quant_config, "gguf_model", None)
-        return bool(gguf_model)
+        return False
 
     def _is_transformer_source(self, source: "ComponentSource") -> bool:
         if source.subfolder == "transformer":
