@@ -225,7 +225,8 @@ class BagelPipeline(nn.Module, DiffusionPipelineProfilerMixin):
         )
 
         parallel_config = od_config.parallel_config if od_config else None
-        self.language_model = Qwen2MoTForCausalLM(llm_config, parallel_config=parallel_config)
+        quant_config = od_config.quantization_config
+        self.language_model = Qwen2MoTForCausalLM(llm_config, parallel_config=parallel_config, quant_config=quant_config, prefix="bagel.language_model")
         ae_params: AutoEncoderParams = default_ae_params()
         self.vae = AutoEncoder(ae_params)
 
@@ -233,6 +234,8 @@ class BagelPipeline(nn.Module, DiffusionPipelineProfilerMixin):
             language_model=self.language_model,
             vit_model=self.vit_model,
             parallel_config=parallel_config,
+            quant_config=quant_config,
+            prefix="bagel",
             config=BagelConfig(
                 llm_config=llm_config,
                 vae_config=vae_cfg,
@@ -257,7 +260,12 @@ class BagelPipeline(nn.Module, DiffusionPipelineProfilerMixin):
             )
         ]
 
-        self.to(self.device)
+        # When quantization is enabled, vLLM linear layers live on meta
+        # device until the weight loader materializes them. Calling
+        # .to(device) would fail on those meta tensors, so we skip it
+        # entirely and let the weight loader handle device placement.
+        if quant_config is None:
+            self.to(self.device)
         self.setup_diffusion_pipeline_profiler(
             enable_diffusion_pipeline_profiler=self.od_config.enable_diffusion_pipeline_profiler
         )
