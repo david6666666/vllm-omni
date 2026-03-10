@@ -163,3 +163,73 @@ def test_load_model_clears_cache_backend_for_unsupported_pipeline(monkeypatch):
     assert runner.cache_backend is None
     assert runner.od_config.cache_backend is None
     assert dummy_cache_backend.enabled is False
+
+
+@pytest.mark.parametrize(
+    ("cache_backend_name", "enable_layerwise_offload", "expected_events"),
+    [
+        ("cache_dit", True, ["cache", "offload"]),
+        ("tea_cache", True, ["offload", "cache"]),
+    ],
+)
+def test_load_model_orders_cache_and_offload_backends(monkeypatch, cache_backend_name, enable_layerwise_offload, expected_events):
+    events: list[str] = []
+
+    class _DummyLoader:
+        def __init__(self, load_config, od_config=None):
+            del load_config, od_config
+
+        def load_model(self, **kwargs):
+            del kwargs
+            return SimpleNamespace(transformer=torch.nn.Identity())
+
+    class _DummyMemoryProfiler:
+        consumed_memory = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            del exc_type, exc, tb
+            return False
+
+    class _DummyBackend:
+        def __init__(self, event_name: str):
+            self.event_name = event_name
+
+        def enable(self, pipeline):
+            del pipeline
+            events.append(self.event_name)
+
+    runner = object.__new__(DiffusionModelRunner)
+    runner.vllm_config = object()
+    runner.device = torch.device("cpu")
+    runner.pipeline = None
+    runner.cache_backend = None
+    runner.offload_backend = None
+    runner.od_config = SimpleNamespace(
+        enable_cpu_offload=False,
+        enable_layerwise_offload=enable_layerwise_offload,
+        cache_backend=cache_backend_name,
+        cache_config={},
+        model_class_name="QwenImageEditPipeline",
+        enforce_eager=True,
+    )
+
+    monkeypatch.setattr(model_runner_module, "LoadConfig", lambda: object())
+    monkeypatch.setattr(model_runner_module, "DiffusersPipelineLoader", _DummyLoader)
+    monkeypatch.setattr(model_runner_module, "DeviceMemoryProfiler", _DummyMemoryProfiler)
+    monkeypatch.setattr(
+        model_runner_module,
+        "get_offload_backend",
+        lambda od_config, device: _DummyBackend("offload"),
+    )
+    monkeypatch.setattr(
+        model_runner_module,
+        "get_cache_backend",
+        lambda cache_backend, cache_config: _DummyBackend("cache"),
+    )
+
+    DiffusionModelRunner.load_model(runner)
+
+    assert events == expected_events

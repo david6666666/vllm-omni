@@ -138,9 +138,15 @@ class DiffusionModelRunner:
         )
         logger.info("Model runner: Model loaded successfully.")
 
-        # Apply CPU offloading
+        # Apply CPU offloading. Cache-DiT needs to see the pristine transformer
+        # before layer-wise offload mutates block state via hooks/placeholders.
         self.offload_backend = get_offload_backend(self.od_config, device=self.device)
-        if self.offload_backend is not None:
+        defer_offload_until_after_cache = (
+            self.offload_backend is not None
+            and self.od_config.enable_layerwise_offload
+            and self.od_config.cache_backend == "cache_dit"
+        )
+        if self.offload_backend is not None and not defer_offload_until_after_cache:
             logger.info(f" Enabling offloader backend: {self.offload_backend.__class__.__name__}")
             self.offload_backend.enable(self.pipeline)
 
@@ -169,6 +175,13 @@ class DiffusionModelRunner:
                 self.od_config.cache_backend = None
             else:
                 self.cache_backend.enable(self.pipeline)
+
+        if defer_offload_until_after_cache and self.offload_backend is not None:
+            logger.info(
+                " Deferring offloader backend %s until after cache_dit initialization.",
+                self.offload_backend.__class__.__name__,
+            )
+            self.offload_backend.enable(self.pipeline)
 
         logger.info("Model runner: Initialization complete.")
 
