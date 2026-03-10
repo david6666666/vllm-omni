@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from vllm_omni.diffusion.model_loader.gguf_adapters import get_gguf_adapter
 from vllm_omni.diffusion.model_loader.gguf_adapters.qwen_image import (
     QwenImageGGUFAdapter,
@@ -74,3 +76,34 @@ def test_qwen_adapter_keeps_already_fused_names_stable():
     assert mapper.apply_list(["transformer_blocks.0.attn.add_kv_proj.weight"]) == [
         "transformer_blocks.0.attn.add_kv_proj.weight"
     ]
+
+
+def test_qwen_adapter_skips_top_level_quantized_weights(monkeypatch: pytest.MonkeyPatch):
+    import vllm_omni.diffusion.model_loader.gguf_adapters.qwen_image as qwen_image_module
+
+    monkeypatch.setattr(
+        qwen_image_module,
+        "gguf_quant_weights_iterator",
+        lambda _path: iter(
+            [
+                ("img_in.qweight_type", 1),
+                ("img_in.qweight", 2),
+                ("transformer_blocks.0.attn.to_q.qweight_type", 3),
+                ("transformer_blocks.0.attn.to_q.qweight", 4),
+            ]
+        ),
+    )
+
+    adapter = QwenImageGGUFAdapter(
+        "dummy.gguf",
+        _FakeTransformer(),
+        _make_source(),
+        _make_od_config(),
+    )
+
+    weights = list(adapter.weights_iterator())
+
+    assert ("img_in.qweight_type", 1) not in weights
+    assert ("img_in.qweight", 2) not in weights
+    assert ("transformer_blocks.0.attn.to_qkv.qweight_type", 3) in weights
+    assert ("transformer_blocks.0.attn.to_qkv.qweight", 4) in weights

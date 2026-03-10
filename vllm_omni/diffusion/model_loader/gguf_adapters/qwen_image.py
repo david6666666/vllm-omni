@@ -8,6 +8,8 @@ from vllm.model_executor.models.utils import WeightsMapper
 
 from .base import GGUFAdapter, gguf_quant_weights_iterator
 
+QWEN_IMAGE_SUPPORTED_PREFIXES = ("transformer_blocks.",)
+
 QWEN_IMAGE_KEYS_RENAME_DICT = {
     ".to_q.": ".to_qkv.",
     ".to_k.": ".to_qkv.",
@@ -40,4 +42,6 @@ class QwenImageGGUFAdapter(GGUFAdapter):
 
     def weights_iterator(self) -> Iterable[tuple[str, torch.Tensor]]:
         weights = gguf_quant_weights_iterator(self.gguf_file)
-        yield from self.gguf_to_hf_mapper.apply(weights)
+        for name, tensor in self.gguf_to_hf_mapper.apply(weights):
+            if name.startswith(QWEN_IMAGE_SUPPORTED_PREFIXES):
+                yield name, tensor
