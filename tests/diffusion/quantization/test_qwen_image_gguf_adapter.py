@@ -26,7 +26,25 @@ def _make_source(prefix: str = "", subfolder: str = "transformer"):
 
 
 class _FakeTransformer:
-    pass
+    def __init__(self) -> None:
+        self._params = {
+            "transformer_blocks.0.attn.to_qkv.qweight": 1,
+            "transformer_blocks.0.attn.to_qkv.qweight_type": 1,
+            "transformer_blocks.0.attn.add_kv_proj.qweight": 1,
+            "transformer_blocks.0.attn.add_kv_proj.qweight_type": 1,
+            "transformer_blocks.0.attn.to_out.weight": 1,
+            "transformer_blocks.0.img_mlp.net.0.proj.qweight": 1,
+            "transformer_blocks.0.img_mlp.net.0.proj.qweight_type": 1,
+        }
+
+    def named_parameters(self):
+        return list(self._params.items())
+
+    def named_buffers(self):
+        return []
+
+    def get_submodule(self, _prefix: str):
+        return self
 
 
 def test_qwen_adapter_selected_for_qwen_image_family():
@@ -105,5 +123,36 @@ def test_qwen_adapter_skips_top_level_quantized_weights(monkeypatch: pytest.Monk
 
     assert ("img_in.qweight_type", 1) not in weights
     assert ("img_in.qweight", 2) not in weights
+    assert ("transformer_blocks.0.attn.to_qkv.qweight_type", 3) in weights
+    assert ("transformer_blocks.0.attn.to_qkv.qweight", 4) in weights
+
+
+def test_qwen_adapter_skips_unloadable_transformer_quantized_weights(monkeypatch: pytest.MonkeyPatch):
+    import vllm_omni.diffusion.model_loader.gguf_adapters.qwen_image as qwen_image_module
+
+    monkeypatch.setattr(
+        qwen_image_module,
+        "gguf_quant_weights_iterator",
+        lambda _path: iter(
+            [
+                ("transformer_blocks.0.img_mod.1.qweight_type", 1),
+                ("transformer_blocks.0.img_mod.1.qweight", 2),
+                ("transformer_blocks.0.attn.to_q.qweight_type", 3),
+                ("transformer_blocks.0.attn.to_q.qweight", 4),
+            ]
+        ),
+    )
+
+    adapter = QwenImageGGUFAdapter(
+        "dummy.gguf",
+        _FakeTransformer(),
+        _make_source(),
+        _make_od_config(),
+    )
+
+    weights = list(adapter.weights_iterator())
+
+    assert ("transformer_blocks.0.img_mod.1.qweight_type", 1) not in weights
+    assert ("transformer_blocks.0.img_mod.1.qweight", 2) not in weights
     assert ("transformer_blocks.0.attn.to_qkv.qweight_type", 3) in weights
     assert ("transformer_blocks.0.attn.to_qkv.qweight", 4) in weights
