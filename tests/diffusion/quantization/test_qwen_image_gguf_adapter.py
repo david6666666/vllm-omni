@@ -10,6 +10,8 @@ from vllm_omni.diffusion.model_loader.gguf_adapters.qwen_image import (
     QwenImageGGUFAdapter,
 )
 
+pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
+
 
 def _make_od_config(
     model_class_name: str = "QwenImagePipeline",
