@@ -4,19 +4,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 import torch
-from vllm.model_executor.models.utils import WeightsMapper
 
 from .base import GGUFAdapter, gguf_quant_weights_iterator
-
-QWEN_IMAGE_KEYS_RENAME_DICT = {
-    ".to_q.": ".to_qkv.",
-    ".to_k.": ".to_qkv.",
-    ".to_v.": ".to_qkv.",
-    ".add_q_proj.": ".add_kv_proj.",
-    ".add_k_proj.": ".add_kv_proj.",
-    ".add_v_proj.": ".add_kv_proj.",
-    ".to_out.0.": ".to_out.",
-}
 
 
 class QwenImageGGUFAdapter(GGUFAdapter):
@@ -34,20 +23,30 @@ class QwenImageGGUFAdapter(GGUFAdapter):
                 return True
         return False
 
-    gguf_to_hf_mapper = WeightsMapper(
-        orig_to_new_substr=QWEN_IMAGE_KEYS_RENAME_DICT,
-    )
-
-    def _get_loadable_names(self) -> set[str]:
+    def _get_allowed_names(self) -> set[str]:
         prefix = getattr(self.source, "prefix", "")
         target = self.model.get_submodule(prefix.rstrip(".")) if prefix else self.model
         names = {name for name, _ in target.named_parameters()}
         names.update(name for name, _ in target.named_buffers())
+
+        virtual_names = set()
+        for name in names:
+            if ".to_qkv." in name:
+                virtual_names.add(name.replace(".to_qkv.", ".to_q."))
+                virtual_names.add(name.replace(".to_qkv.", ".to_k."))
+                virtual_names.add(name.replace(".to_qkv.", ".to_v."))
+            if ".add_kv_proj." in name:
+                virtual_names.add(name.replace(".add_kv_proj.", ".add_q_proj."))
+                virtual_names.add(name.replace(".add_kv_proj.", ".add_k_proj."))
+                virtual_names.add(name.replace(".add_kv_proj.", ".add_v_proj."))
+            if ".to_out." in name:
+                virtual_names.add(name.replace(".to_out.", ".to_out.0."))
+        names.update(virtual_names)
         return names
 
     def weights_iterator(self) -> Iterable[tuple[str, torch.Tensor]]:
-        loadable_names = self._get_loadable_names()
+        allowed_names = self._get_allowed_names()
         weights = gguf_quant_weights_iterator(self.gguf_file)
-        for name, tensor in self.gguf_to_hf_mapper.apply(weights):
-            if name in loadable_names:
+        for name, tensor in weights:
+            if name in allowed_names:
                 yield name, tensor

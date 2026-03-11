@@ -72,28 +72,36 @@ def test_qwen_adapter_matches_multiple_pipeline_variants():
 
 
 def test_qwen_adapter_maps_fused_projection_names():
-    mapper = QwenImageGGUFAdapter.gguf_to_hf_mapper
+    adapter = QwenImageGGUFAdapter(
+        "dummy.gguf",
+        _FakeTransformer(),
+        _make_source(),
+        _make_od_config(),
+    )
 
-    assert mapper.apply_list(["transformer_blocks.0.attn.to_q.weight"]) == [
-        "transformer_blocks.0.attn.to_qkv.weight"
-    ]
-    assert mapper.apply_list(["transformer_blocks.0.attn.add_q_proj.weight"]) == [
-        "transformer_blocks.0.attn.add_kv_proj.weight"
-    ]
-    assert mapper.apply_list(["transformer_blocks.0.attn.to_out.0.weight"]) == [
-        "transformer_blocks.0.attn.to_out.weight"
-    ]
+    allowed_names = adapter._get_allowed_names()  # pyright: ignore[reportPrivateUsage]
+
+    assert "transformer_blocks.0.attn.to_q.qweight" in allowed_names
+    assert "transformer_blocks.0.attn.to_k.qweight" in allowed_names
+    assert "transformer_blocks.0.attn.to_v.qweight" in allowed_names
+    assert "transformer_blocks.0.attn.add_q_proj.qweight" in allowed_names
+    assert "transformer_blocks.0.attn.add_k_proj.qweight" in allowed_names
+    assert "transformer_blocks.0.attn.add_v_proj.qweight" in allowed_names
+    assert "transformer_blocks.0.attn.to_out.0.weight" in allowed_names
 
 
 def test_qwen_adapter_keeps_already_fused_names_stable():
-    mapper = QwenImageGGUFAdapter.gguf_to_hf_mapper
+    adapter = QwenImageGGUFAdapter(
+        "dummy.gguf",
+        _FakeTransformer(),
+        _make_source(),
+        _make_od_config(),
+    )
 
-    assert mapper.apply_list(["transformer_blocks.0.attn.to_qkv.weight"]) == [
-        "transformer_blocks.0.attn.to_qkv.weight"
-    ]
-    assert mapper.apply_list(["transformer_blocks.0.attn.add_kv_proj.weight"]) == [
-        "transformer_blocks.0.attn.add_kv_proj.weight"
-    ]
+    allowed_names = adapter._get_allowed_names()  # pyright: ignore[reportPrivateUsage]
+
+    assert "transformer_blocks.0.attn.to_qkv.qweight" in allowed_names
+    assert "transformer_blocks.0.attn.add_kv_proj.qweight" in allowed_names
 
 
 def test_qwen_adapter_skips_top_level_quantized_weights(monkeypatch: pytest.MonkeyPatch):
@@ -123,8 +131,8 @@ def test_qwen_adapter_skips_top_level_quantized_weights(monkeypatch: pytest.Monk
 
     assert ("img_in.qweight_type", 1) not in weights
     assert ("img_in.qweight", 2) not in weights
-    assert ("transformer_blocks.0.attn.to_qkv.qweight_type", 3) in weights
-    assert ("transformer_blocks.0.attn.to_qkv.qweight", 4) in weights
+    assert ("transformer_blocks.0.attn.to_q.qweight_type", 3) in weights
+    assert ("transformer_blocks.0.attn.to_q.qweight", 4) in weights
 
 
 def test_qwen_adapter_skips_unloadable_transformer_quantized_weights(monkeypatch: pytest.MonkeyPatch):
@@ -154,5 +162,5 @@ def test_qwen_adapter_skips_unloadable_transformer_quantized_weights(monkeypatch
 
     assert ("transformer_blocks.0.img_mod.1.qweight_type", 1) not in weights
     assert ("transformer_blocks.0.img_mod.1.qweight", 2) not in weights
-    assert ("transformer_blocks.0.attn.to_qkv.qweight_type", 3) in weights
-    assert ("transformer_blocks.0.attn.to_qkv.qweight", 4) in weights
+    assert ("transformer_blocks.0.attn.to_q.qweight_type", 3) in weights
+    assert ("transformer_blocks.0.attn.to_q.qweight", 4) in weights
