@@ -963,6 +963,14 @@ class QwenImageTransformer2DModel(CachedTransformer):
         )
 
         self.norm_out = AdaLayerNormContinuous(self.inner_dim, self.inner_dim, elementwise_affine=False, eps=1e-6)
+        self.norm_out.linear = ReplicatedLinear(
+            self.inner_dim,
+            2 * self.inner_dim,
+            bias=True,
+            return_bias=False,
+            quant_config=quant_config,
+            prefix="norm_out.linear",
+        )
         self.proj_out = ReplicatedLinear(
             self.inner_dim,
             patch_size * patch_size * self.out_channels,
