@@ -36,6 +36,10 @@ class _FakeTransformer:
             "txt_in.qweight_type": 1,
             "proj_out.qweight": 1,
             "proj_out.qweight_type": 1,
+            "time_text_embed.timestep_embedder.linear_1.qweight": 1,
+            "time_text_embed.timestep_embedder.linear_1.qweight_type": 1,
+            "time_text_embed.timestep_embedder.linear_2.qweight": 1,
+            "time_text_embed.timestep_embedder.linear_2.qweight_type": 1,
             "transformer_blocks.0.img_mod.1.qweight": 1,
             "transformer_blocks.0.img_mod.1.qweight_type": 1,
             "transformer_blocks.0.txt_mod.1.qweight": 1,
@@ -75,12 +79,12 @@ def test_qwen_adapter_matches_multiple_pipeline_variants():
         "QwenImageEditPipeline",
         "QwenImageEditPlusPipeline",
         "QwenImageLayeredPipeline",
-        ):
-            assert QwenImageGGUFAdapter.is_compatible(
-                _make_od_config(model_class_name=model_class_name),
-                _FakeTransformer(),
-                _make_source(),
-            )
+    ):
+        assert QwenImageGGUFAdapter.is_compatible(
+            _make_od_config(model_class_name=model_class_name),
+            _FakeTransformer(),
+            _make_source(),
+        )
 
 
 def test_qwen_adapter_preserves_split_projection_names(monkeypatch: pytest.MonkeyPatch):
@@ -128,8 +132,8 @@ def test_qwen_adapter_keeps_top_level_quantized_weights(monkeypatch: pytest.Monk
             [
                 ("img_in.qweight_type", 1),
                 ("img_in.qweight", 2),
-                ("transformer_blocks.0.attn.to_q.qweight_type", 3),
-                ("transformer_blocks.0.attn.to_q.qweight", 4),
+                ("time_text_embed.timestep_embedder.linear_1.qweight_type", 3),
+                ("time_text_embed.timestep_embedder.linear_1.qweight", 4),
             ]
         ),
     )
@@ -145,8 +149,8 @@ def test_qwen_adapter_keeps_top_level_quantized_weights(monkeypatch: pytest.Monk
 
     assert ("img_in.qweight_type", 1) in weights
     assert ("img_in.qweight", 2) in weights
-    assert ("transformer_blocks.0.attn.to_q.qweight_type", 3) in weights
-    assert ("transformer_blocks.0.attn.to_q.qweight", 4) in weights
+    assert ("time_text_embed.timestep_embedder.linear_1.qweight_type", 3) in weights
+    assert ("time_text_embed.timestep_embedder.linear_1.qweight", 4) in weights
 
 
 def test_qwen_adapter_keeps_modulation_quantized_weights(monkeypatch: pytest.MonkeyPatch):

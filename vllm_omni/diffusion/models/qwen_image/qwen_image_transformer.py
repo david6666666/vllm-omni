@@ -158,11 +158,32 @@ class ModulateIndexPrepare(nn.Module):
 
 
 class QwenTimestepProjEmbeddings(nn.Module):
-    def __init__(self, embedding_dim, use_additional_t_cond=False):
+    def __init__(
+        self,
+        embedding_dim,
+        use_additional_t_cond: bool = False,
+        quant_config: QuantizationConfig | None = None,
+    ):
         super().__init__()
 
         self.time_proj = Timesteps(num_channels=256, flip_sin_to_cos=True, downscale_freq_shift=0, scale=1000)
         self.timestep_embedder = TimestepEmbedding(in_channels=256, time_embed_dim=embedding_dim)
+        self.timestep_embedder.linear_1 = ReplicatedLinear(
+            256,
+            embedding_dim,
+            bias=True,
+            return_bias=False,
+            quant_config=quant_config,
+            prefix="timestep_embedder.linear_1",
+        )
+        self.timestep_embedder.linear_2 = ReplicatedLinear(
+            embedding_dim,
+            embedding_dim,
+            bias=True,
+            return_bias=False,
+            quant_config=quant_config,
+            prefix="timestep_embedder.linear_2",
+        )
         self.use_additional_t_cond = use_additional_t_cond
         if use_additional_t_cond:
             self.addition_t_embedding = nn.Embedding(2, embedding_dim)
@@ -927,7 +948,9 @@ class QwenImageTransformer2DModel(CachedTransformer):
             self.pos_embed = QwenEmbedLayer3DRope(theta=10000, axes_dim=list(axes_dims_rope), scale_rope=True)
 
         self.time_text_embed = QwenTimestepProjEmbeddings(
-            embedding_dim=self.inner_dim, use_additional_t_cond=use_additional_t_cond
+            embedding_dim=self.inner_dim,
+            use_additional_t_cond=use_additional_t_cond,
+            quant_config=quant_config,
         )
 
         self.txt_norm = RMSNorm(joint_attention_dim, eps=1e-6)
