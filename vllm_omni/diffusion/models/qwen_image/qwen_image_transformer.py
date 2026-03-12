@@ -682,7 +682,14 @@ class QwenImageTransformerBlock(nn.Module):
         # Image processing modules
         self.img_mod = nn.Sequential(
             nn.SiLU(),
-            nn.Linear(dim, 6 * dim, bias=True),  # For scale, shift, gate for norm1 and norm2
+            ReplicatedLinear(
+                dim,
+                6 * dim,
+                bias=True,
+                return_bias=False,
+                quant_config=quant_config,
+                prefix="img_mod.1",
+            ),
         )
         self.img_norm1 = AdaLayerNorm(dim, elementwise_affine=False, eps=eps)
         self.attn = QwenImageCrossAttention(
@@ -699,7 +706,14 @@ class QwenImageTransformerBlock(nn.Module):
         # Text processing modules
         self.txt_mod = nn.Sequential(
             nn.SiLU(),
-            nn.Linear(dim, 6 * dim, bias=True),  # For scale, shift, gate for norm1 and norm2
+            ReplicatedLinear(
+                dim,
+                6 * dim,
+                bias=True,
+                return_bias=False,
+                quant_config=quant_config,
+                prefix="txt_mod.1",
+            ),
         )
         self.txt_norm1 = AdaLayerNorm(dim, elementwise_affine=False, eps=eps)
         # Text doesn't need separate attention - it's handled by img_attn joint computation
