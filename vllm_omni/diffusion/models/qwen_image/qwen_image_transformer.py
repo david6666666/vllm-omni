@@ -21,6 +21,7 @@ from vllm.model_executor.layers.layernorm import RMSNorm
 from vllm.model_executor.layers.linear import (
     ColumnParallelLinear,
     QKVParallelLinear,
+    ReplicatedLinear,
     RowParallelLinear,
 )
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
@@ -60,7 +61,7 @@ class ImageRopePrepare(nn.Module):
     Note: Our _sp_plan corresponds to diffusers' _cp_plan (Context Parallelism).
     """
 
-    def __init__(self, img_in: nn.Linear, pos_embed: nn.Module):
+    def __init__(self, img_in: nn.Module, pos_embed: nn.Module):
         super().__init__()
         self.img_in = img_in
         self.pos_embed = pos_embed
@@ -917,8 +918,22 @@ class QwenImageTransformer2DModel(CachedTransformer):
 
         self.txt_norm = RMSNorm(joint_attention_dim, eps=1e-6)
 
-        self.img_in = nn.Linear(in_channels, self.inner_dim)
-        self.txt_in = nn.Linear(joint_attention_dim, self.inner_dim)
+        self.img_in = ReplicatedLinear(
+            in_channels,
+            self.inner_dim,
+            bias=True,
+            return_bias=False,
+            quant_config=quant_config,
+            prefix="img_in",
+        )
+        self.txt_in = ReplicatedLinear(
+            joint_attention_dim,
+            self.inner_dim,
+            bias=True,
+            return_bias=False,
+            quant_config=quant_config,
+            prefix="txt_in",
+        )
 
         self.transformer_blocks = nn.ModuleList(
             [
@@ -934,7 +949,14 @@ class QwenImageTransformer2DModel(CachedTransformer):
         )
 
         self.norm_out = AdaLayerNormContinuous(self.inner_dim, self.inner_dim, elementwise_affine=False, eps=1e-6)
-        self.proj_out = nn.Linear(self.inner_dim, patch_size * patch_size * self.out_channels, bias=True)
+        self.proj_out = ReplicatedLinear(
+            self.inner_dim,
+            patch_size * patch_size * self.out_channels,
+            bias=True,
+            return_bias=False,
+            quant_config=quant_config,
+            prefix="proj_out",
+        )
 
         self.gradient_checkpointing = False
         self.zero_cond_t = zero_cond_t

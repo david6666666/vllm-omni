@@ -27,9 +27,9 @@ class QwenImageGGUFAdapter(GGUFAdapter):
         """Return GGUF tensor names that this transformer can actually consume.
 
         Qwen-Image GGUF checkpoints include tensors for modules that stay dense in
-        vllm-omni, such as ``img_in``/``txt_in``/``proj_out`` and the modulation
-        MLP heads inside ``img_mod``/``txt_mod``. Those weights must fall back to
-        the base HF checkpoint instead of being routed through the GGUF loader.
+        vllm-omni, such as the modulation MLP heads inside ``img_mod``/``txt_mod``.
+        Those weights must fall back to the base HF checkpoint instead of being
+        routed through the GGUF loader.
 
         The model also packs attention projections as ``to_qkv`` and
         ``add_kv_proj``, while GGUF exports split shard names. Expose those split

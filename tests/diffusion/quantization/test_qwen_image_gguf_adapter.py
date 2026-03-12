@@ -30,6 +30,12 @@ def _make_source(prefix: str = "", subfolder: str = "transformer"):
 class _FakeTransformer:
     def __init__(self) -> None:
         self._params = {
+            "img_in.qweight": 1,
+            "img_in.qweight_type": 1,
+            "txt_in.qweight": 1,
+            "txt_in.qweight_type": 1,
+            "proj_out.qweight": 1,
+            "proj_out.qweight_type": 1,
             "transformer_blocks.0.attn.to_qkv.qweight": 1,
             "transformer_blocks.0.attn.to_qkv.qweight_type": 1,
             "transformer_blocks.0.attn.add_kv_proj.qweight": 1,
@@ -106,7 +112,7 @@ def test_qwen_adapter_keeps_already_fused_names_stable():
     assert "transformer_blocks.0.attn.add_kv_proj.qweight" in loadable_names
 
 
-def test_qwen_adapter_skips_top_level_quantized_weights(monkeypatch: pytest.MonkeyPatch):
+def test_qwen_adapter_keeps_top_level_quantized_weights(monkeypatch: pytest.MonkeyPatch):
     import vllm_omni.diffusion.model_loader.gguf_adapters.qwen_image as qwen_image_module
 
     monkeypatch.setattr(
@@ -131,8 +137,8 @@ def test_qwen_adapter_skips_top_level_quantized_weights(monkeypatch: pytest.Monk
 
     weights = list(adapter.weights_iterator())
 
-    assert ("img_in.qweight_type", 1) not in weights
-    assert ("img_in.qweight", 2) not in weights
+    assert ("img_in.qweight_type", 1) in weights
+    assert ("img_in.qweight", 2) in weights
     assert ("transformer_blocks.0.attn.to_q.qweight_type", 3) in weights
     assert ("transformer_blocks.0.attn.to_q.qweight", 4) in weights
 
