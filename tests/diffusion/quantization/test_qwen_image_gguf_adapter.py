@@ -81,15 +81,15 @@ def test_qwen_adapter_maps_fused_projection_names():
         _make_od_config(),
     )
 
-    allowed_names = adapter._get_allowed_names()  # pyright: ignore[reportPrivateUsage]
+    loadable_names = adapter._get_loadable_names()  # pyright: ignore[reportPrivateUsage]
 
-    assert "transformer_blocks.0.attn.to_q.qweight" in allowed_names
-    assert "transformer_blocks.0.attn.to_k.qweight" in allowed_names
-    assert "transformer_blocks.0.attn.to_v.qweight" in allowed_names
-    assert "transformer_blocks.0.attn.add_q_proj.qweight" in allowed_names
-    assert "transformer_blocks.0.attn.add_k_proj.qweight" in allowed_names
-    assert "transformer_blocks.0.attn.add_v_proj.qweight" in allowed_names
-    assert "transformer_blocks.0.attn.to_out.0.weight" in allowed_names
+    assert "transformer_blocks.0.attn.to_q.qweight" in loadable_names
+    assert "transformer_blocks.0.attn.to_k.qweight" in loadable_names
+    assert "transformer_blocks.0.attn.to_v.qweight" in loadable_names
+    assert "transformer_blocks.0.attn.add_q_proj.qweight" in loadable_names
+    assert "transformer_blocks.0.attn.add_k_proj.qweight" in loadable_names
+    assert "transformer_blocks.0.attn.add_v_proj.qweight" in loadable_names
+    assert "transformer_blocks.0.attn.to_out.0.weight" in loadable_names
 
 
 def test_qwen_adapter_keeps_already_fused_names_stable():
@@ -100,10 +100,10 @@ def test_qwen_adapter_keeps_already_fused_names_stable():
         _make_od_config(),
     )
 
-    allowed_names = adapter._get_allowed_names()  # pyright: ignore[reportPrivateUsage]
+    loadable_names = adapter._get_loadable_names()  # pyright: ignore[reportPrivateUsage]
 
-    assert "transformer_blocks.0.attn.to_qkv.qweight" in allowed_names
-    assert "transformer_blocks.0.attn.add_kv_proj.qweight" in allowed_names
+    assert "transformer_blocks.0.attn.to_qkv.qweight" in loadable_names
+    assert "transformer_blocks.0.attn.add_kv_proj.qweight" in loadable_names
 
 
 def test_qwen_adapter_skips_top_level_quantized_weights(monkeypatch: pytest.MonkeyPatch):
