@@ -198,7 +198,7 @@ curl -X POST http://localhost:8000/v1/images/generations \
   }'
 ```
 
-## Qwen-Image Example (2026-03-09)
+## Qwen-Image Example
 
 ### Offline
 ```bash
