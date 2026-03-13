@@ -110,17 +110,17 @@ def test_diffusion_gguf_linear_method_concatenates_sharded_outputs():
         ),
         requires_grad=False,
     )
-    qweight.shard_id = ["q", "k"]
+    qweight.shard_id = ["left", "right"]
     qweight.shard_offset_map = {
-        "q": (0, 2, 2),
-        "k": (2, 4, 2),
+        "left": (0, 2, 2),
+        "right": (2, 4, 2),
     }
     layer = SimpleNamespace(
         qweight=qweight,
         qweight_type=SimpleNamespace(
             shard_weight_type={
-                "q": qweight_type,
-                "k": qweight_type,
+                "left": qweight_type,
+                "right": qweight_type,
             }
         ),
     )
