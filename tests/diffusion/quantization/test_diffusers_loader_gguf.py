@@ -113,9 +113,7 @@ def test_is_gguf_quantization_accepts_object_config():
 
 def test_is_gguf_quantization_uses_fallback_object_without_get_name():
     loader = _make_loader()
-    od_config = SimpleNamespace(
-        quantization_config=SimpleNamespace(gguf_model="weights.gguf")
-    )
+    od_config = SimpleNamespace(quantization_config=SimpleNamespace(gguf_model="weights.gguf"))
 
     assert loader._is_gguf_quantization(od_config) is True
 
@@ -163,9 +161,7 @@ def test_resolve_gguf_model_path_downloads_by_quant_type(monkeypatch: pytest.Mon
     monkeypatch.setattr(
         loader_module,
         "download_gguf",
-        lambda repo_id, quant_type, cache_dir, revision, ignore_patterns: (
-            f"{cache_dir}/{repo_id}/{quant_type}.gguf"
-        ),
+        lambda repo_id, quant_type, cache_dir, revision, ignore_patterns: f"{cache_dir}/{repo_id}/{quant_type}.gguf",
     )
 
     resolved = loader._resolve_gguf_model_path("owner/repo:Q4_0", revision="main")
@@ -211,9 +207,7 @@ def test_load_weights_with_gguf_falls_back_only_for_missing_transformer_weights(
     monkeypatch.setattr(
         loader,
         "_get_gguf_weights_iterator",
-        lambda source, model, od_config: iter(
-            [("transformer.weight", torch.ones((2, 2), dtype=torch.float32))]
-        ),
+        lambda source, model, od_config: iter([("transformer.weight", torch.ones((2, 2), dtype=torch.float32))]),
     )
 
     def _hf_iter(source):
