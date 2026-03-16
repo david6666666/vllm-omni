@@ -1,0 +1,468 @@
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import math
+import statistics
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from io import BytesIO
+from pathlib import Path
+from typing import Any
+
+import requests
+from PIL import Image
+
+from benchmarks.accuracy.common import VllmOmniImageClient, extract_json_object, write_json
+
+GROUPS = [
+    "background_change",
+    "color_alter",
+    "material_alter",
+    "motion_change",
+    "ps_human",
+    "style_change",
+    "subject-add",
+    "subject-remove",
+    "subject-replace",
+    "text_change",
+    "tone_transfer",
+]
+
+
+def parse_score_payload(raw_text: str) -> dict[str, Any]:
+    try:
+        parsed = extract_json_object(raw_text)
+    except Exception:
+        stripped = raw_text.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            parsed = {"score": json.loads(stripped), "reasoning": ""}
+        else:
+            raise
+    score = parsed.get("score", [])
+    if not isinstance(score, list):
+        score = [score]
+    parsed["score"] = [int(value) for value in score]
+    return parsed
+
+
+def summarize_gedit_rows(rows: list[dict[str, Any]], language: str = "all") -> dict[str, Any]:
+    filtered_rows = [
+        row for row in rows if language == "all" or str(row.get("instruction_language", "")).strip() == language
+    ]
+
+    def _to_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes"}
+
+    per_group: dict[str, dict[str, float | None]] = {}
+    overall_semantics: list[float] = []
+    overall_quality: list[float] = []
+    overall_overall: list[float] = []
+    intersection_semantics: list[float] = []
+    intersection_quality: list[float] = []
+    intersection_overall: list[float] = []
+
+    for group in GROUPS:
+        group_rows = [row for row in filtered_rows if row.get("task_type") == group]
+        semantics = [float(row["sementics_score"]) for row in group_rows]
+        quality = [float(row["quality_score"]) for row in group_rows]
+        overall = [math.sqrt(float(row["sementics_score"]) * float(row["quality_score"])) for row in group_rows]
+
+        per_group[group] = {
+            "avg_semantics": statistics.fmean(semantics) if semantics else None,
+            "avg_quality": statistics.fmean(quality) if quality else None,
+            "avg_overall": statistics.fmean(overall) if overall else None,
+        }
+        overall_semantics.extend(semantics)
+        overall_quality.extend(quality)
+        overall_overall.extend(overall)
+
+        intersection_rows = [row for row in group_rows if _to_bool(row.get("intersection_exist", False))]
+        intersection_semantics.extend(float(row["sementics_score"]) for row in intersection_rows)
+        intersection_quality.extend(float(row["quality_score"]) for row in intersection_rows)
+        intersection_overall.extend(
+            math.sqrt(float(row["sementics_score"]) * float(row["quality_score"])) for row in intersection_rows
+        )
+
+    return {
+        "language": language,
+        "by_group": per_group,
+        "overall": {
+            "avg_semantics": statistics.fmean(overall_semantics) if overall_semantics else None,
+            "avg_quality": statistics.fmean(overall_quality) if overall_quality else None,
+            "avg_overall": statistics.fmean(overall_overall) if overall_overall else None,
+        },
+        "intersection": {
+            "avg_semantics": statistics.fmean(intersection_semantics) if intersection_semantics else None,
+            "avg_quality": statistics.fmean(intersection_quality) if intersection_quality else None,
+            "avg_overall": statistics.fmean(intersection_overall) if intersection_overall else None,
+        },
+    }
+
+
+def _require_datasets():
+    try:
+        from datasets import load_dataset, load_from_disk
+    except ImportError as exc:
+        raise ImportError("GEdit-Bench requires the optional `datasets` package.") from exc
+    return load_dataset, load_from_disk
+
+
+def _load_gedit_dataset(dataset_ref: str):
+    load_dataset, load_from_disk = _require_datasets()
+    dataset_path = Path(dataset_ref)
+    if dataset_path.exists():
+        return load_from_disk(str(dataset_path))
+    return load_dataset(dataset_ref)
+
+
+def _to_pil_image(value: Any) -> Image.Image:
+    if isinstance(value, Image.Image):
+        return value.convert("RGB")
+    if isinstance(value, dict) and "bytes" in value:
+        image = Image.open(BytesIO(value["bytes"]))
+        image.load()
+        return image.convert("RGB")
+    raise TypeError(f"Unsupported image payload type: {type(value)!r}")
+
+
+class OpenAIVIEScorer:
+    def __init__(self, *, base_url: str, api_key: str, model: str, timeout: int = 600):
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.model = model
+        self.timeout = timeout
+        self.sc_prompt = (
+            "You are evaluating image editing quality.\n"
+            "Two images are provided: the source image and the edited image.\n"
+            "Return JSON only in the format {\"score\": [edit_success, content_preservation], \"reasoning\": \"...\"}.\n"
+            "Each score must be an integer from 0 to 10.\n"
+            "Editing instruction: <instruction>"
+        )
+        self.pq_prompt = (
+            "You are evaluating image quality.\n"
+            "Return JSON only in the format {\"score\": [naturalness, artifact_free], \"reasoning\": \"...\"}.\n"
+            "Each score must be an integer from 0 to 10."
+        )
+
+    def _request(self, prompt: str, images: list[Image.Image]) -> dict[str, Any]:
+        from benchmarks.accuracy.common import pil_to_data_url
+
+        content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+        for image in images:
+            content.append({"type": "image_url", "image_url": {"url": pil_to_data_url(image)}})
+
+        response = requests.post(
+            f"{self.base_url}/chat/completions",
+            json={
+                "model": self.model,
+                "messages": [{"role": "user", "content": content}],
+                "temperature": 0,
+            },
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        message_content = response.json()["choices"][0]["message"]["content"]
+        if isinstance(message_content, list):
+            text = "\n".join(part.get("text", "") for part in message_content if part.get("type") == "text")
+        else:
+            text = str(message_content)
+        return parse_score_payload(text)
+
+    def evaluate(self, source_image: Image.Image, edited_image: Image.Image, instruction: str) -> dict[str, float]:
+        sc_payload = self._request(self.sc_prompt.replace("<instruction>", instruction), [source_image, edited_image])
+        pq_payload = self._request(self.pq_prompt, [edited_image])
+        semantics = float(min(sc_payload["score"])) if sc_payload["score"] else 0.0
+        quality = float(min(pq_payload["score"])) if pq_payload["score"] else 0.0
+        overall = math.sqrt(semantics * quality)
+        return {
+            "sementics_score": semantics,
+            "quality_score": quality,
+            "overall_score": overall,
+        }
+
+
+class GEditBenchRunner:
+    def __init__(
+        self,
+        *,
+        dataset_ref: str,
+        output_root: Path,
+        base_url: str,
+        model: str,
+        api_key: str = "EMPTY",
+        width: int = 512,
+        height: int = 512,
+        num_inference_steps: int = 20,
+        guidance_scale: float | None = None,
+        seed: int | None = 42,
+    ):
+        self.dataset_ref = dataset_ref
+        self.output_root = output_root
+        self.model = model
+        self.width = width
+        self.height = height
+        self.num_inference_steps = num_inference_steps
+        self.guidance_scale = guidance_scale
+        self.seed = seed
+        self.client = VllmOmniImageClient(base_url=base_url, api_key=api_key)
+
+    def generate(
+        self,
+        *,
+        model_name: str,
+        task_type: str = "all",
+        instruction_language: str = "all",
+        workers: int = 1,
+        max_samples: int | None = None,
+    ) -> list[str]:
+        dataset = _load_gedit_dataset(self.dataset_ref)["train"]
+        rows = []
+        for item in dataset:
+            if task_type != "all" and item["task_type"] != task_type:
+                continue
+            if instruction_language != "all" and item["instruction_language"] != instruction_language:
+                continue
+            rows.append(item)
+        if max_samples is not None:
+            rows = rows[:max_samples]
+
+        outputs: list[str] = []
+        if workers <= 1:
+            for item in rows:
+                result = self._generate_one(model_name, item)
+                if result:
+                    outputs.append(result)
+            return outputs
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(self._generate_one, model_name, item) for item in rows]
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    outputs.append(result)
+        return outputs
+
+    def _generate_one(self, model_name: str, item: dict[str, Any]) -> str | None:
+        output_path = (
+            self.output_root
+            / model_name
+            / "fullset"
+            / item["task_type"]
+            / item["instruction_language"]
+            / f"{item['key']}.png"
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if output_path.exists():
+            return str(output_path)
+
+        source_image = _to_pil_image(item["input_image_raw"])
+        edited_image = self.client.generate_image_edit(
+            model=self.model,
+            prompt=item["instruction"],
+            images=source_image,
+            width=self.width,
+            height=self.height,
+            num_inference_steps=self.num_inference_steps,
+            guidance_scale=self.guidance_scale,
+            seed=self.seed,
+        )
+        edited_image.save(output_path)
+        return str(output_path)
+
+
+class GEditBenchEvaluator:
+    def __init__(self, *, dataset_ref: str, output_root: Path, scorer: OpenAIVIEScorer):
+        self.dataset_ref = dataset_ref
+        self.output_root = output_root
+        self.scorer = scorer
+
+    def evaluate(
+        self,
+        *,
+        model_name: str,
+        save_dir: Path,
+        task_type: str = "all",
+        instruction_language: str = "all",
+        workers: int = 1,
+        max_samples: int | None = None,
+    ) -> dict[str, Any]:
+        dataset = _load_gedit_dataset(self.dataset_ref)["train"]
+        rows = []
+        for item in dataset:
+            if task_type != "all" and item["task_type"] != task_type:
+                continue
+            if instruction_language != "all" and item["instruction_language"] != instruction_language:
+                continue
+            rows.append(item)
+        if max_samples is not None:
+            rows = rows[:max_samples]
+
+        results: list[dict[str, Any]] = []
+        if workers <= 1:
+            for item in rows:
+                result = self._evaluate_one(model_name, item)
+                if result:
+                    results.append(result)
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = [executor.submit(self._evaluate_one, model_name, item) for item in rows]
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result:
+                        results.append(result)
+
+        save_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = save_dir / f"{model_name}_{task_type}_{instruction_language}_vie_score.csv"
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=[
+                    "key",
+                    "task_type",
+                    "edited_image",
+                    "instruction",
+                    "sementics_score",
+                    "quality_score",
+                    "overall_score",
+                    "intersection_exist",
+                    "instruction_language",
+                ],
+            )
+            writer.writeheader()
+            for row in results:
+                writer.writerow(row)
+
+        summary = summarize_gedit_rows(results, language=instruction_language)
+        write_json(save_dir / f"{model_name}_{task_type}_{instruction_language}_summary.json", summary)
+        return {"results": results, "summary": summary, "csv_path": str(csv_path)}
+
+    def _evaluate_one(self, model_name: str, item: dict[str, Any]) -> dict[str, Any] | None:
+        edited_image_path = (
+            self.output_root
+            / model_name
+            / "fullset"
+            / item["task_type"]
+            / item["instruction_language"]
+            / f"{item['key']}.png"
+        )
+        if not edited_image_path.exists():
+            return None
+
+        source_image = _to_pil_image(item["input_image_raw"])
+        edited_image = Image.open(edited_image_path).convert("RGB")
+        scores = self.scorer.evaluate(source_image, edited_image, item["instruction"])
+        return {
+            "key": item["key"],
+            "task_type": item["task_type"],
+            "edited_image": str(edited_image_path),
+            "instruction": item["instruction"],
+            "sementics_score": scores["sementics_score"],
+            "quality_score": scores["quality_score"],
+            "overall_score": scores["overall_score"],
+            "intersection_exist": item.get("Intersection_exist", False),
+            "instruction_language": item["instruction_language"],
+        }
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run the GEdit-Bench integration against vLLM-Omni.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    generate = subparsers.add_parser("generate")
+    generate.add_argument("--dataset-ref", type=str, default="stepfun-ai/GEdit-Bench")
+    generate.add_argument("--output-root", type=Path, required=True)
+    generate.add_argument("--base-url", type=str, required=True)
+    generate.add_argument("--model", type=str, required=True)
+    generate.add_argument("--model-name", type=str, required=True)
+    generate.add_argument("--api-key", type=str, default="EMPTY")
+    generate.add_argument("--task-type", choices=["all", *GROUPS], default="all")
+    generate.add_argument("--instruction-language", choices=["all", "en", "cn"], default="all")
+    generate.add_argument("--width", type=int, default=512)
+    generate.add_argument("--height", type=int, default=512)
+    generate.add_argument("--num-inference-steps", type=int, default=20)
+    generate.add_argument("--guidance-scale", type=float, default=None)
+    generate.add_argument("--seed", type=int, default=42)
+    generate.add_argument("--workers", type=int, default=1)
+    generate.add_argument("--max-samples", type=int, default=None)
+
+    evaluate = subparsers.add_parser("evaluate")
+    evaluate.add_argument("--dataset-ref", type=str, default="stepfun-ai/GEdit-Bench")
+    evaluate.add_argument("--output-root", type=Path, required=True)
+    evaluate.add_argument("--model-name", type=str, required=True)
+    evaluate.add_argument("--save-dir", type=Path, required=True)
+    evaluate.add_argument("--task-type", choices=["all", *GROUPS], default="all")
+    evaluate.add_argument("--instruction-language", choices=["all", "en", "cn"], default="all")
+    evaluate.add_argument("--judge-base-url", type=str, default="https://api.openai.com/v1")
+    evaluate.add_argument("--judge-model", type=str, default="gpt-4.1")
+    evaluate.add_argument("--judge-api-key", type=str, required=True)
+    evaluate.add_argument("--workers", type=int, default=1)
+    evaluate.add_argument("--max-samples", type=int, default=None)
+
+    summarize = subparsers.add_parser("summarize")
+    summarize.add_argument("--csv-path", type=Path, required=True)
+    summarize.add_argument("--language", choices=["all", "en", "cn"], default="all")
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.command == "generate":
+        runner = GEditBenchRunner(
+            dataset_ref=args.dataset_ref,
+            output_root=args.output_root,
+            base_url=args.base_url,
+            model=args.model,
+            api_key=args.api_key,
+            width=args.width,
+            height=args.height,
+            num_inference_steps=args.num_inference_steps,
+            guidance_scale=args.guidance_scale,
+            seed=args.seed,
+        )
+        outputs = runner.generate(
+            model_name=args.model_name,
+            task_type=args.task_type,
+            instruction_language=args.instruction_language,
+            workers=args.workers,
+            max_samples=args.max_samples,
+        )
+        write_json(args.output_root / args.model_name / "generation_manifest.json", {"outputs": outputs})
+        return 0
+
+    if args.command == "evaluate":
+        scorer = OpenAIVIEScorer(
+            base_url=args.judge_base_url,
+            api_key=args.judge_api_key,
+            model=args.judge_model,
+        )
+        evaluator = GEditBenchEvaluator(dataset_ref=args.dataset_ref, output_root=args.output_root, scorer=scorer)
+        evaluator.evaluate(
+            model_name=args.model_name,
+            save_dir=args.save_dir,
+            task_type=args.task_type,
+            instruction_language=args.instruction_language,
+            workers=args.workers,
+            max_samples=args.max_samples,
+        )
+        return 0
+
+    if args.command == "summarize":
+        with args.csv_path.open("r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        summary = summarize_gedit_rows(rows, language=args.language)
+        print(json.dumps(summary, indent=2, ensure_ascii=False))
+        return 0
+
+    parser.error(f"Unknown command: {args.command}")
+    return 1
