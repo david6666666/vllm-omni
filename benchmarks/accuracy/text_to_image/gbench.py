@@ -13,6 +13,7 @@ from PIL import Image
 
 from benchmarks.accuracy.common import (
     VllmOmniImageClient,
+    build_openai_url,
     ensure_dir,
     extract_json_object,
     find_first_image,
@@ -30,6 +31,23 @@ TYPE_TO_FOLDER = {
     "type5": "05_grounding_data",
 }
 SCORE_KEYS = ("goal", "logic", "cons", "ui", "qual")
+
+
+def summarize_generated_records(records: list[dict[str, Any]]) -> dict[str, Any]:
+    by_type: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for record in records:
+        by_type[record["data_type"]].append(record)
+
+    return {
+        "count": len(records),
+        "by_type": {
+            data_type: {
+                "count": len(rows),
+                "samples": sorted(row["sample_name"] for row in rows),
+            }
+            for data_type, rows in sorted(by_type.items())
+        },
+    }
 
 
 def summarize_gebench_results(results: list[dict[str, Any]]) -> dict[str, Any]:
@@ -56,6 +74,31 @@ def summarize_gebench_results(results: list[dict[str, Any]]) -> dict[str, Any]:
             "score_means": score_means,
         }
     return summary
+
+
+def collect_gebench_generation_summary(output_root: Path) -> dict[str, Any]:
+    records: list[dict[str, Any]] = []
+    for data_type, folder_name in TYPE_TO_FOLDER.items():
+        type_root = output_root / folder_name
+        if not type_root.exists():
+            continue
+        for lang_dir in sorted(path for path in type_root.iterdir() if path.is_dir()):
+            for sample_dir in sorted(path for path in lang_dir.iterdir() if path.is_dir()):
+                expected = sample_dir / "frame5.png" if data_type in {"type2", "type3", "type4"} else None
+                if expected is None:
+                    expected = find_first_image(sample_dir)
+                elif not expected.exists():
+                    expected = None
+                if expected is None:
+                    continue
+                records.append(
+                    {
+                        "data_type": data_type,
+                        "sample_name": f"{lang_dir.name}/{sample_dir.name}",
+                        "output_path": str(expected),
+                    }
+                )
+    return summarize_generated_records(records)
 
 
 def _normalize_score_key(key: str) -> str:
@@ -244,7 +287,7 @@ def _type5_prompt(metadata: dict[str, Any]) -> str:
     )
 
 
-class OpenAIJudgeClient:
+class LocalJudgeClient:
     def __init__(self, base_url: str, api_key: str, model: str, timeout: int = 600):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -257,7 +300,7 @@ class OpenAIJudgeClient:
             content.append({"type": "image_url", "image_url": {"url": pil_to_data_url(image)}})
 
         response = requests.post(
-            f"{self.base_url}/chat/completions",
+            build_openai_url(self.base_url, "/chat/completions"),
             json={
                 "model": self.model,
                 "messages": [{"role": "user", "content": content}],
@@ -303,12 +346,12 @@ class GEBenchRunner:
         self.seed = seed
         self.client = VllmOmniImageClient(base_url=base_url, api_key=api_key)
 
-    def generate(self, *, data_type: str, workers: int = 1, max_samples: int | None = None) -> list[str]:
+    def generate(self, *, data_type: str, workers: int = 1, max_samples: int | None = None) -> list[dict[str, Any]]:
         sample_paths = _iter_sample_paths(self.dataset_root, data_type)
         if max_samples is not None:
             sample_paths = sample_paths[:max_samples]
 
-        results: list[str] = []
+        results: list[dict[str, Any]] = []
         if workers <= 1:
             for sample_path in sample_paths:
                 result = self._generate_one(data_type, sample_path)
@@ -324,7 +367,7 @@ class GEBenchRunner:
                     results.append(result)
         return results
 
-    def _generate_one(self, data_type: str, sample_path: Path) -> str | None:
+    def _generate_one(self, data_type: str, sample_path: Path) -> dict[str, Any] | None:
         metadata = _load_metadata(sample_path)
         lang_device = _lang_device(sample_path, metadata)
         sample_name = _sample_name(sample_path)
@@ -333,7 +376,7 @@ class GEBenchRunner:
         if data_type == "type1":
             output_path = output_dir / "generated.png"
             if output_path.exists():
-                return str(output_path)
+                return {"data_type": data_type, "sample_name": f"{lang_device}/{sample_name}", "output_path": str(output_path)}
             source = _resolve_referenced_image(
                 metadata=metadata, sample_path=sample_path, dataset_root=self.dataset_root, data_type=data_type
             )
@@ -350,7 +393,7 @@ class GEBenchRunner:
                 seed=self.seed,
             )
             save_image(output_path, generated)
-            return str(output_path)
+            return {"data_type": data_type, "sample_name": f"{lang_device}/{sample_name}", "output_path": str(output_path)}
 
         if data_type == "type2":
             goal = _text_or_default(metadata.get("question") or metadata.get("caption"), "Complete the task.")
@@ -380,7 +423,8 @@ class GEBenchRunner:
                 )
                 save_image(frame_path, generated)
                 previous = generated
-            return str(output_dir / "frame5.png")
+            output_path = output_dir / "frame5.png"
+            return {"data_type": data_type, "sample_name": f"{lang_device}/{sample_name}", "output_path": str(output_path)}
 
         if data_type in {"type3", "type4"}:
             steps = _trajectory_steps(metadata)
@@ -417,12 +461,13 @@ class GEBenchRunner:
                 )
                 save_image(frame_path, generated)
                 previous = generated
-            return str(output_dir / "frame5.png")
+            output_path = output_dir / "frame5.png"
+            return {"data_type": data_type, "sample_name": f"{lang_device}/{sample_name}", "output_path": str(output_path)}
 
         if data_type == "type5":
             output_path = output_dir / "generated.png"
             if output_path.exists():
-                return str(output_path)
+                return {"data_type": data_type, "sample_name": f"{lang_device}/{sample_name}", "output_path": str(output_path)}
             source = _resolve_referenced_image(
                 metadata=metadata, sample_path=sample_path, dataset_root=self.dataset_root, data_type=data_type
             )
@@ -439,13 +484,13 @@ class GEBenchRunner:
                 seed=self.seed,
             )
             save_image(output_path, generated)
-            return str(output_path)
+            return {"data_type": data_type, "sample_name": f"{lang_device}/{sample_name}", "output_path": str(output_path)}
 
         raise ValueError(f"Unsupported data type: {data_type}")
 
 
 class GEBenchEvaluator:
-    def __init__(self, *, dataset_root: Path, output_root: Path, judge: OpenAIJudgeClient):
+    def __init__(self, *, dataset_root: Path, output_root: Path, judge: LocalJudgeClient):
         self.dataset_root = dataset_root
         self.output_root = output_root
         self.judge = judge
@@ -535,7 +580,7 @@ def _data_types_arg(value: str) -> list[str]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run the GEBench integration against vLLM-Omni.")
+    parser = argparse.ArgumentParser(description="Run local GEBench generation and scoring against vLLM-Omni.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     generate = subparsers.add_parser("generate")
@@ -557,9 +602,9 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--dataset-root", type=Path, required=True)
     evaluate.add_argument("--output-root", type=Path, required=True)
     evaluate.add_argument("--data-type", choices=["all", *TYPE_TO_FOLDER.keys()], default="all")
-    evaluate.add_argument("--judge-base-url", type=str, default="https://api.openai.com/v1")
-    evaluate.add_argument("--judge-model", type=str, default="gpt-4.1")
-    evaluate.add_argument("--judge-api-key", type=str, required=True)
+    evaluate.add_argument("--judge-base-url", type=str, required=True)
+    evaluate.add_argument("--judge-model", type=str, required=True)
+    evaluate.add_argument("--judge-api-key", type=str, default="EMPTY")
     evaluate.add_argument("--workers", type=int, default=1)
 
     summarize = subparsers.add_parser("summarize")
@@ -585,16 +630,17 @@ def main(argv: list[str] | None = None) -> int:
             guidance_scale=args.guidance_scale,
             seed=args.seed,
         )
-        manifest = {}
+        records: list[dict[str, Any]] = []
         for data_type in _data_types_arg(args.data_type):
-            manifest[data_type] = runner.generate(
-                data_type=data_type, workers=args.workers, max_samples=args.max_samples
+            records.extend(
+                runner.generate(data_type=data_type, workers=args.workers, max_samples=args.max_samples)
             )
-        write_json(args.output_root / "generation_manifest.json", manifest)
+        payload = {"records": records, "summary": summarize_generated_records(records)}
+        write_json(args.output_root / "generation_manifest.json", payload)
         return 0
 
     if args.command == "evaluate":
-        judge = OpenAIJudgeClient(
+        judge = LocalJudgeClient(
             base_url=args.judge_base_url,
             api_key=args.judge_api_key,
             model=args.judge_model,
@@ -611,14 +657,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "summarize":
+        generation_summary = collect_gebench_generation_summary(args.output_root)
         evaluation_dir = args.output_root / "evaluations"
-        combined_results: list[dict[str, Any]] = []
-        for file_path in sorted(evaluation_dir.glob("type*.json")):
-            payload = load_json(file_path)
-            combined_results.extend(payload.get("results", []))
-        summary = {"summary": summarize_gebench_results(combined_results)}
-        write_json(evaluation_dir / "summary.json", summary)
-        print(json.dumps(summary, indent=2, ensure_ascii=False))
+        result_records: list[dict[str, Any]] = []
+        if evaluation_dir.exists():
+            for file_path in sorted(evaluation_dir.glob("type*.json")):
+                payload = load_json(file_path)
+                result_records.extend(payload.get("results", []))
+        payload: dict[str, Any] = {"generation": generation_summary}
+        if result_records:
+            payload["evaluation"] = summarize_gebench_results(result_records)
+        write_json(args.output_root / "summary.json", payload)
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
 
     parser.error(f"Unknown command: {args.command}")

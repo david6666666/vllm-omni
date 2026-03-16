@@ -14,7 +14,12 @@ from typing import Any
 import requests
 from PIL import Image
 
-from benchmarks.accuracy.common import VllmOmniImageClient, extract_json_object, write_json
+from benchmarks.accuracy.common import (
+    VllmOmniImageClient,
+    build_openai_url,
+    extract_json_object,
+    write_json,
+)
 
 GROUPS = [
     "background_change",
@@ -45,6 +50,32 @@ def parse_score_payload(raw_text: str) -> dict[str, Any]:
         score = [score]
     parsed["score"] = [int(value) for value in score]
     return parsed
+
+
+def summarize_generated_records(records: list[dict[str, Any]]) -> dict[str, Any]:
+    by_task: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_language: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for record in records:
+        by_task[record["task_type"]].append(record)
+        by_language[record["instruction_language"]].append(record)
+
+    return {
+        "count": len(records),
+        "by_task": {
+            task_type: {
+                "count": len(rows),
+                "samples": sorted(row["key"] for row in rows),
+            }
+            for task_type, rows in sorted(by_task.items())
+        },
+        "by_language": {
+            language: {
+                "count": len(rows),
+                "samples": sorted(row["key"] for row in rows),
+            }
+            for language, rows in sorted(by_language.items())
+        },
+    }
 
 
 def summarize_gedit_rows(rows: list[dict[str, Any]], language: str = "all") -> dict[str, Any]:
@@ -129,7 +160,7 @@ def _to_pil_image(value: Any) -> Image.Image:
     raise TypeError(f"Unsupported image payload type: {type(value)!r}")
 
 
-class OpenAIVIEScorer:
+class LocalVIEScorer:
     def __init__(self, *, base_url: str, api_key: str, model: str, timeout: int = 600):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -156,7 +187,7 @@ class OpenAIVIEScorer:
             content.append({"type": "image_url", "image_url": {"url": pil_to_data_url(image)}})
 
         response = requests.post(
-            f"{self.base_url}/chat/completions",
+            build_openai_url(self.base_url, "/chat/completions"),
             json={
                 "model": self.model,
                 "messages": [{"role": "user", "content": content}],
@@ -222,7 +253,7 @@ class GEditBenchRunner:
         instruction_language: str = "all",
         workers: int = 1,
         max_samples: int | None = None,
-    ) -> list[str]:
+    ) -> list[dict[str, Any]]:
         dataset = _load_gedit_dataset(self.dataset_ref)["train"]
         rows = []
         for item in dataset:
@@ -234,7 +265,7 @@ class GEditBenchRunner:
         if max_samples is not None:
             rows = rows[:max_samples]
 
-        outputs: list[str] = []
+        outputs: list[dict[str, Any]] = []
         if workers <= 1:
             for item in rows:
                 result = self._generate_one(model_name, item)
@@ -250,7 +281,7 @@ class GEditBenchRunner:
                     outputs.append(result)
         return outputs
 
-    def _generate_one(self, model_name: str, item: dict[str, Any]) -> str | None:
+    def _generate_one(self, model_name: str, item: dict[str, Any]) -> dict[str, Any] | None:
         output_path = (
             self.output_root
             / model_name
@@ -261,7 +292,12 @@ class GEditBenchRunner:
         )
         output_path.parent.mkdir(parents=True, exist_ok=True)
         if output_path.exists():
-            return str(output_path)
+            return {
+                "task_type": item["task_type"],
+                "instruction_language": item["instruction_language"],
+                "key": item["key"],
+                "output_path": str(output_path),
+            }
 
         source_image = _to_pil_image(item["input_image_raw"])
         edited_image = self.client.generate_image_edit(
@@ -275,11 +311,16 @@ class GEditBenchRunner:
             seed=self.seed,
         )
         edited_image.save(output_path)
-        return str(output_path)
+        return {
+            "task_type": item["task_type"],
+            "instruction_language": item["instruction_language"],
+            "key": item["key"],
+            "output_path": str(output_path),
+        }
 
 
 class GEditBenchEvaluator:
-    def __init__(self, *, dataset_ref: str, output_root: Path, scorer: OpenAIVIEScorer):
+    def __init__(self, *, dataset_ref: str, output_root: Path, scorer: LocalVIEScorer):
         self.dataset_ref = dataset_ref
         self.output_root = output_root
         self.scorer = scorer
@@ -373,7 +414,7 @@ class GEditBenchEvaluator:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run the GEdit-Bench integration against vLLM-Omni.")
+    parser = argparse.ArgumentParser(description="Run the GEdit-Bench integration against a local vLLM-Omni server.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     generate = subparsers.add_parser("generate")
@@ -400,9 +441,9 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--save-dir", type=Path, required=True)
     evaluate.add_argument("--task-type", choices=["all", *GROUPS], default="all")
     evaluate.add_argument("--instruction-language", choices=["all", "en", "cn"], default="all")
-    evaluate.add_argument("--judge-base-url", type=str, default="https://api.openai.com/v1")
-    evaluate.add_argument("--judge-model", type=str, default="gpt-4.1")
-    evaluate.add_argument("--judge-api-key", type=str, required=True)
+    evaluate.add_argument("--judge-base-url", type=str, required=True)
+    evaluate.add_argument("--judge-model", type=str, required=True)
+    evaluate.add_argument("--judge-api-key", type=str, default="EMPTY")
     evaluate.add_argument("--workers", type=int, default=1)
     evaluate.add_argument("--max-samples", type=int, default=None)
 
@@ -430,18 +471,19 @@ def main(argv: list[str] | None = None) -> int:
             guidance_scale=args.guidance_scale,
             seed=args.seed,
         )
-        outputs = runner.generate(
+        records = runner.generate(
             model_name=args.model_name,
             task_type=args.task_type,
             instruction_language=args.instruction_language,
             workers=args.workers,
             max_samples=args.max_samples,
         )
-        write_json(args.output_root / args.model_name / "generation_manifest.json", {"outputs": outputs})
+        payload = {"records": records, "summary": summarize_generated_records(records)}
+        write_json(args.output_root / args.model_name / "generation_manifest.json", payload)
         return 0
 
     if args.command == "evaluate":
-        scorer = OpenAIVIEScorer(
+        scorer = LocalVIEScorer(
             base_url=args.judge_base_url,
             api_key=args.judge_api_key,
             model=args.judge_model,
