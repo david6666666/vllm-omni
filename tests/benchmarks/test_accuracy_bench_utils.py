@@ -9,9 +9,31 @@ if str(REPO_ROOT) not in sys.path:
 from benchmarks.accuracy.image_to_image.gedit_bench import (
     GROUPS as GEDIT_GROUPS,
     parse_score_payload,
+    summarize_generated_records as summarize_gedit_generated_records,
     summarize_gedit_rows,
 )
-from benchmarks.accuracy.text_to_image.gbench import summarize_gebench_results
+from benchmarks.accuracy.text_to_image.gbench import (
+    summarize_generated_records as summarize_gebench_generated_records,
+    summarize_gebench_results,
+)
+
+
+def test_summarize_gebench_generated_records_groups_by_type():
+    records = [
+        {"data_type": "type1", "sample_name": "english_phone/folder_1", "output_path": "a.png"},
+        {"data_type": "type1", "sample_name": "english_phone/folder_2", "output_path": "b.png"},
+        {"data_type": "type2", "sample_name": "english_phone/folder_3", "output_path": "c.png"},
+    ]
+
+    summary = summarize_gebench_generated_records(records)
+
+    assert summary["count"] == 3
+    assert summary["by_type"]["type1"]["count"] == 2
+    assert summary["by_type"]["type2"]["count"] == 1
+    assert summary["by_type"]["type1"]["samples"] == [
+        "english_phone/folder_1",
+        "english_phone/folder_2",
+    ]
 
 
 def test_summarize_gebench_results_computes_type_and_global_means():
@@ -35,6 +57,37 @@ def test_parse_score_payload_handles_raw_json_and_delimited_json():
 
     assert parse_score_payload(raw)["score"] == [7, 8]
     assert parse_score_payload(wrapped)["score"] == [6]
+
+
+def test_summarize_gedit_generated_records_groups_by_task_and_language():
+    records = []
+    for group in GEDIT_GROUPS[:2]:
+        records.append(
+            {
+                "task_type": group,
+                "instruction_language": "en",
+                "key": f"{group}_en",
+                "output_path": f"{group}_en.png",
+            }
+        )
+        records.append(
+            {
+                "task_type": group,
+                "instruction_language": "cn",
+                "key": f"{group}_cn",
+                "output_path": f"{group}_cn.png",
+            }
+        )
+
+    summary = summarize_gedit_generated_records(records)
+
+    assert summary["count"] == 4
+    assert summary["by_task"][GEDIT_GROUPS[0]]["count"] == 2
+    assert summary["by_language"]["en"]["count"] == 2
+    assert summary["by_language"]["cn"]["samples"] == [
+        f"{GEDIT_GROUPS[0]}_cn",
+        f"{GEDIT_GROUPS[1]}_cn",
+    ]
 
 
 def test_summarize_gedit_rows_computes_group_and_intersection_means():

@@ -11,13 +11,21 @@ Upstream mapping:
 
 What changed:
 
-- The upstream repo only ships evaluation scripts. This integration adds a
-  generation runner that uses the `vllm-omni` OpenAI-compatible edit endpoint
-  to generate benchmark outputs in the expected directory structure.
-- The evaluator keeps the same two-part scoring idea as VIEScore:
-  instruction-following / content preservation + perceptual quality.
-- Heavy optional local judge backends from upstream are not pulled into the
-  main repo. The default path is an OpenAI-compatible judge endpoint.
+- The upstream repo mainly ships evaluation scripts. This integration adds a
+  generation runner that uses the local `vllm-omni` OpenAI-compatible edit
+  endpoint to produce benchmark outputs in the expected directory structure.
+- The evaluator keeps the same VIEScore-style decomposition:
+  - `sementics_score`
+  - `quality_score`
+  - `overall_score = sqrt(sementics_score * quality_score)`
+- Judge calls are routed to a local OpenAI-compatible model served by
+  `vllm-omni`, not a remote provider.
+
+Dataset:
+
+- Default `--dataset-ref` is `stepfun-ai/GEdit-Bench`
+- You can also pass a local dataset directory previously saved with
+  Hugging Face `datasets`
 
 Example usage:
 
@@ -38,9 +46,9 @@ python benchmarks/accuracy/image_to_image/run_gedit_bench.py evaluate \
   --model-name qwen_image_edit \
   --save-dir benchmarks/accuracy/image_to_image/scores \
   --dataset-ref stepfun-ai/GEdit-Bench \
-  --judge-base-url https://api.openai.com/v1 \
-  --judge-model gpt-4.1 \
-  --judge-api-key "$OPENAI_API_KEY"
+  --judge-base-url http://127.0.0.1:8000 \
+  --judge-model Qwen/Qwen2.5-VL-7B-Instruct \
+  --judge-api-key EMPTY
 ```
 
 ```bash
@@ -52,6 +60,7 @@ python benchmarks/accuracy/image_to_image/run_gedit_bench.py summarize \
 Notes:
 
 - This flow requires the optional Hugging Face `datasets` package.
+- `generate` writes `generation_manifest.json` with local output coverage.
 - The current repo marker set exposes `L4` but not `L5`, so if you promote an
   end-to-end smoke test into CI, use the existing `advanced_model`, `benchmark`,
   and `L4` markers or introduce a new repo-wide marker explicitly first.

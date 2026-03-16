@@ -7,17 +7,21 @@ Upstream mapping:
 
 - `scripts/generate.py` -> `run_gebench.py generate`
 - `scripts/evaluate.py` -> `run_gebench.py evaluate`
-- upstream `gui_agent` prompt / judge logic -> `gbench.py`
+- upstream prompt / judge logic -> `gbench.py`
 
 What changed:
 
-- Generation no longer calls Gemini directly. It now calls the
-  OpenAI-compatible `vllm-omni` endpoints:
+- Generation calls the local OpenAI-compatible `vllm-omni` endpoints:
   - `/v1/images/generations` for text-only frame generation
   - `/v1/chat/completions` for image-conditioned GUI transition generation
-- Evaluation no longer depends on the upstream repo layout. It reads the
-  generated artifacts from the local benchmark output tree and reuses the same
-  GEBench-style scoring dimensions: `goal`, `logic`, `cons`, `ui`, `qual`.
+- Evaluation still keeps the GEBench scoring dimensions:
+  - `goal`
+  - `logic`
+  - `cons`
+  - `ui`
+  - `qual`
+- Judge calls are also routed to a local OpenAI-compatible model served by
+  `vllm-omni` instead of a remote service.
 
 Expected dataset layout:
 
@@ -43,9 +47,9 @@ python benchmarks/accuracy/text_to_image/run_gebench.py evaluate \
   --dataset-root /path/to/GEBench \
   --output-root benchmarks/accuracy/text_to_image/outputs \
   --data-type type3 \
-  --judge-base-url https://api.openai.com/v1 \
-  --judge-model gpt-4.1 \
-  --judge-api-key "$OPENAI_API_KEY"
+  --judge-base-url http://127.0.0.1:8000 \
+  --judge-model Qwen/Qwen2.5-VL-7B-Instruct \
+  --judge-api-key EMPTY
 ```
 
 ```bash
@@ -60,3 +64,5 @@ Notes:
   by `frame1.png` ... `frame5.png`.
 - Type1/2/5 require an image-edit capable model exposed through
   `vllm-omni serve`.
+- `summarize` will report both generated coverage and any existing evaluation
+  summary files.
