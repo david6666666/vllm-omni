@@ -37,6 +37,29 @@ GROUPS = [
 DEFAULT_SAMPLES_PER_GROUP = 10
 
 
+def infer_model_name(model: str) -> str:
+    normalized = model.rstrip("/\\")
+    name = Path(normalized).name
+    return name or normalized
+
+
+def resolve_model_name(*, model_name: str | None, model: str | None = None, output_root: Path | None = None) -> str:
+    if model_name:
+        return model_name
+    if model:
+        return infer_model_name(model)
+    if output_root is not None:
+        candidates = sorted(path.name for path in output_root.iterdir() if path.is_dir())
+        if len(candidates) == 1:
+            return candidates[0]
+        if not candidates:
+            raise ValueError(f"Could not infer model-name from empty output root: {output_root}")
+        raise ValueError(
+            f"Could not infer model-name from output root {output_root}; multiple candidates found: {candidates}"
+        )
+    raise ValueError("model-name is required when it cannot be inferred from model or output-root")
+
+
 def parse_score_payload(raw_text: str) -> dict[str, Any]:
     try:
         parsed = extract_json_object(raw_text)
@@ -454,7 +477,7 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--output-root", type=Path, required=True)
     generate.add_argument("--base-url", type=str, required=True)
     generate.add_argument("--model", type=str, required=True)
-    generate.add_argument("--model-name", type=str, required=True)
+    generate.add_argument("--model-name", type=str, default=None)
     generate.add_argument("--api-key", type=str, default="EMPTY")
     generate.add_argument("--task-type", choices=["all", *GROUPS], default="all")
     generate.add_argument("--instruction-language", choices=["all", "en", "cn"], default="all")
@@ -470,7 +493,7 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate = subparsers.add_parser("evaluate")
     evaluate.add_argument("--dataset-ref", type=str, default="stepfun-ai/GEdit-Bench")
     evaluate.add_argument("--output-root", type=Path, required=True)
-    evaluate.add_argument("--model-name", type=str, required=True)
+    evaluate.add_argument("--model-name", type=str, default=None)
     evaluate.add_argument("--save-dir", type=Path, required=True)
     evaluate.add_argument("--task-type", choices=["all", *GROUPS], default="all")
     evaluate.add_argument("--instruction-language", choices=["all", "en", "cn"], default="all")
@@ -493,6 +516,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "generate":
+        model_name = resolve_model_name(model_name=args.model_name, model=args.model)
         runner = GEditBenchRunner(
             dataset_ref=args.dataset_ref,
             output_root=args.output_root,
@@ -506,7 +530,7 @@ def main(argv: list[str] | None = None) -> int:
             seed=args.seed,
         )
         records = runner.generate(
-            model_name=args.model_name,
+            model_name=model_name,
             task_type=args.task_type,
             instruction_language=args.instruction_language,
             workers=args.workers,
@@ -514,10 +538,11 @@ def main(argv: list[str] | None = None) -> int:
             samples_per_group=args.samples_per_group,
         )
         payload = {"records": records, "summary": summarize_generated_records(records)}
-        write_json(args.output_root / args.model_name / "generation_manifest.json", payload)
+        write_json(args.output_root / model_name / "generation_manifest.json", payload)
         return 0
 
     if args.command == "evaluate":
+        model_name = resolve_model_name(model_name=args.model_name, output_root=args.output_root)
         scorer = LocalVIEScorer(
             base_url=args.judge_base_url,
             api_key=args.judge_api_key,
@@ -525,7 +550,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         evaluator = GEditBenchEvaluator(dataset_ref=args.dataset_ref, output_root=args.output_root, scorer=scorer)
         evaluator.evaluate(
-            model_name=args.model_name,
+            model_name=model_name,
             save_dir=args.save_dir,
             task_type=args.task_type,
             instruction_language=args.instruction_language,

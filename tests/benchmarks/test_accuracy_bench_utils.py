@@ -11,6 +11,8 @@ if str(REPO_ROOT) not in sys.path:
 from benchmarks.accuracy.common import VllmOmniImageClient
 from benchmarks.accuracy.image_to_image.gedit_bench import (
     GROUPS as GEDIT_GROUPS,
+    infer_model_name,
+    resolve_model_name,
     select_balanced_gedit_rows,
     parse_score_payload,
     summarize_generated_records as summarize_gedit_generated_records,
@@ -225,6 +227,31 @@ def test_select_balanced_gedit_rows_limits_each_group_independently():
     assert len(selected_color) == 7
     assert selected_background[0]["key"] == "background_change_0"
     assert selected_background[-1]["key"] == "background_change_9"
+
+
+def test_infer_model_name_uses_last_path_segment():
+    assert infer_model_name("/workspace/models/Qwen/Qwen-Image-Edit") == "Qwen-Image-Edit"
+
+
+def test_resolve_model_name_prefers_explicit_value_then_model_then_output_root(tmp_path: Path):
+    assert (
+        resolve_model_name(
+            model_name="explicit_name",
+            model="/workspace/models/Qwen/Qwen-Image-Edit",
+        )
+        == "explicit_name"
+    )
+    assert (
+        resolve_model_name(
+            model_name=None,
+            model="/workspace/models/Qwen/Qwen-Image-Edit",
+        )
+        == "Qwen-Image-Edit"
+    )
+
+    output_root = tmp_path / "results"
+    (output_root / "qwen_image_edit").mkdir(parents=True)
+    assert resolve_model_name(model_name=None, output_root=output_root) == "qwen_image_edit"
 
 
 def test_summarize_gedit_rows_computes_group_and_intersection_means():
