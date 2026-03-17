@@ -8,11 +8,13 @@ if str(REPO_ROOT) not in sys.path:
 
 from benchmarks.accuracy.image_to_image.gedit_bench import (
     GROUPS as GEDIT_GROUPS,
+    select_balanced_gedit_rows,
     parse_score_payload,
     summarize_generated_records as summarize_gedit_generated_records,
     summarize_gedit_rows,
 )
 from benchmarks.accuracy.text_to_image.gbench import (
+    select_balanced_gebench_samples,
     summarize_generated_records as summarize_gebench_generated_records,
     summarize_gebench_results,
 )
@@ -49,6 +51,22 @@ def test_summarize_gebench_results_computes_type_and_global_means():
     assert math.isclose(summary["by_type"]["type1"]["overall_mean"], 0.7)
     assert math.isclose(summary["by_type"]["type2"]["overall_mean"], 0.5)
     assert math.isclose(summary["by_type"]["type1"]["score_means"]["goal"], 4.0)
+
+
+def test_select_balanced_gebench_samples_limits_each_type_independently():
+    sample_paths_by_type = {
+        "type1": [Path(f"/tmp/type1_{idx}") for idx in range(12)],
+        "type2": [Path(f"/tmp/type2_{idx}") for idx in range(8)],
+        "type3": [Path(f"/tmp/type3_{idx}") for idx in range(15)],
+    }
+
+    selected = select_balanced_gebench_samples(sample_paths_by_type, samples_per_type=10)
+
+    assert len(selected["type1"]) == 10
+    assert len(selected["type2"]) == 8
+    assert len(selected["type3"]) == 10
+    assert selected["type1"][0].name == "type1_0"
+    assert selected["type3"][-1].name == "type3_9"
 
 
 def test_parse_score_payload_handles_raw_json_and_delimited_json():
@@ -88,6 +106,41 @@ def test_summarize_gedit_generated_records_groups_by_task_and_language():
         f"{GEDIT_GROUPS[0]}_cn",
         f"{GEDIT_GROUPS[1]}_cn",
     ]
+
+
+def test_select_balanced_gedit_rows_limits_each_group_independently():
+    rows = []
+    for idx in range(12):
+        rows.append(
+            {
+                "task_type": "background_change",
+                "instruction_language": "en",
+                "key": f"background_change_{idx}",
+            }
+        )
+    for idx in range(7):
+        rows.append(
+            {
+                "task_type": "color_alter",
+                "instruction_language": "en",
+                "key": f"color_alter_{idx}",
+            }
+        )
+
+    selected = select_balanced_gedit_rows(
+        rows,
+        task_type="all",
+        instruction_language="en",
+        samples_per_group=10,
+    )
+
+    selected_background = [row for row in selected if row["task_type"] == "background_change"]
+    selected_color = [row for row in selected if row["task_type"] == "color_alter"]
+
+    assert len(selected_background) == 10
+    assert len(selected_color) == 7
+    assert selected_background[0]["key"] == "background_change_0"
+    assert selected_background[-1]["key"] == "background_change_9"
 
 
 def test_summarize_gedit_rows_computes_group_and_intersection_means():

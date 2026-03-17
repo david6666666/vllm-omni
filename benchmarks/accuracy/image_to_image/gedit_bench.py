@@ -34,6 +34,7 @@ GROUPS = [
     "text_change",
     "tone_transfer",
 ]
+DEFAULT_SAMPLES_PER_GROUP = 10
 
 
 def parse_score_payload(raw_text: str) -> dict[str, Any]:
@@ -76,6 +77,37 @@ def summarize_generated_records(records: list[dict[str, Any]]) -> dict[str, Any]
             for language, rows in sorted(by_language.items())
         },
     }
+
+
+def select_balanced_gedit_rows(
+    rows: list[dict[str, Any]],
+    *,
+    task_type: str = "all",
+    instruction_language: str = "all",
+    samples_per_group: int | None,
+) -> list[dict[str, Any]]:
+    filtered_rows = []
+    for row in rows:
+        if task_type != "all" and row["task_type"] != task_type:
+            continue
+        if instruction_language != "all" and row["instruction_language"] != instruction_language:
+            continue
+        filtered_rows.append(row)
+
+    if samples_per_group is None:
+        return filtered_rows
+
+    if task_type != "all":
+        return filtered_rows[:samples_per_group]
+
+    grouped_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in filtered_rows:
+        grouped_rows[row["task_type"]].append(row)
+
+    selected: list[dict[str, Any]] = []
+    for group in GROUPS:
+        selected.extend(grouped_rows.get(group, [])[:samples_per_group])
+    return selected
 
 
 def summarize_gedit_rows(rows: list[dict[str, Any]], language: str = "all") -> dict[str, Any]:
@@ -253,15 +285,15 @@ class GEditBenchRunner:
         instruction_language: str = "all",
         workers: int = 1,
         max_samples: int | None = None,
+        samples_per_group: int | None = None,
     ) -> list[dict[str, Any]]:
         dataset = _load_gedit_dataset(self.dataset_ref)["train"]
-        rows = []
-        for item in dataset:
-            if task_type != "all" and item["task_type"] != task_type:
-                continue
-            if instruction_language != "all" and item["instruction_language"] != instruction_language:
-                continue
-            rows.append(item)
+        rows = select_balanced_gedit_rows(
+            list(dataset),
+            task_type=task_type,
+            instruction_language=instruction_language,
+            samples_per_group=samples_per_group,
+        )
         if max_samples is not None:
             rows = rows[:max_samples]
 
@@ -334,15 +366,15 @@ class GEditBenchEvaluator:
         instruction_language: str = "all",
         workers: int = 1,
         max_samples: int | None = None,
+        samples_per_group: int | None = None,
     ) -> dict[str, Any]:
         dataset = _load_gedit_dataset(self.dataset_ref)["train"]
-        rows = []
-        for item in dataset:
-            if task_type != "all" and item["task_type"] != task_type:
-                continue
-            if instruction_language != "all" and item["instruction_language"] != instruction_language:
-                continue
-            rows.append(item)
+        rows = select_balanced_gedit_rows(
+            list(dataset),
+            task_type=task_type,
+            instruction_language=instruction_language,
+            samples_per_group=samples_per_group,
+        )
         if max_samples is not None:
             rows = rows[:max_samples]
 
@@ -433,6 +465,7 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--seed", type=int, default=42)
     generate.add_argument("--workers", type=int, default=1)
     generate.add_argument("--max-samples", type=int, default=None)
+    generate.add_argument("--samples-per-group", type=int, default=None)
 
     evaluate = subparsers.add_parser("evaluate")
     evaluate.add_argument("--dataset-ref", type=str, default="stepfun-ai/GEdit-Bench")
@@ -446,6 +479,7 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--judge-api-key", type=str, default="EMPTY")
     evaluate.add_argument("--workers", type=int, default=1)
     evaluate.add_argument("--max-samples", type=int, default=None)
+    evaluate.add_argument("--samples-per-group", type=int, default=None)
 
     summarize = subparsers.add_parser("summarize")
     summarize.add_argument("--csv-path", type=Path, required=True)
@@ -477,6 +511,7 @@ def main(argv: list[str] | None = None) -> int:
             instruction_language=args.instruction_language,
             workers=args.workers,
             max_samples=args.max_samples,
+            samples_per_group=args.samples_per_group,
         )
         payload = {"records": records, "summary": summarize_generated_records(records)}
         write_json(args.output_root / args.model_name / "generation_manifest.json", payload)
@@ -496,6 +531,7 @@ def main(argv: list[str] | None = None) -> int:
             instruction_language=args.instruction_language,
             workers=args.workers,
             max_samples=args.max_samples,
+            samples_per_group=args.samples_per_group,
         )
         return 0
 
