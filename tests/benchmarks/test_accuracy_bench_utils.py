@@ -18,6 +18,7 @@ from benchmarks.accuracy.image_to_image.gedit_bench import (
 )
 from benchmarks.accuracy.text_to_image.gbench import (
     _expand_sample_path,
+    LocalJudgeClient,
     select_balanced_gebench_samples,
     summarize_generated_records as summarize_gebench_generated_records,
     summarize_gebench_results,
@@ -91,6 +92,26 @@ def test_expand_sample_path_flattens_json_list_samples(tmp_path: Path):
     assert specs[0].sample_name == "sample_a"
     assert specs[1].sample_name == "sample_b"
     assert specs[0].lang_device == "english_phone"
+
+
+def test_local_judge_client_retries_when_first_response_is_not_json(monkeypatch):
+    responses = iter(
+        [
+            "The image looks like a GUI screenshot with several controls.",
+            '{"goal": 4, "logic": 4, "cons": 5, "ui": 4, "qual": 4, "reasoning": "mostly correct"}',
+        ]
+    )
+
+    def fake_request_text(self, prompt, images):
+        return next(responses)
+
+    monkeypatch.setattr(LocalJudgeClient, "_request_text", fake_request_text)
+
+    judge = LocalJudgeClient(base_url="http://127.0.0.1:8094", api_key="EMPTY", model="judge")
+    result = judge.evaluate(prompt="Evaluate this GUI trajectory.", images=[Image.new("RGB", (2, 2), color="white")])
+
+    assert result["goal"] == 4
+    assert result["cons"] == 5
 
 
 def test_image_edit_client_uses_openai_image_edit_endpoint(monkeypatch):

@@ -371,7 +371,31 @@ class LocalJudgeClient:
         self.model = model
         self.timeout = timeout
 
-    def evaluate(self, *, prompt: str, images: list[Image.Image]) -> dict[str, Any]:
+    def _build_scoring_prompt(self, task_prompt: str) -> str:
+        return (
+            "You are an expert evaluator for GUI image editing and GUI trajectory generation.\n"
+            "Evaluate whether the generated image(s) satisfy the task.\n\n"
+            "Score these five dimensions from 0 to 5:\n"
+            "- goal: whether the user goal is completed correctly\n"
+            "- logic: whether the transition/state change is logically correct\n"
+            "- cons: whether unrelated regions remain consistent\n"
+            "- ui: whether the UI layout/components remain realistic and coherent\n"
+            "- qual: whether the images are visually clear and artifact-free\n\n"
+            "Return JSON only. Do not add any prose outside JSON.\n"
+            "Use exactly this schema:\n"
+            "{\n"
+            '  "goal": 0,\n'
+            '  "logic": 0,\n'
+            '  "cons": 0,\n'
+            '  "ui": 0,\n'
+            '  "qual": 0,\n'
+            '  "reasoning": "short explanation"\n'
+            "}\n\n"
+            "Scoring task:\n"
+            f"{task_prompt}"
+        )
+
+    def _request_text(self, prompt: str, images: list[Image.Image]) -> str:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         for image in images:
             content.append({"type": "image_url", "image_url": {"url": pil_to_data_url(image)}})
@@ -392,10 +416,22 @@ class LocalJudgeClient:
         response.raise_for_status()
         message_content = response.json()["choices"][0]["message"]["content"]
         if isinstance(message_content, list):
-            text = "\n".join(part.get("text", "") for part in message_content if part.get("type") == "text")
-        else:
-            text = str(message_content)
-        return extract_json_object(text)
+            return "\n".join(part.get("text", "") for part in message_content if part.get("type") == "text")
+        return str(message_content)
+
+    def evaluate(self, *, prompt: str, images: list[Image.Image]) -> dict[str, Any]:
+        primary_prompt = self._build_scoring_prompt(prompt)
+        text = self._request_text(primary_prompt, images)
+        try:
+            return extract_json_object(text)
+        except ValueError:
+            retry_prompt = (
+                self._build_scoring_prompt(prompt)
+                + "\n\nYour previous response was not valid JSON. "
+                "Return only the JSON object with integer scores."
+            )
+            retry_text = self._request_text(retry_prompt, images)
+            return extract_json_object(retry_text)
 
 
 class GEBenchRunner:
