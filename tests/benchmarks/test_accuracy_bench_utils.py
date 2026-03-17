@@ -12,12 +12,14 @@ from benchmarks.accuracy.common import VllmOmniImageClient
 from benchmarks.accuracy.image_to_image.gedit_bench import (
     GROUPS as GEDIT_GROUPS,
     _resolve_gedit_split,
+    _infer_backbone_from_model_name,
     infer_model_name,
     resolve_model_name,
     select_balanced_gedit_rows,
     parse_score_payload,
     summarize_generated_records as summarize_gedit_generated_records,
     summarize_gedit_rows,
+    summarize_gedit_rows_with_backbone,
 )
 from benchmarks.accuracy.text_to_image.gbench import (
     _expand_sample_path,
@@ -268,6 +270,11 @@ def test_resolve_gedit_split_accepts_dataset_like_input():
     assert _resolve_gedit_split(rows) == rows
 
 
+def test_infer_backbone_from_model_name_defaults_to_qwen_and_detects_gpt():
+    assert _infer_backbone_from_model_name("/workspace/models/Qwen/Qwen2.5-VL-72B-Instruct-AWQ") == "qwen25vl"
+    assert _infer_backbone_from_model_name("gpt-4o") == "gpt4o"
+
+
 def test_summarize_gedit_rows_computes_group_and_intersection_means():
     rows = []
     for group in GEDIT_GROUPS:
@@ -297,3 +304,64 @@ def test_summarize_gedit_rows_computes_group_and_intersection_means():
     assert math.isclose(summary["overall"]["avg_quality"], 6.5)
     assert math.isclose(summary["overall"]["avg_overall"], expected_overall)
     assert math.isclose(summary["intersection"]["avg_semantics"], 8.0)
+
+
+def test_summarize_gedit_rows_uses_macro_average_across_groups():
+    rows = []
+    for idx in range(10):
+        rows.append(
+            {
+                "task_type": "background_change",
+                "instruction_language": "en",
+                "sementics_score": 10.0,
+                "quality_score": 10.0,
+                "intersection_exist": True,
+            }
+        )
+    for group in GEDIT_GROUPS[1:]:
+        rows.append(
+            {
+                "task_type": group,
+                "instruction_language": "en",
+                "sementics_score": 1.0,
+                "quality_score": 1.0,
+                "intersection_exist": True,
+            }
+        )
+
+    summary = summarize_gedit_rows_with_backbone(rows, language="en", backbone="qwen25vl")
+
+    expected_macro = (10.0 + 10.0 * 1.0) / 11
+    assert math.isclose(summary["overall"]["avg_semantics"], expected_macro)
+    assert math.isclose(summary["overall"]["Q_SC"], expected_macro)
+    assert math.isclose(summary["overall"]["Q_O"], expected_macro)
+
+
+def test_summarize_gedit_rows_with_all_language_splits_en_and_cn():
+    rows = []
+    for group in GEDIT_GROUPS:
+        rows.append(
+            {
+                "task_type": group,
+                "instruction_language": "en",
+                "sementics_score": 8.0,
+                "quality_score": 6.0,
+                "intersection_exist": True,
+            }
+        )
+        rows.append(
+            {
+                "task_type": group,
+                "instruction_language": "cn",
+                "sementics_score": 4.0,
+                "quality_score": 2.0,
+                "intersection_exist": True,
+            }
+        )
+
+    summary = summarize_gedit_rows_with_backbone(rows, language="all", backbone="gpt4o")
+
+    assert set(summary["languages"]) == {"en", "cn"}
+    assert math.isclose(summary["languages"]["en"]["overall"]["G_SC"], 8.0)
+    assert math.isclose(summary["languages"]["en"]["overall"]["G_PQ"], 6.0)
+    assert math.isclose(summary["languages"]["cn"]["overall"]["G_O"], math.sqrt(8.0))
