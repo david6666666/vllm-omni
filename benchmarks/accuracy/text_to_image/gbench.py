@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
+from dataclasses import dataclass
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -32,6 +33,14 @@ TYPE_TO_FOLDER = {
 }
 SCORE_KEYS = ("goal", "logic", "cons", "ui", "qual")
 DEFAULT_SAMPLES_PER_TYPE = 10
+
+
+@dataclass(frozen=True)
+class GEBenchSampleSpec:
+    sample_path: Path
+    metadata: dict[str, Any]
+    sample_name: str
+    lang_device: str
 
 
 def summarize_generated_records(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -78,10 +87,10 @@ def summarize_gebench_results(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def select_balanced_gebench_samples(
-    sample_paths_by_type: dict[str, list[Path]],
+    sample_paths_by_type: dict[str, list[Any]],
     *,
     samples_per_type: int | None,
-) -> dict[str, list[Path]]:
+) -> dict[str, list[Any]]:
     if samples_per_type is None:
         return {data_type: list(paths) for data_type, paths in sample_paths_by_type.items()}
     return {data_type: list(paths)[:samples_per_type] for data_type, paths in sample_paths_by_type.items()}
@@ -158,6 +167,63 @@ def _iter_sample_paths(dataset_root: Path, data_type: str) -> list[Path]:
             elif child.suffix.lower() == ".json":
                 samples.append(child)
     return samples
+
+
+def _sample_name_from_metadata(metadata: dict[str, Any], sample_path: Path, item_index: int | None = None) -> str:
+    sample_id = metadata.get("id") or metadata.get("sample_id") or metadata.get("name")
+    if sample_id:
+        return str(sample_id)
+    if item_index is not None:
+        return f"{sample_path.stem}_{item_index:04d}"
+    return sample_path.stem if sample_path.is_file() else sample_path.name
+
+
+def _expand_sample_path(sample_path: Path) -> list[GEBenchSampleSpec]:
+    if sample_path.is_dir():
+        metadata = _load_metadata(sample_path)
+        return [
+            GEBenchSampleSpec(
+                sample_path=sample_path,
+                metadata=metadata,
+                sample_name=_sample_name(sample_path),
+                lang_device=_lang_device(sample_path, metadata),
+            )
+        ]
+
+    payload = load_json(sample_path)
+    if isinstance(payload, dict):
+        return [
+            GEBenchSampleSpec(
+                sample_path=sample_path,
+                metadata=payload,
+                sample_name=_sample_name_from_metadata(payload, sample_path),
+                lang_device=_lang_device(sample_path, payload),
+            )
+        ]
+
+    if isinstance(payload, list):
+        specs: list[GEBenchSampleSpec] = []
+        for item_index, item in enumerate(payload):
+            if not isinstance(item, dict):
+                continue
+            specs.append(
+                GEBenchSampleSpec(
+                    sample_path=sample_path,
+                    metadata=item,
+                    sample_name=_sample_name_from_metadata(item, sample_path, item_index),
+                    lang_device=_lang_device(sample_path, item),
+                )
+            )
+        return specs
+
+    raise TypeError(f"Unsupported metadata payload type for sample {sample_path}: {type(payload)!r}")
+
+
+def _iter_sample_specs(dataset_root: Path, data_type: str) -> list[GEBenchSampleSpec]:
+    sample_specs: list[GEBenchSampleSpec] = []
+    for sample_path in _iter_sample_paths(dataset_root, data_type):
+        sample_specs.extend(_expand_sample_path(sample_path))
+    return sample_specs
 
 
 def _load_metadata(sample_path: Path) -> dict[str, Any]:
@@ -365,33 +431,34 @@ class GEBenchRunner:
         max_samples: int | None = None,
         samples_per_type: int | None = None,
     ) -> list[dict[str, Any]]:
-        sample_paths = select_balanced_gebench_samples(
-            {data_type: _iter_sample_paths(self.dataset_root, data_type)},
+        sample_specs = select_balanced_gebench_samples(
+            {data_type: _iter_sample_specs(self.dataset_root, data_type)},
             samples_per_type=samples_per_type,
         )[data_type]
         if max_samples is not None:
-            sample_paths = sample_paths[:max_samples]
+            sample_specs = sample_specs[:max_samples]
 
         results: list[dict[str, Any]] = []
         if workers <= 1:
-            for sample_path in sample_paths:
-                result = self._generate_one(data_type, sample_path)
+            for sample_spec in sample_specs:
+                result = self._generate_one(data_type, sample_spec)
                 if result:
                     results.append(result)
             return results
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(self._generate_one, data_type, sample_path) for sample_path in sample_paths]
+            futures = [executor.submit(self._generate_one, data_type, sample_spec) for sample_spec in sample_specs]
             for future in as_completed(futures):
                 result = future.result()
                 if result:
                     results.append(result)
         return results
 
-    def _generate_one(self, data_type: str, sample_path: Path) -> dict[str, Any] | None:
-        metadata = _load_metadata(sample_path)
-        lang_device = _lang_device(sample_path, metadata)
-        sample_name = _sample_name(sample_path)
+    def _generate_one(self, data_type: str, sample_spec: GEBenchSampleSpec) -> dict[str, Any] | None:
+        sample_path = sample_spec.sample_path
+        metadata = sample_spec.metadata
+        lang_device = sample_spec.lang_device
+        sample_name = sample_spec.sample_name
         output_dir = ensure_dir(self.output_root / TYPE_TO_FOLDER[data_type] / lang_device / sample_name)
 
         if data_type == "type1":
@@ -525,10 +592,14 @@ class GEBenchEvaluator:
         samples_per_type: int | None = None,
     ) -> dict[str, Any]:
         output_type_dir = self.output_root / TYPE_TO_FOLDER[data_type]
+        sample_specs_by_name = {
+            (spec.lang_device, spec.sample_name): spec for spec in _iter_sample_specs(self.dataset_root, data_type)
+        }
         sample_dirs = [
             sample_dir
             for lang_dir in sorted(path for path in output_type_dir.iterdir() if path.is_dir())
             for sample_dir in sorted(path for path in lang_dir.iterdir() if path.is_dir())
+            if (lang_dir.name, sample_dir.name) in sample_specs_by_name
         ]
         sample_dirs = select_balanced_gebench_samples(
             {data_type: sample_dirs},
@@ -539,12 +610,20 @@ class GEBenchEvaluator:
         results: list[dict[str, Any]] = []
         if workers <= 1:
             for sample_dir in sample_dirs:
-                result = self._evaluate_one(data_type, sample_dir)
+                result = self._evaluate_one(data_type, sample_dir, sample_specs_by_name[(sample_dir.parent.name, sample_dir.name)])
                 if result:
                     results.append(result)
         else:
             with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures = [executor.submit(self._evaluate_one, data_type, sample_dir) for sample_dir in sample_dirs]
+                futures = [
+                    executor.submit(
+                        self._evaluate_one,
+                        data_type,
+                        sample_dir,
+                        sample_specs_by_name[(sample_dir.parent.name, sample_dir.name)],
+                    )
+                    for sample_dir in sample_dirs
+                ]
                 for future in as_completed(futures):
                     result = future.result()
                     if result:
@@ -554,15 +633,11 @@ class GEBenchEvaluator:
         write_json(self.output_root / "evaluations" / f"{data_type}.json", payload)
         return payload
 
-    def _evaluate_one(self, data_type: str, sample_dir: Path) -> dict[str, Any] | None:
+    def _evaluate_one(self, data_type: str, sample_dir: Path, sample_spec: GEBenchSampleSpec) -> dict[str, Any] | None:
         lang_device = sample_dir.parent.name
         sample_name = sample_dir.name
-        dataset_sample = self.dataset_root / TYPE_TO_FOLDER[data_type] / lang_device / sample_name
-        if not dataset_sample.exists() and data_type in {"type3", "type4"}:
-            json_candidate = dataset_sample.with_suffix(".json")
-            if json_candidate.exists():
-                dataset_sample = json_candidate
-        metadata = _load_metadata(dataset_sample)
+        dataset_sample = sample_spec.sample_path
+        metadata = sample_spec.metadata
 
         if data_type == "type1":
             source = _resolve_referenced_image(

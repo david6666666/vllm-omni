@@ -81,6 +81,12 @@ def decode_base64_image(encoded: str) -> Image.Image:
     return image.convert("RGB")
 
 
+def pil_to_png_bytes(image: Image.Image) -> bytes:
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 class VllmOmniImageClient:
     """Thin OpenAI-compatible image client for vLLM-Omni serving."""
 
@@ -144,38 +150,44 @@ class VllmOmniImageClient:
     ) -> Image.Image:
         if not isinstance(images, list):
             images = [images]
-
-        content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
-        for image in images:
-            content.append({"type": "image_url", "image_url": {"url": pil_to_data_url(image)}})
-
-        payload: dict[str, Any] = {
+        data: dict[str, Any] = {
             "model": model,
-            "messages": [{"role": "user", "content": content}],
-            "height": height,
-            "width": width,
-            "num_inference_steps": num_inference_steps,
+            "prompt": prompt,
+            "n": 1,
+            "size": f"{width}x{height}",
+            "response_format": "b64_json",
+            "num_inference_steps": str(num_inference_steps),
         }
         if guidance_scale is not None:
-            payload["guidance_scale"] = guidance_scale
+            data["guidance_scale"] = str(guidance_scale)
         if seed is not None:
-            payload["seed"] = seed
+            data["seed"] = str(seed)
         if negative_prompt:
-            payload["negative_prompt"] = negative_prompt
+            data["negative_prompt"] = negative_prompt
 
-        response = requests.post(
-            build_openai_url(self.base_url, "/chat/completions"),
-            json=payload,
-            headers=self._headers,
-            timeout=self.timeout,
-        )
-        response.raise_for_status()
-        body = response.json()
-        for choice in body.get("choices", []):
-            message = choice.get("message", {})
-            for item in message.get("content", []) or []:
-                image_url = item.get("image_url", {}).get("url", "")
-                if image_url.startswith("data:image"):
-                    _, encoded = image_url.split(",", 1)
-                    return decode_base64_image(encoded)
-        raise ValueError("No image payload returned from /v1/chat/completions")
+        files = [
+            (
+                "image[]" if len(images) > 1 else "image",
+                (f"image_{index}.png", pil_to_png_bytes(image), "image/png"),
+            )
+            for index, image in enumerate(images)
+        ]
+
+        edit_paths = ["/images/edits", "/images/edit"]
+        last_response: requests.Response | None = None
+        for api_path in edit_paths:
+            response = requests.post(
+                build_openai_url(self.base_url, api_path),
+                data=data,
+                files=files,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=self.timeout,
+            )
+            last_response = response
+            if response.status_code != 404:
+                response.raise_for_status()
+                return decode_base64_image(response.json()["data"][0]["b64_json"])
+
+        assert last_response is not None
+        last_response.raise_for_status()
+        raise ValueError("No image payload returned from image edit endpoint")

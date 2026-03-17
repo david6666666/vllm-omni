@@ -12,8 +12,9 @@ Upstream mapping:
 What changed:
 
 - The upstream repo mainly ships evaluation scripts. This integration adds a
-  generation runner that uses the local `vllm-omni` OpenAI-compatible edit
-  endpoint to produce benchmark outputs in the expected directory structure.
+  generation runner that uses the local `vllm-omni` OpenAI-compatible
+  `/v1/images/edits` endpoint to produce benchmark outputs in the expected
+  directory structure.
 - The evaluator keeps the same VIEScore-style decomposition:
   - `sementics_score`
   - `quality_score`
