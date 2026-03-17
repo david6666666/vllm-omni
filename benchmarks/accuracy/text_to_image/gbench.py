@@ -31,6 +31,7 @@ TYPE_TO_FOLDER = {
     "type5": "05_grounding_data",
 }
 SCORE_KEYS = ("goal", "logic", "cons", "ui", "qual")
+DEFAULT_SAMPLES_PER_TYPE = 10
 
 
 def summarize_generated_records(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -74,6 +75,16 @@ def summarize_gebench_results(results: list[dict[str, Any]]) -> dict[str, Any]:
             "score_means": score_means,
         }
     return summary
+
+
+def select_balanced_gebench_samples(
+    sample_paths_by_type: dict[str, list[Path]],
+    *,
+    samples_per_type: int | None,
+) -> dict[str, list[Path]]:
+    if samples_per_type is None:
+        return {data_type: list(paths) for data_type, paths in sample_paths_by_type.items()}
+    return {data_type: list(paths)[:samples_per_type] for data_type, paths in sample_paths_by_type.items()}
 
 
 def collect_gebench_generation_summary(output_root: Path) -> dict[str, Any]:
@@ -346,8 +357,18 @@ class GEBenchRunner:
         self.seed = seed
         self.client = VllmOmniImageClient(base_url=base_url, api_key=api_key)
 
-    def generate(self, *, data_type: str, workers: int = 1, max_samples: int | None = None) -> list[dict[str, Any]]:
-        sample_paths = _iter_sample_paths(self.dataset_root, data_type)
+    def generate(
+        self,
+        *,
+        data_type: str,
+        workers: int = 1,
+        max_samples: int | None = None,
+        samples_per_type: int | None = None,
+    ) -> list[dict[str, Any]]:
+        sample_paths = select_balanced_gebench_samples(
+            {data_type: _iter_sample_paths(self.dataset_root, data_type)},
+            samples_per_type=samples_per_type,
+        )[data_type]
         if max_samples is not None:
             sample_paths = sample_paths[:max_samples]
 
@@ -495,13 +516,26 @@ class GEBenchEvaluator:
         self.output_root = output_root
         self.judge = judge
 
-    def evaluate(self, *, data_type: str, workers: int = 1) -> dict[str, Any]:
+    def evaluate(
+        self,
+        *,
+        data_type: str,
+        workers: int = 1,
+        max_samples: int | None = None,
+        samples_per_type: int | None = None,
+    ) -> dict[str, Any]:
         output_type_dir = self.output_root / TYPE_TO_FOLDER[data_type]
         sample_dirs = [
             sample_dir
             for lang_dir in sorted(path for path in output_type_dir.iterdir() if path.is_dir())
             for sample_dir in sorted(path for path in lang_dir.iterdir() if path.is_dir())
         ]
+        sample_dirs = select_balanced_gebench_samples(
+            {data_type: sample_dirs},
+            samples_per_type=samples_per_type,
+        )[data_type]
+        if max_samples is not None:
+            sample_dirs = sample_dirs[:max_samples]
         results: list[dict[str, Any]] = []
         if workers <= 1:
             for sample_dir in sample_dirs:
@@ -597,6 +631,7 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--seed", type=int, default=42)
     generate.add_argument("--workers", type=int, default=1)
     generate.add_argument("--max-samples", type=int, default=None)
+    generate.add_argument("--samples-per-type", type=int, default=None)
 
     evaluate = subparsers.add_parser("evaluate")
     evaluate.add_argument("--dataset-root", type=Path, required=True)
@@ -606,6 +641,8 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--judge-model", type=str, required=True)
     evaluate.add_argument("--judge-api-key", type=str, default="EMPTY")
     evaluate.add_argument("--workers", type=int, default=1)
+    evaluate.add_argument("--max-samples", type=int, default=None)
+    evaluate.add_argument("--samples-per-type", type=int, default=None)
 
     summarize = subparsers.add_parser("summarize")
     summarize.add_argument("--output-root", type=Path, required=True)
@@ -633,7 +670,12 @@ def main(argv: list[str] | None = None) -> int:
         records: list[dict[str, Any]] = []
         for data_type in _data_types_arg(args.data_type):
             records.extend(
-                runner.generate(data_type=data_type, workers=args.workers, max_samples=args.max_samples)
+                runner.generate(
+                    data_type=data_type,
+                    workers=args.workers,
+                    max_samples=args.max_samples,
+                    samples_per_type=args.samples_per_type,
+                )
             )
         payload = {"records": records, "summary": summarize_generated_records(records)}
         write_json(args.output_root / "generation_manifest.json", payload)
@@ -648,7 +690,12 @@ def main(argv: list[str] | None = None) -> int:
         evaluator = GEBenchEvaluator(dataset_root=args.dataset_root, output_root=args.output_root, judge=judge)
         combined_results: list[dict[str, Any]] = []
         for data_type in _data_types_arg(args.data_type):
-            payload = evaluator.evaluate(data_type=data_type, workers=args.workers)
+            payload = evaluator.evaluate(
+                data_type=data_type,
+                workers=args.workers,
+                max_samples=args.max_samples,
+                samples_per_type=args.samples_per_type,
+            )
             combined_results.extend(payload["results"])
         write_json(
             args.output_root / "evaluations" / "summary.json",
