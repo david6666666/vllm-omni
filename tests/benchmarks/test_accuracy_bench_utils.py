@@ -2,10 +2,13 @@ import math
 import sys
 from pathlib import Path
 
+from PIL import Image
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from benchmarks.accuracy.common import VllmOmniImageClient
 from benchmarks.accuracy.image_to_image.gedit_bench import (
     GROUPS as GEDIT_GROUPS,
     select_balanced_gedit_rows,
@@ -14,6 +17,7 @@ from benchmarks.accuracy.image_to_image.gedit_bench import (
     summarize_gedit_rows,
 )
 from benchmarks.accuracy.text_to_image.gbench import (
+    _expand_sample_path,
     select_balanced_gebench_samples,
     summarize_generated_records as summarize_gebench_generated_records,
     summarize_gebench_results,
@@ -67,6 +71,65 @@ def test_select_balanced_gebench_samples_limits_each_type_independently():
     assert len(selected["type3"]) == 10
     assert selected["type1"][0].name == "type1_0"
     assert selected["type3"][-1].name == "type3_9"
+
+
+def test_expand_sample_path_flattens_json_list_samples(tmp_path: Path):
+    sample_path = tmp_path / "trajectories.json"
+    sample_path.write_text(
+        """
+[
+  {"id": "sample_a", "lang_device": "english_phone", "instruction": "do a"},
+  {"id": "sample_b", "lang_device": "english_phone", "instruction": "do b"}
+]
+""".strip(),
+        encoding="utf-8",
+    )
+
+    specs = _expand_sample_path(sample_path)
+
+    assert len(specs) == 2
+    assert specs[0].sample_name == "sample_a"
+    assert specs[1].sample_name == "sample_b"
+    assert specs[0].lang_device == "english_phone"
+
+
+def test_image_edit_client_uses_openai_image_edit_endpoint(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY0cAAAAASUVORK5CYII="}]}
+
+    def fake_post(url, data=None, files=None, headers=None, timeout=None, **kwargs):
+        captured["url"] = url
+        captured["data"] = data
+        captured["files"] = files
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr("benchmarks.accuracy.common.requests.post", fake_post)
+
+    client = VllmOmniImageClient(base_url="http://127.0.0.1:8093", api_key="EMPTY")
+    image = Image.new("RGB", (2, 2), color="white")
+    output = client.generate_image_edit(
+        model="Qwen/Qwen-Image-Edit",
+        prompt="edit this image",
+        images=image,
+        width=512,
+        height=512,
+    )
+
+    assert output.size == (1, 1)
+    assert captured["url"] == "http://127.0.0.1:8093/v1/images/edits"
+    assert captured["data"]["prompt"] == "edit this image"
+    assert captured["data"]["size"] == "512x512"
+    assert captured["files"][0][0] == "image"
 
 
 def test_parse_score_payload_handles_raw_json_and_delimited_json():

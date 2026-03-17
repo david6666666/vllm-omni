@@ -13,7 +13,7 @@ What changed:
 
 - Generation calls the local OpenAI-compatible `vllm-omni` endpoints:
   - `/v1/images/generations` for text-only frame generation
-  - `/v1/chat/completions` for image-conditioned GUI transition generation
+  - `/v1/images/edits` for image-conditioned GUI transition generation
 - Evaluation still keeps the GEBench scoring dimensions:
   - `goal`
   - `logic`
