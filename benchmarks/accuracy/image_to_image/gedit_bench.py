@@ -60,6 +60,13 @@ def resolve_model_name(*, model_name: str | None, model: str | None = None, outp
     raise ValueError("model-name is required when it cannot be inferred from model or output-root")
 
 
+def _infer_backbone_from_model_name(model_name: str) -> str:
+    normalized = model_name.lower()
+    if "gpt" in normalized:
+        return "gpt4o"
+    return "qwen25vl"
+
+
 def parse_score_payload(raw_text: str) -> dict[str, Any]:
     try:
         parsed = extract_json_object(raw_text)
@@ -134,9 +141,35 @@ def select_balanced_gedit_rows(
 
 
 def summarize_gedit_rows(rows: list[dict[str, Any]], language: str = "all") -> dict[str, Any]:
-    filtered_rows = [
-        row for row in rows if language == "all" or str(row.get("instruction_language", "")).strip() == language
-    ]
+    return summarize_gedit_rows_with_backbone(rows, language=language, backbone="qwen25vl")
+
+
+def _metric_prefix_for_backbone(backbone: str) -> str:
+    return "G" if backbone == "gpt4o" else "Q"
+
+
+def _mean_or_none(values: list[float]) -> float | None:
+    return statistics.fmean(values) if values else None
+
+
+def _attach_metric_aliases(section: dict[str, float | None], *, metric_prefix: str) -> dict[str, float | None]:
+    aliased = dict(section)
+    aliased["SC"] = section.get("avg_semantics")
+    aliased["PQ"] = section.get("avg_quality")
+    aliased["O"] = section.get("avg_overall")
+    aliased[f"{metric_prefix}_SC"] = section.get("avg_semantics")
+    aliased[f"{metric_prefix}_PQ"] = section.get("avg_quality")
+    aliased[f"{metric_prefix}_O"] = section.get("avg_overall")
+    return aliased
+
+
+def _summarize_gedit_rows_single_language(
+    rows: list[dict[str, Any]],
+    *,
+    language: str,
+    metric_prefix: str,
+) -> dict[str, Any]:
+    filtered_rows = [row for row in rows if str(row.get("instruction_language", "")).strip() == language]
 
     def _to_bool(value: Any) -> bool:
         if isinstance(value, bool):
@@ -144,12 +177,7 @@ def summarize_gedit_rows(rows: list[dict[str, Any]], language: str = "all") -> d
         return str(value).strip().lower() in {"1", "true", "yes"}
 
     per_group: dict[str, dict[str, float | None]] = {}
-    overall_semantics: list[float] = []
-    overall_quality: list[float] = []
-    overall_overall: list[float] = []
-    intersection_semantics: list[float] = []
-    intersection_quality: list[float] = []
-    intersection_overall: list[float] = []
+    intersection_group: dict[str, dict[str, float | None]] = {}
 
     for group in GROUPS:
         group_rows = [row for row in filtered_rows if row.get("task_type") == group]
@@ -158,34 +186,80 @@ def summarize_gedit_rows(rows: list[dict[str, Any]], language: str = "all") -> d
         overall = [math.sqrt(float(row["sementics_score"]) * float(row["quality_score"])) for row in group_rows]
 
         per_group[group] = {
-            "avg_semantics": statistics.fmean(semantics) if semantics else None,
-            "avg_quality": statistics.fmean(quality) if quality else None,
-            "avg_overall": statistics.fmean(overall) if overall else None,
+            "avg_semantics": _mean_or_none(semantics),
+            "avg_quality": _mean_or_none(quality),
+            "avg_overall": _mean_or_none(overall),
         }
-        overall_semantics.extend(semantics)
-        overall_quality.extend(quality)
-        overall_overall.extend(overall)
 
         intersection_rows = [row for row in group_rows if _to_bool(row.get("intersection_exist", False))]
-        intersection_semantics.extend(float(row["sementics_score"]) for row in intersection_rows)
-        intersection_quality.extend(float(row["quality_score"]) for row in intersection_rows)
-        intersection_overall.extend(
+        intersection_semantics = [float(row["sementics_score"]) for row in intersection_rows]
+        intersection_quality = [float(row["quality_score"]) for row in intersection_rows]
+        intersection_overall = [
             math.sqrt(float(row["sementics_score"]) * float(row["quality_score"])) for row in intersection_rows
-        )
+        ]
+        intersection_group[group] = {
+            "avg_semantics": _mean_or_none(intersection_semantics),
+            "avg_quality": _mean_or_none(intersection_quality),
+            "avg_overall": _mean_or_none(intersection_overall),
+        }
+
+    overall_section = {
+        "avg_semantics": _mean_or_none(
+            [score["avg_semantics"] for score in per_group.values() if score["avg_semantics"] is not None]
+        ),
+        "avg_quality": _mean_or_none(
+            [score["avg_quality"] for score in per_group.values() if score["avg_quality"] is not None]
+        ),
+        "avg_overall": _mean_or_none(
+            [score["avg_overall"] for score in per_group.values() if score["avg_overall"] is not None]
+        ),
+    }
+    intersection_section = {
+        "avg_semantics": _mean_or_none(
+            [score["avg_semantics"] for score in intersection_group.values() if score["avg_semantics"] is not None]
+        ),
+        "avg_quality": _mean_or_none(
+            [score["avg_quality"] for score in intersection_group.values() if score["avg_quality"] is not None]
+        ),
+        "avg_overall": _mean_or_none(
+            [score["avg_overall"] for score in intersection_group.values() if score["avg_overall"] is not None]
+        ),
+    }
 
     return {
         "language": language,
+        "metric_prefix": metric_prefix,
         "by_group": per_group,
-        "overall": {
-            "avg_semantics": statistics.fmean(overall_semantics) if overall_semantics else None,
-            "avg_quality": statistics.fmean(overall_quality) if overall_quality else None,
-            "avg_overall": statistics.fmean(overall_overall) if overall_overall else None,
-        },
-        "intersection": {
-            "avg_semantics": statistics.fmean(intersection_semantics) if intersection_semantics else None,
-            "avg_quality": statistics.fmean(intersection_quality) if intersection_quality else None,
-            "avg_overall": statistics.fmean(intersection_overall) if intersection_overall else None,
-        },
+        "overall": _attach_metric_aliases(overall_section, metric_prefix=metric_prefix),
+        "intersection": _attach_metric_aliases(intersection_section, metric_prefix=metric_prefix),
+    }
+
+
+def summarize_gedit_rows_with_backbone(
+    rows: list[dict[str, Any]],
+    *,
+    language: str = "all",
+    backbone: str = "qwen25vl",
+) -> dict[str, Any]:
+    metric_prefix = _metric_prefix_for_backbone(backbone)
+    if language == "all":
+        return {
+            "language": "all",
+            "backbone": backbone,
+            "metric_prefix": metric_prefix,
+            "languages": {
+                single_language: _summarize_gedit_rows_single_language(
+                    rows,
+                    language=single_language,
+                    metric_prefix=metric_prefix,
+                )
+                for single_language in ["en", "cn"]
+            },
+        }
+
+    return {
+        **_summarize_gedit_rows_single_language(rows, language=language, metric_prefix=metric_prefix),
+        "backbone": backbone,
     }
 
 
@@ -447,7 +521,11 @@ class GEditBenchEvaluator:
             for row in results:
                 writer.writerow(row)
 
-        summary = summarize_gedit_rows(results, language=instruction_language)
+        summary = summarize_gedit_rows_with_backbone(
+            results,
+            language=instruction_language,
+            backbone=_infer_backbone_from_model_name(self.scorer.model),
+        )
         write_json(save_dir / f"{model_name}_{task_type}_{instruction_language}_summary.json", summary)
         return {"results": results, "summary": summary, "csv_path": str(csv_path)}
 
@@ -518,6 +596,7 @@ def build_parser() -> argparse.ArgumentParser:
     summarize = subparsers.add_parser("summarize")
     summarize.add_argument("--csv-path", type=Path, required=True)
     summarize.add_argument("--language", choices=["all", "en", "cn"], default="all")
+    summarize.add_argument("--backbone", choices=["qwen25vl", "gpt4o"], default="qwen25vl")
 
     return parser
 
@@ -574,7 +653,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "summarize":
         with args.csv_path.open("r", encoding="utf-8", newline="") as handle:
             rows = list(csv.DictReader(handle))
-        summary = summarize_gedit_rows(rows, language=args.language)
+        summary = summarize_gedit_rows_with_backbone(rows, language=args.language, backbone=args.backbone)
         print(json.dumps(summary, indent=2, ensure_ascii=False))
         return 0
 
