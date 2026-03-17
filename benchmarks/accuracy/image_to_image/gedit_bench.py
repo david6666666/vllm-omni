@@ -205,6 +205,17 @@ def _load_gedit_dataset(dataset_ref: str):
     return load_dataset(dataset_ref)
 
 
+def _resolve_gedit_split(dataset_obj: Any) -> Any:
+    if isinstance(dataset_obj, dict):
+        if "train" in dataset_obj:
+            return dataset_obj["train"]
+        return dataset_obj
+    try:
+        return dataset_obj["train"]
+    except Exception:
+        return dataset_obj
+
+
 def _to_pil_image(value: Any) -> Image.Image:
     if isinstance(value, Image.Image):
         return value.convert("RGB")
@@ -310,7 +321,7 @@ class GEditBenchRunner:
         max_samples: int | None = None,
         samples_per_group: int | None = None,
     ) -> list[dict[str, Any]]:
-        dataset = _load_gedit_dataset(self.dataset_ref)["train"]
+        dataset = _resolve_gedit_split(_load_gedit_dataset(self.dataset_ref))
         rows = select_balanced_gedit_rows(
             list(dataset),
             task_type=task_type,
@@ -391,7 +402,7 @@ class GEditBenchEvaluator:
         max_samples: int | None = None,
         samples_per_group: int | None = None,
     ) -> dict[str, Any]:
-        dataset = _load_gedit_dataset(self.dataset_ref)["train"]
+        dataset = _resolve_gedit_split(_load_gedit_dataset(self.dataset_ref))
         rows = select_balanced_gedit_rows(
             list(dataset),
             task_type=task_type,

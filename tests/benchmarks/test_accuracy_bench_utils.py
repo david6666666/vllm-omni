@@ -11,6 +11,7 @@ if str(REPO_ROOT) not in sys.path:
 from benchmarks.accuracy.common import VllmOmniImageClient
 from benchmarks.accuracy.image_to_image.gedit_bench import (
     GROUPS as GEDIT_GROUPS,
+    _resolve_gedit_split,
     infer_model_name,
     resolve_model_name,
     select_balanced_gedit_rows,
@@ -252,6 +253,19 @@ def test_resolve_model_name_prefers_explicit_value_then_model_then_output_root(t
     output_root = tmp_path / "results"
     (output_root / "qwen_image_edit").mkdir(parents=True)
     assert resolve_model_name(model_name=None, output_root=output_root) == "qwen_image_edit"
+
+
+def test_resolve_gedit_split_accepts_dataset_dict_like_input():
+    train_rows = [{"key": "a"}]
+    dataset = {"train": train_rows}
+
+    assert _resolve_gedit_split(dataset) == train_rows
+
+
+def test_resolve_gedit_split_accepts_dataset_like_input():
+    rows = [{"key": "a"}]
+
+    assert _resolve_gedit_split(rows) == rows
 
 
 def test_summarize_gedit_rows_computes_group_and_intersection_means():
