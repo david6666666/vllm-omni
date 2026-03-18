@@ -353,6 +353,39 @@ def _type5_prompt(metadata: dict[str, Any]) -> str:
         metadata.get("grounding_explanation") or grounding.get("effect") or grounding.get("description"),
         "Predict the immediate GUI reaction to the indicated target.",
     )
+
+
+def _make_storyboard_image(
+    frames: list[Image.Image],
+    *,
+    columns: int = 3,
+    background_color: tuple[int, int, int] = (255, 255, 255),
+) -> Image.Image:
+    if not frames:
+        raise ValueError("Expected at least one frame to build a storyboard image.")
+
+    normalized = [frame.convert("RGB") for frame in frames]
+    frame_width = max(frame.width for frame in normalized)
+    frame_height = max(frame.height for frame in normalized)
+    rows = (len(normalized) + columns - 1) // columns
+    storyboard = Image.new("RGB", (frame_width * columns, frame_height * rows), color=background_color)
+
+    for index, frame in enumerate(normalized):
+        x_offset = (index % columns) * frame_width
+        y_offset = (index // columns) * frame_height
+        if frame.size != (frame_width, frame_height):
+            frame = frame.resize((frame_width, frame_height))
+        storyboard.paste(frame, (x_offset, y_offset))
+    return storyboard
+
+
+def _trajectory_judge_payload(frames: list[Image.Image]) -> tuple[str, list[Image.Image]]:
+    storyboard = _make_storyboard_image(frames, columns=3)
+    prompt_suffix = (
+        "The attached image is a storyboard containing six frames arranged left-to-right, "
+        "top-to-bottom as frame0, frame1, frame2, frame3, frame4, frame5."
+    )
+    return prompt_suffix, [storyboard]
     return (
         "Using the reference GUI screenshot, predict the immediate GUI state after the grounded interaction.\n\n"
         f"Expected effect: {explanation}\n"
@@ -687,16 +720,18 @@ class GEBenchEvaluator:
         elif data_type == "type2":
             frames = [Image.open(sample_dir / f"frame{i}.png").convert("RGB") for i in range(6)]
             goal = _text_or_default(metadata.get("question") or metadata.get("caption"), "Complete the task.")
+            prompt_suffix, judge_images = _trajectory_judge_payload(frames)
             raw_scores = self.judge.evaluate(
-                prompt=f"Evaluate a six-frame GUI trajectory.\nTask: {goal}",
-                images=frames,
+                prompt=f"Evaluate a six-frame GUI trajectory.\nTask: {goal}\n{prompt_suffix}",
+                images=judge_images,
             )
         elif data_type in {"type3", "type4"}:
             frames = [Image.open(sample_dir / f"frame{i}.png").convert("RGB") for i in range(6)]
             instruction = _text_or_default(metadata.get("instruction") or metadata.get("caption"), "Complete the task.")
+            prompt_suffix, judge_images = _trajectory_judge_payload(frames)
             raw_scores = self.judge.evaluate(
-                prompt=f"Evaluate a six-frame GUI trajectory.\nInstruction: {instruction}",
-                images=frames,
+                prompt=f"Evaluate a six-frame GUI trajectory.\nInstruction: {instruction}\n{prompt_suffix}",
+                images=judge_images,
             )
         elif data_type == "type5":
             source = _resolve_referenced_image(
