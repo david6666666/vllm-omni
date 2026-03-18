@@ -8,7 +8,7 @@ import shutil
 import pytest
 
 from benchmarks.accuracy.text_to_image.gbench import TYPE_TO_FOLDER, main as gbench_main
-from tests.e2e.accuracy.conftest import reset_artifact_dir
+from tests.e2e.accuracy.conftest import infer_model_label, reset_artifact_dir
 from tests.utils import hardware_test
 
 
@@ -42,7 +42,10 @@ def test_gebench_h100_smoke(
     gebench_samples_per_type: int,
     accuracy_workers: int,
 ) -> None:
-    output_root = reset_artifact_dir(accuracy_artifact_root / "gebench")
+    model_label = os.environ.get("VLLM_TEST_GEBENCH_MODEL_LABEL") or infer_model_label(
+        accuracy_servers.generate_params.model
+    )
+    output_root = reset_artifact_dir(accuracy_artifact_root / f"gebench_{model_label}")
 
     with accuracy_servers.generate_server() as generate_server:
         assert gbench_main(

@@ -94,6 +94,11 @@ def reset_artifact_dir(path: Path) -> Path:
     return path
 
 
+def infer_model_label(model: str) -> str:
+    label = Path(model.rstrip("/\\")).name or "model"
+    return "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in label)
+
+
 @pytest.fixture
 def accuracy_servers(
     request: pytest.FixtureRequest,
