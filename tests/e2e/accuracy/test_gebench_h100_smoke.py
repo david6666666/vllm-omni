@@ -13,7 +13,7 @@ from tests.utils import hardware_test
 @pytest.mark.advanced_model
 @pytest.mark.benchmark
 @pytest.mark.diffusion
-@hardware_test(res={"cuda": "H100"}, num_cards=2)
+@hardware_test(res={"cuda": "H100"}, num_cards=1)
 @pytest.mark.parametrize(
     "accuracy_servers",
     [
@@ -24,8 +24,7 @@ from tests.utils import hardware_test
                     "VLLM_TEST_ACCURACY_JUDGE_MODEL",
                     "/workspace/models/QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ",
                 ),
-                "generate_gpu": os.environ.get("VLLM_ACCURACY_GEN_GPU", "0"),
-                "judge_gpu": os.environ.get("VLLM_ACCURACY_JUDGE_GPU", "1"),
+                "gpu": os.environ.get("VLLM_ACCURACY_GPU", os.environ.get("VLLM_ACCURACY_GEN_GPU", "0")),
                 "generate_port": int(os.environ.get("VLLM_TEST_GEBENCH_PORT", "8093")),
                 "judge_port": int(os.environ.get("VLLM_TEST_ACCURACY_JUDGE_PORT", "8094")),
             },
@@ -43,47 +42,49 @@ def test_gebench_h100_smoke(
 ) -> None:
     output_root = tmp_path / "gebench"
 
-    assert gbench_main(
-        [
-            "generate",
-            "--dataset-root",
-            str(gebench_dataset_root),
-            "--output-root",
-            str(output_root),
-            "--base-url",
-            accuracy_servers.generate_base_url,
-            "--model",
-            accuracy_servers.generate_server.model,
-            "--data-type",
-            "type3",
-            "--samples-per-type",
-            str(gebench_samples_per_type),
-            "--workers",
-            str(accuracy_workers),
-        ]
-    ) == 0
+    with accuracy_servers.generate_server() as generate_server:
+        assert gbench_main(
+            [
+                "generate",
+                "--dataset-root",
+                str(gebench_dataset_root),
+                "--output-root",
+                str(output_root),
+                "--base-url",
+                f"http://{generate_server.host}:{generate_server.port}",
+                "--model",
+                generate_server.model,
+                "--data-type",
+                "type3",
+                "--samples-per-type",
+                str(gebench_samples_per_type),
+                "--workers",
+                str(accuracy_workers),
+            ]
+        ) == 0
 
-    assert gbench_main(
-        [
-            "evaluate",
-            "--dataset-root",
-            str(gebench_dataset_root),
-            "--output-root",
-            str(output_root),
-            "--data-type",
-            "type3",
-            "--judge-base-url",
-            accuracy_servers.judge_base_url,
-            "--judge-model",
-            accuracy_servers.judge_server.model,
-            "--judge-api-key",
-            "EMPTY",
-            "--samples-per-type",
-            str(gebench_samples_per_type),
-            "--workers",
-            str(accuracy_workers),
-        ]
-    ) == 0
+    with accuracy_servers.judge_server() as judge_server:
+        assert gbench_main(
+            [
+                "evaluate",
+                "--dataset-root",
+                str(gebench_dataset_root),
+                "--output-root",
+                str(output_root),
+                "--data-type",
+                "type3",
+                "--judge-base-url",
+                f"http://{judge_server.host}:{judge_server.port}",
+                "--judge-model",
+                judge_server.model,
+                "--judge-api-key",
+                "EMPTY",
+                "--samples-per-type",
+                str(gebench_samples_per_type),
+                "--workers",
+                str(accuracy_workers),
+            ]
+        ) == 0
 
     assert gbench_main(["summarize", "--output-root", str(output_root)]) == 0
 

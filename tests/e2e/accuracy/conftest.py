@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from contextlib import ExitStack
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,17 +29,29 @@ def _env_int(name: str, default: int) -> int:
 
 
 @dataclass
-class AccuracyServerBundle:
-    generate_server: OmniServer
-    judge_server: OmniServer
+class AccuracyServerConfig:
+    generate_params: OmniServerParams
+    judge_params: OmniServerParams
+    run_level: str
+    model_prefix: str
 
-    @property
-    def generate_base_url(self) -> str:
-        return f"http://{self.generate_server.host}:{self.generate_server.port}"
+    @contextmanager
+    def generate_server(self):
+        with _build_omni_server(
+            self.generate_params,
+            run_level=self.run_level,
+            model_prefix=self.model_prefix,
+        ) as server:
+            yield server
 
-    @property
-    def judge_base_url(self) -> str:
-        return f"http://{self.judge_server.host}:{self.judge_server.port}"
+    @contextmanager
+    def judge_server(self):
+        with _build_omni_server(
+            self.judge_params,
+            run_level=self.run_level,
+            model_prefix=self.model_prefix,
+        ) as server:
+            yield server
 
 
 @pytest.fixture(scope="session")
@@ -72,9 +84,9 @@ def accuracy_servers(
     request: pytest.FixtureRequest,
     run_level: str,
     model_prefix: str,
-) -> AccuracyServerBundle:
-    if torch.cuda.device_count() < 2:
-        pytest.skip("Need at least 2 CUDA GPUs for accuracy benchmark smoke tests.")
+) -> AccuracyServerConfig:
+    if torch.cuda.device_count() < 1:
+        pytest.skip("Need at least 1 CUDA GPU for accuracy benchmark smoke tests.")
 
     params = getattr(request, "param", {})
     generate_model = params["generate_model"]
@@ -84,8 +96,12 @@ def accuracy_servers(
         "judge_model",
         "/workspace/models/QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ",
     )
-    generate_gpu = str(params.get("generate_gpu", os.environ.get("VLLM_ACCURACY_GEN_GPU", "0")))
-    judge_gpu = str(params.get("judge_gpu", os.environ.get("VLLM_ACCURACY_JUDGE_GPU", "1")))
+    shared_gpu = str(
+        params.get(
+            "gpu",
+            os.environ.get("VLLM_ACCURACY_GPU", os.environ.get("VLLM_ACCURACY_GEN_GPU", "0")),
+        )
+    )
     generate_server_args = ["--num-gpus", "1", *(params.get("generate_server_args") or [])]
     judge_server_args = params.get("judge_server_args") or [
         "--max-model-len",
@@ -96,36 +112,25 @@ def accuracy_servers(
         "4",
     ]
 
-    with ExitStack() as stack:
-        generate_server = stack.enter_context(
-            _build_omni_server(
-                OmniServerParams(
-                    model=generate_model,
-                    port=params.get("generate_port"),
-                    server_args=generate_server_args,
-                    env_dict={"CUDA_VISIBLE_DEVICES": generate_gpu},
-                    use_omni=True,
-                ),
-                run_level=run_level,
-                model_prefix=model_prefix,
-            )
-        )
-        judge_server = stack.enter_context(
-            _build_omni_server(
-                OmniServerParams(
-                    model=judge_model,
-                    port=params.get("judge_port"),
-                    server_args=judge_server_args,
-                    env_dict={
-                        "CUDA_VISIBLE_DEVICES": judge_gpu,
-                        "VLLM_LIMIT_MM_PER_PROMPT": os.environ.get("VLLM_LIMIT_MM_PER_PROMPT", ""),
-                    }
-                    if os.environ.get("VLLM_LIMIT_MM_PER_PROMPT")
-                    else {"CUDA_VISIBLE_DEVICES": judge_gpu},
-                    use_omni=False,
-                ),
-                run_level=run_level,
-                model_prefix=model_prefix,
-            )
-        )
-        yield AccuracyServerBundle(generate_server=generate_server, judge_server=judge_server)
+    judge_env = {"CUDA_VISIBLE_DEVICES": shared_gpu}
+    if os.environ.get("VLLM_LIMIT_MM_PER_PROMPT"):
+        judge_env["VLLM_LIMIT_MM_PER_PROMPT"] = os.environ["VLLM_LIMIT_MM_PER_PROMPT"]
+
+    return AccuracyServerConfig(
+        generate_params=OmniServerParams(
+            model=generate_model,
+            port=params.get("generate_port"),
+            server_args=generate_server_args,
+            env_dict={"CUDA_VISIBLE_DEVICES": shared_gpu},
+            use_omni=True,
+        ),
+        judge_params=OmniServerParams(
+            model=judge_model,
+            port=params.get("judge_port"),
+            server_args=judge_server_args,
+            env_dict=judge_env,
+            use_omni=False,
+        ),
+        run_level=run_level,
+        model_prefix=model_prefix,
+    )
