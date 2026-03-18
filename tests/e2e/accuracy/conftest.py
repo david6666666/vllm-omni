@@ -87,20 +87,13 @@ def accuracy_servers(
     generate_gpu = str(params.get("generate_gpu", os.environ.get("VLLM_ACCURACY_GEN_GPU", "0")))
     judge_gpu = str(params.get("judge_gpu", os.environ.get("VLLM_ACCURACY_JUDGE_GPU", "1")))
     generate_server_args = ["--num-gpus", "1", *(params.get("generate_server_args") or [])]
-    judge_server_args = [
-        "--num-gpus",
-        "1",
-        *(
-            params.get("judge_server_args")
-            or [
-                "--max-model-len",
-                "32768",
-                "--gpu-memory-utilization",
-                "0.8",
-                "--limit-mm-per-prompt.image",
-                "4",
-            ]
-        ),
+    judge_server_args = params.get("judge_server_args") or [
+        "--max-model-len",
+        "32768",
+        "--gpu-memory-utilization",
+        "0.8",
+        "--limit-mm-per-prompt.image",
+        "4",
     ]
 
     with ExitStack() as stack:
