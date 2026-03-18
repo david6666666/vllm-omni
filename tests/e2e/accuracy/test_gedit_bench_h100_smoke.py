@@ -8,7 +8,7 @@ import shutil
 import pytest
 
 from benchmarks.accuracy.image_to_image.gedit_bench import GROUPS, main as gedit_main
-from tests.e2e.accuracy.conftest import reset_artifact_dir
+from tests.e2e.accuracy.conftest import infer_model_label, reset_artifact_dir
 from tests.utils import hardware_test
 
 
@@ -42,9 +42,10 @@ def test_gedit_bench_h100_smoke(
     gedit_samples_per_group: int,
     accuracy_workers: int,
 ) -> None:
-    output_root = reset_artifact_dir(accuracy_artifact_root / "gedit_results")
-    score_root = reset_artifact_dir(accuracy_artifact_root / "gedit_scores")
-    model_name = "smoke_qwen_image_edit"
+    model_label = os.environ.get("VLLM_TEST_GEDIT_MODEL_LABEL") or infer_model_label(accuracy_servers.generate_params.model)
+    output_root = reset_artifact_dir(accuracy_artifact_root / f"gedit_results_{model_label}")
+    score_root = reset_artifact_dir(accuracy_artifact_root / f"gedit_scores_{model_label}")
+    model_name = model_label
 
     with accuracy_servers.generate_server() as generate_server:
         assert gedit_main(
