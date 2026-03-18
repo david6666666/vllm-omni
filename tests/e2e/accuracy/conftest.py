@@ -111,6 +111,7 @@ def accuracy_servers(
                     port=params.get("generate_port"),
                     server_args=generate_server_args,
                     env_dict={"CUDA_VISIBLE_DEVICES": generate_gpu},
+                    use_omni=True,
                 ),
                 run_level=run_level,
                 model_prefix=model_prefix,
@@ -128,6 +129,7 @@ def accuracy_servers(
                     }
                     if os.environ.get("VLLM_LIMIT_MM_PER_PROMPT")
                     else {"CUDA_VISIBLE_DEVICES": judge_gpu},
+                    use_omni=False,
                 ),
                 run_level=run_level,
                 model_prefix=model_prefix,

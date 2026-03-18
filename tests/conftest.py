@@ -55,6 +55,7 @@ class OmniServerParams(NamedTuple):
     stage_config_path: str | None = None
     server_args: list[str] | None = None
     env_dict: dict[str, str] | None = None
+    use_omni: bool = True
 
 
 def assert_image_valid(image: Path | Image.Image, *, width: int | None = None, height: int | None = None):
@@ -1077,6 +1078,7 @@ class OmniServer:
         *,
         port: int | None = None,
         env_dict: dict[str, str] | None = None,
+        use_omni: bool = True,
     ) -> None:
         _run_pre_test_cleanup(enable_force=True)
         _run_post_test_cleanup(enable_force=True)
@@ -1084,6 +1086,7 @@ class OmniServer:
         self.model = model
         self.serve_args = serve_args
         self.env_dict = env_dict
+        self.use_omni = use_omni
         self.proc: subprocess.Popen | None = None
         self.host = "127.0.0.1"
         if port is None:
@@ -1104,12 +1107,14 @@ class OmniServer:
             "vllm_omni.entrypoints.cli.main",
             "serve",
             self.model,
-            "--omni",
             "--host",
             self.host,
             "--port",
             str(self.port),
-        ] + self.serve_args
+        ]
+        if self.use_omni:
+            cmd.append("--omni")
+        cmd += self.serve_args
 
         print(f"Launching OmniServer with: {' '.join(cmd)}")
         self.proc = subprocess.Popen(
@@ -1252,8 +1257,14 @@ def _build_omni_server(
         server_args += ["--stage-configs-path", stage_config_path]
 
     if port:
-        return OmniServer(model, server_args, port=port, env_dict=params.env_dict)
-    return OmniServer(model, server_args, env_dict=params.env_dict)
+        return OmniServer(
+            model,
+            server_args,
+            port=port,
+            env_dict=params.env_dict,
+            use_omni=params.use_omni,
+        )
+    return OmniServer(model, server_args, env_dict=params.env_dict, use_omni=params.use_omni)
 
 
 @pytest.fixture(scope="module")
