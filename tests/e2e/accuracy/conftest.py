@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import os
 from contextlib import contextmanager
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import shutil
 
@@ -12,21 +12,42 @@ import torch
 from tests.conftest import OmniServer, OmniServerParams, _build_omni_server
 
 
-def _env_path_or_skip(name: str) -> Path:
-    value = os.environ.get(name)
+def pytest_addoption(parser):
+    group = parser.getgroup("accuracy-e2e")
+    group.addoption("--gebench-root", action="store", default=None, help="Local GEBench dataset root")
+    group.addoption("--gedit-root", action="store", default=None, help="Local GEdit-Bench dataset root")
+    group.addoption("--gebench-model", action="store", default=None, help="Generate model for GEBench smoke")
+    group.addoption("--gedit-model", action="store", default=None, help="Generate model for GEdit-Bench smoke")
+    group.addoption("--accuracy-judge-model", action="store", default=None, help="Judge model path")
+    group.addoption("--accuracy-gpu", action="store", default="0", help="Single GPU id used sequentially")
+    group.addoption("--gebench-port", action="store", type=int, default=8093, help="Generate port for GEBench")
+    group.addoption("--gedit-port", action="store", type=int, default=8093, help="Generate port for GEdit-Bench")
+    group.addoption("--accuracy-judge-port", action="store", type=int, default=8094, help="Judge server port")
+    group.addoption(
+        "--gebench-samples-per-type",
+        action="store",
+        type=int,
+        default=10,
+        help="Balanced sample count per GEBench type",
+    )
+    group.addoption(
+        "--gedit-samples-per-group",
+        action="store",
+        type=int,
+        default=10,
+        help="Balanced sample count per GEdit task group",
+    )
+    group.addoption("--accuracy-workers", action="store", type=int, default=1, help="Worker count for accuracy benches")
+
+
+def _option_path_or_skip(request: pytest.FixtureRequest, name: str) -> Path:
+    value = request.config.getoption(name)
     if not value:
-        pytest.skip(f"Missing required environment variable: {name}")
+        pytest.skip(f"Missing required pytest option: --{name.replace('_', '-')}")
     path = Path(value)
     if not path.exists():
         pytest.skip(f"Dataset path does not exist: {path}")
     return path
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return int(raw)
 
 
 @dataclass
@@ -56,28 +77,28 @@ class AccuracyServerConfig:
 
 
 @pytest.fixture(scope="session")
-def gebench_dataset_root() -> Path:
-    return _env_path_or_skip("VLLM_TEST_GEBENCH_ROOT")
+def gebench_dataset_root(request: pytest.FixtureRequest) -> Path:
+    return _option_path_or_skip(request, "gebench_root")
 
 
 @pytest.fixture(scope="session")
-def gedit_dataset_root() -> Path:
-    return _env_path_or_skip("VLLM_TEST_GEDIT_ROOT")
+def gedit_dataset_root(request: pytest.FixtureRequest) -> Path:
+    return _option_path_or_skip(request, "gedit_root")
 
 
 @pytest.fixture(scope="session")
-def accuracy_workers() -> int:
-    return _env_int("VLLM_TEST_ACCURACY_WORKERS", 1)
+def accuracy_workers(request: pytest.FixtureRequest) -> int:
+    return int(request.config.getoption("accuracy_workers"))
 
 
 @pytest.fixture(scope="session")
-def gebench_samples_per_type() -> int:
-    return _env_int("VLLM_TEST_GEBENCH_SAMPLES_PER_TYPE", 10)
+def gebench_samples_per_type(request: pytest.FixtureRequest) -> int:
+    return int(request.config.getoption("gebench_samples_per_type"))
 
 
 @pytest.fixture(scope="session")
-def gedit_samples_per_group() -> int:
-    return _env_int("VLLM_TEST_GEDIT_SAMPLES_PER_GROUP", 10)
+def gedit_samples_per_group(request: pytest.FixtureRequest) -> int:
+    return int(request.config.getoption("gedit_samples_per_group"))
 
 
 @pytest.fixture(scope="session")
@@ -99,31 +120,23 @@ def infer_model_label(model: str) -> str:
     return "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in label)
 
 
-@pytest.fixture
-def accuracy_servers(
-    request: pytest.FixtureRequest,
+def _build_accuracy_server_config(
+    *,
+    generate_model: str,
+    judge_model: str,
+    shared_gpu: str,
+    generate_port: int,
+    judge_port: int,
     run_level: str,
     model_prefix: str,
 ) -> AccuracyServerConfig:
     if torch.cuda.device_count() < 1:
         pytest.skip("Need at least 1 CUDA GPU for accuracy benchmark smoke tests.")
 
-    params = getattr(request, "param", {})
-    generate_model = params["generate_model"]
     if not generate_model:
         pytest.skip("No generate model configured for accuracy benchmark test.")
-    judge_model = params.get(
-        "judge_model",
-        "/workspace/models/QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ",
-    )
-    shared_gpu = str(
-        params.get(
-            "gpu",
-            os.environ.get("VLLM_ACCURACY_GPU", os.environ.get("VLLM_ACCURACY_GEN_GPU", "0")),
-        )
-    )
-    generate_server_args = ["--num-gpus", "1", *(params.get("generate_server_args") or [])]
-    judge_server_args = params.get("judge_server_args") or [
+    generate_server_args = ["--num-gpus", "1"]
+    judge_server_args = [
         "--max-model-len",
         "32768",
         "--gpu-memory-utilization",
@@ -139,18 +152,52 @@ def accuracy_servers(
     return AccuracyServerConfig(
         generate_params=OmniServerParams(
             model=generate_model,
-            port=params.get("generate_port"),
+            port=generate_port,
             server_args=generate_server_args,
             env_dict={"CUDA_VISIBLE_DEVICES": shared_gpu},
             use_omni=True,
         ),
         judge_params=OmniServerParams(
             model=judge_model,
-            port=params.get("judge_port"),
+            port=judge_port,
             server_args=judge_server_args,
             env_dict=judge_env,
             use_omni=False,
         ),
+        run_level=run_level,
+        model_prefix=model_prefix,
+    )
+
+
+@pytest.fixture
+def gebench_accuracy_servers(
+    request: pytest.FixtureRequest,
+    run_level: str,
+    model_prefix: str,
+) -> AccuracyServerConfig:
+    return _build_accuracy_server_config(
+        generate_model=request.config.getoption("gebench_model"),
+        judge_model=request.config.getoption("accuracy_judge_model"),
+        shared_gpu=str(request.config.getoption("accuracy_gpu")),
+        generate_port=int(request.config.getoption("gebench_port")),
+        judge_port=int(request.config.getoption("accuracy_judge_port")),
+        run_level=run_level,
+        model_prefix=model_prefix,
+    )
+
+
+@pytest.fixture
+def gedit_accuracy_servers(
+    request: pytest.FixtureRequest,
+    run_level: str,
+    model_prefix: str,
+) -> AccuracyServerConfig:
+    return _build_accuracy_server_config(
+        generate_model=request.config.getoption("gedit_model"),
+        judge_model=request.config.getoption("accuracy_judge_model"),
+        shared_gpu=str(request.config.getoption("accuracy_gpu")),
+        generate_port=int(request.config.getoption("gedit_port")),
+        judge_port=int(request.config.getoption("accuracy_judge_port")),
         run_level=run_level,
         model_prefix=model_prefix,
     )
