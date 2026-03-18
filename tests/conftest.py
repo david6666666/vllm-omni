@@ -54,6 +54,7 @@ class OmniServerParams(NamedTuple):
     port: int | None = None
     stage_config_path: str | None = None
     server_args: list[str] | None = None
+    env_dict: dict[str, str] | None = None
 
 
 def assert_image_valid(image: Path | Image.Image, *, width: int | None = None, height: int | None = None):
@@ -1224,6 +1225,37 @@ def run_level(request) -> str:
 _omni_server_lock = threading.Lock()
 
 
+def _build_omni_server(
+    params: OmniServerParams,
+    *,
+    run_level: str,
+    model_prefix: str,
+) -> OmniServer:
+    model = model_prefix + params.model
+    port = params.port
+    stage_config_path = params.stage_config_path
+    if run_level == "advanced_model" and stage_config_path is not None:
+        stage_config_path = modify_stage_config(
+            stage_config_path,
+            deletes={
+                "stage_args": {
+                    0: ["engine_args.load_format"],
+                    1: ["engine_args.load_format"],
+                    2: ["engine_args.load_format"],
+                }
+            },
+        )
+
+    server_args = params.server_args or []
+    server_args = ["--stage-init-timeout", "120", *server_args]
+    if stage_config_path is not None:
+        server_args += ["--stage-configs-path", stage_config_path]
+
+    if port:
+        return OmniServer(model, server_args, port=port, env_dict=params.env_dict)
+    return OmniServer(model, server_args, env_dict=params.env_dict)
+
+
 @pytest.fixture(scope="module")
 def omni_server(request: pytest.FixtureRequest, run_level: str, model_prefix: str) -> Generator[OmniServer, Any, None]:
     """Start vLLM-Omni server as a subprocess with actual model weights.
@@ -1232,27 +1264,7 @@ def omni_server(request: pytest.FixtureRequest, run_level: str, model_prefix: st
     """
     with _omni_server_lock:
         params: OmniServerParams = request.param
-        model = model_prefix + params.model
-        port = params.port
-        stage_config_path = params.stage_config_path
-        if run_level == "advanced_model" and stage_config_path is not None:
-            stage_config_path = modify_stage_config(
-                stage_config_path,
-                deletes={
-                    "stage_args": {
-                        0: ["engine_args.load_format"],
-                        1: ["engine_args.load_format"],
-                        2: ["engine_args.load_format"],
-                    }
-                },
-            )
-
-        server_args = params.server_args or []
-        server_args = ["--stage-init-timeout", "120", *server_args]
-        if stage_config_path is not None:
-            server_args += ["--stage-configs-path", stage_config_path]
-
-        with OmniServer(model, server_args, port=port) if port else OmniServer(model, server_args) as server:
+        with _build_omni_server(params, run_level=run_level, model_prefix=model_prefix) as server:
             print("OmniServer started successfully")
             yield server
             print("OmniServer stopping...")

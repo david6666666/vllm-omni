@@ -19,8 +19,15 @@ from tests.utils import hardware_test
     [
         pytest.param(
             {
-                "generate_model": os.environ.get("VLLM_TEST_GEDIT_MODEL", "Qwen/Qwen-Image-Edit"),
-                "judge_model": os.environ.get("VLLM_TEST_ACCURACY_JUDGE_MODEL", "Qwen/Qwen2.5-VL-7B-Instruct"),
+                "generate_model": os.environ.get("VLLM_TEST_GEDIT_MODEL", "/workspace/models/Qwen/Qwen-Image-Edit"),
+                "judge_model": os.environ.get(
+                    "VLLM_TEST_ACCURACY_JUDGE_MODEL",
+                    "/workspace/models/QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ",
+                ),
+                "generate_gpu": os.environ.get("VLLM_ACCURACY_GEN_GPU", "0"),
+                "judge_gpu": os.environ.get("VLLM_ACCURACY_JUDGE_GPU", "1"),
+                "generate_port": int(os.environ.get("VLLM_TEST_GEDIT_PORT", "8093")),
+                "judge_port": int(os.environ.get("VLLM_TEST_ACCURACY_JUDGE_PORT", "8094")),
             },
             id="gedit-bench",
         )
@@ -95,11 +102,14 @@ def test_gedit_bench_h100_smoke(
 
     summary_path = score_root / f"{model_name}_all_all_summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert set(summary["languages"]) == {"en", "cn"}
 
-    assert summary["overall"]["avg_semantics"] is not None
-    assert summary["overall"]["avg_quality"] is not None
-    assert summary["overall"]["avg_overall"] is not None
+    for language in ["en", "cn"]:
+        language_summary = summary["languages"][language]
+        assert language_summary["overall"]["Q_SC"] is not None
+        assert language_summary["overall"]["Q_PQ"] is not None
+        assert language_summary["overall"]["Q_O"] is not None
 
-    for group in GROUPS:
-        group_summary = summary["by_group"][group]
-        assert group_summary["avg_overall"] is not None
+        for group in GROUPS:
+            group_summary = language_summary["by_group"][group]
+            assert set(group_summary) == {"Q_SC", "Q_PQ", "Q_O"}
