@@ -1264,7 +1264,12 @@ def _build_omni_server(
             env_dict=params.env_dict,
             use_omni=params.use_omni,
         )
-    return OmniServer(model, server_args, env_dict=params.env_dict, use_omni=params.use_omni)
+    return OmniServer(
+        model,
+        server_args,
+        env_dict=params.env_dict,
+        use_omni=params.use_omni,
+    )
 
 
 @pytest.fixture(scope="module")
