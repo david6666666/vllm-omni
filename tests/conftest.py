@@ -146,20 +146,40 @@ def log_test_name_before_test(request):
     yield
 
 
-def _run_pre_test_cleanup(enable_force=False):
+def _parse_cuda_visible_devices(env_dict: dict[str, str] | None) -> list[int] | None:
+    if not env_dict:
+        return None
+    visible_devices = env_dict.get("CUDA_VISIBLE_DEVICES")
+    if not visible_devices:
+        return None
+    devices: list[int] = []
+    for token in visible_devices.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if token.isdigit():
+            devices.append(int(token))
+    return devices or None
+
+
+def _run_pre_test_cleanup(enable_force=False, devices: list[int] | None = None):
     if os.getenv("VLLM_TEST_CLEAN_GPU_MEMORY", "0") != "1" and not enable_force:
         print("GPU cleanup disabled")
         return
 
     print("Pre-test GPU status:")
 
-    num_gpus = torch.cuda.device_count()
-    if num_gpus > 0:
+    target_devices = devices
+    if target_devices is None:
+        num_gpus = torch.cuda.device_count()
+        target_devices = list(range(num_gpus))
+
+    if target_devices:
         try:
             from tests.utils import wait_for_gpu_memory_to_clear
 
             wait_for_gpu_memory_to_clear(
-                devices=list(range(num_gpus)),
+                devices=target_devices,
                 threshold_ratio=0.05,
             )
         except Exception as e:
@@ -1080,7 +1100,8 @@ class OmniServer:
         env_dict: dict[str, str] | None = None,
         use_omni: bool = True,
     ) -> None:
-        _run_pre_test_cleanup(enable_force=True)
+        startup_devices = _parse_cuda_visible_devices(env_dict)
+        _run_pre_test_cleanup(enable_force=True, devices=startup_devices)
         _run_post_test_cleanup(enable_force=True)
         cleanup_dist_env_and_memory()
         self.model = model
