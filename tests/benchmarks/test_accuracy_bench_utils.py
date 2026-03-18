@@ -22,6 +22,7 @@ from benchmarks.accuracy.image_to_image.gedit_bench import (
 )
 from benchmarks.accuracy.text_to_image.gbench import (
     _expand_sample_path,
+    _trajectory_judge_payload,
     LocalJudgeClient,
     select_balanced_gebench_samples,
     summarize_generated_records as summarize_gebench_generated_records,
@@ -116,6 +117,16 @@ def test_local_judge_client_retries_when_first_response_is_not_json(monkeypatch)
 
     assert result["goal"] == 4
     assert result["cons"] == 5
+
+
+def test_trajectory_judge_payload_collapses_six_frames_into_single_storyboard():
+    frames = [Image.new("RGB", (8, 6), color=(idx * 10, idx * 10, idx * 10)) for idx in range(6)]
+
+    prompt_suffix, judge_images = _trajectory_judge_payload(frames)
+
+    assert "frame0" in prompt_suffix
+    assert len(judge_images) == 1
+    assert judge_images[0].size == (24, 12)
 
 
 def test_image_edit_client_uses_openai_image_edit_endpoint(monkeypatch):
