@@ -13,7 +13,7 @@ from tests.utils import hardware_test
 @pytest.mark.advanced_model
 @pytest.mark.benchmark
 @pytest.mark.diffusion
-@hardware_test(res={"cuda": "H100"}, num_cards=2)
+@hardware_test(res={"cuda": "H100"}, num_cards=1)
 @pytest.mark.parametrize(
     "accuracy_servers",
     [
@@ -24,8 +24,7 @@ from tests.utils import hardware_test
                     "VLLM_TEST_ACCURACY_JUDGE_MODEL",
                     "/workspace/models/QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ",
                 ),
-                "generate_gpu": os.environ.get("VLLM_ACCURACY_GEN_GPU", "0"),
-                "judge_gpu": os.environ.get("VLLM_ACCURACY_JUDGE_GPU", "1"),
+                "gpu": os.environ.get("VLLM_ACCURACY_GPU", os.environ.get("VLLM_ACCURACY_GEN_GPU", "0")),
                 "generate_port": int(os.environ.get("VLLM_TEST_GEDIT_PORT", "8093")),
                 "judge_port": int(os.environ.get("VLLM_TEST_ACCURACY_JUDGE_PORT", "8094")),
             },
@@ -45,57 +44,59 @@ def test_gedit_bench_h100_smoke(
     score_root = tmp_path / "gedit_scores"
     model_name = "smoke_qwen_image_edit"
 
-    assert gedit_main(
-        [
-            "generate",
-            "--dataset-ref",
-            str(gedit_dataset_root),
-            "--output-root",
-            str(output_root),
-            "--base-url",
-            accuracy_servers.generate_base_url,
-            "--model",
-            accuracy_servers.generate_server.model,
-            "--model-name",
-            model_name,
-            "--task-type",
-            "all",
-            "--instruction-language",
-            "all",
-            "--samples-per-group",
-            str(gedit_samples_per_group),
-            "--workers",
-            str(accuracy_workers),
-        ]
-    ) == 0
+    with accuracy_servers.generate_server() as generate_server:
+        assert gedit_main(
+            [
+                "generate",
+                "--dataset-ref",
+                str(gedit_dataset_root),
+                "--output-root",
+                str(output_root),
+                "--base-url",
+                f"http://{generate_server.host}:{generate_server.port}",
+                "--model",
+                generate_server.model,
+                "--model-name",
+                model_name,
+                "--task-type",
+                "all",
+                "--instruction-language",
+                "all",
+                "--samples-per-group",
+                str(gedit_samples_per_group),
+                "--workers",
+                str(accuracy_workers),
+            ]
+        ) == 0
 
-    assert gedit_main(
-        [
-            "evaluate",
-            "--dataset-ref",
-            str(gedit_dataset_root),
-            "--output-root",
-            str(output_root),
-            "--model-name",
-            model_name,
-            "--save-dir",
-            str(score_root),
-            "--task-type",
-            "all",
-            "--instruction-language",
-            "all",
-            "--judge-base-url",
-            accuracy_servers.judge_base_url,
-            "--judge-model",
-            accuracy_servers.judge_server.model,
-            "--judge-api-key",
-            "EMPTY",
-            "--samples-per-group",
-            str(gedit_samples_per_group),
-            "--workers",
-            str(accuracy_workers),
-        ]
-    ) == 0
+    with accuracy_servers.judge_server() as judge_server:
+        assert gedit_main(
+            [
+                "evaluate",
+                "--dataset-ref",
+                str(gedit_dataset_root),
+                "--output-root",
+                str(output_root),
+                "--model-name",
+                model_name,
+                "--save-dir",
+                str(score_root),
+                "--task-type",
+                "all",
+                "--instruction-language",
+                "all",
+                "--judge-base-url",
+                f"http://{judge_server.host}:{judge_server.port}",
+                "--judge-model",
+                judge_server.model,
+                "--judge-api-key",
+                "EMPTY",
+                "--samples-per-group",
+                str(gedit_samples_per_group),
+                "--workers",
+                str(accuracy_workers),
+            ]
+        ) == 0
 
     csv_path = score_root / f"{model_name}_all_all_vie_score.csv"
     assert gedit_main(["summarize", "--csv-path", str(csv_path), "--language", "all"]) == 0
