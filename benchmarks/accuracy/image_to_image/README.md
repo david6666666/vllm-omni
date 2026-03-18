@@ -55,8 +55,7 @@ python benchmarks/accuracy/image_to_image/run_gedit_bench.py evaluate \
 ```bash
 python benchmarks/accuracy/image_to_image/run_gedit_bench.py summarize \
   --csv-path benchmarks/accuracy/image_to_image/scores/qwen_image_edit_all_all_vie_score.csv \
-  --language en \
-  --backbone qwen25vl
+  --language en
 ```
 
 Notes:

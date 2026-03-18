@@ -60,13 +60,6 @@ def resolve_model_name(*, model_name: str | None, model: str | None = None, outp
     raise ValueError("model-name is required when it cannot be inferred from model or output-root")
 
 
-def _infer_backbone_from_model_name(model_name: str) -> str:
-    normalized = model_name.lower()
-    if "gpt" in normalized:
-        return "gpt4o"
-    return "qwen25vl"
-
-
 def parse_score_payload(raw_text: str) -> dict[str, Any]:
     try:
         parsed = extract_json_object(raw_text)
@@ -141,33 +134,25 @@ def select_balanced_gedit_rows(
 
 
 def summarize_gedit_rows(rows: list[dict[str, Any]], language: str = "all") -> dict[str, Any]:
-    return summarize_gedit_rows_with_backbone(rows, language=language, backbone="qwen25vl")
-
-
-def _metric_prefix_for_backbone(backbone: str) -> str:
-    return "G" if backbone == "gpt4o" else "Q"
+    return summarize_gedit_rows_with_backbone(rows, language=language)
 
 
 def _mean_or_none(values: list[float]) -> float | None:
     return statistics.fmean(values) if values else None
 
 
-def _attach_metric_aliases(section: dict[str, float | None], *, metric_prefix: str) -> dict[str, float | None]:
-    aliased = dict(section)
-    aliased["SC"] = section.get("avg_semantics")
-    aliased["PQ"] = section.get("avg_quality")
-    aliased["O"] = section.get("avg_overall")
-    aliased[f"{metric_prefix}_SC"] = section.get("avg_semantics")
-    aliased[f"{metric_prefix}_PQ"] = section.get("avg_quality")
-    aliased[f"{metric_prefix}_O"] = section.get("avg_overall")
-    return aliased
+def _to_q_metrics(section: dict[str, float | None]) -> dict[str, float | None]:
+    return {
+        "Q_SC": section.get("avg_semantics"),
+        "Q_PQ": section.get("avg_quality"),
+        "Q_O": section.get("avg_overall"),
+    }
 
 
 def _summarize_gedit_rows_single_language(
     rows: list[dict[str, Any]],
     *,
     language: str,
-    metric_prefix: str,
 ) -> dict[str, Any]:
     filtered_rows = [row for row in rows if str(row.get("instruction_language", "")).strip() == language]
 
@@ -228,10 +213,12 @@ def _summarize_gedit_rows_single_language(
 
     return {
         "language": language,
-        "metric_prefix": metric_prefix,
-        "by_group": per_group,
-        "overall": _attach_metric_aliases(overall_section, metric_prefix=metric_prefix),
-        "intersection": _attach_metric_aliases(intersection_section, metric_prefix=metric_prefix),
+        "by_group": {
+            group: _to_q_metrics(section)
+            for group, section in per_group.items()
+        },
+        "overall": _to_q_metrics(overall_section),
+        "intersection": _to_q_metrics(intersection_section),
     }
 
 
@@ -239,28 +226,20 @@ def summarize_gedit_rows_with_backbone(
     rows: list[dict[str, Any]],
     *,
     language: str = "all",
-    backbone: str = "qwen25vl",
 ) -> dict[str, Any]:
-    metric_prefix = _metric_prefix_for_backbone(backbone)
     if language == "all":
         return {
             "language": "all",
-            "backbone": backbone,
-            "metric_prefix": metric_prefix,
             "languages": {
                 single_language: _summarize_gedit_rows_single_language(
                     rows,
                     language=single_language,
-                    metric_prefix=metric_prefix,
                 )
                 for single_language in ["en", "cn"]
             },
         }
 
-    return {
-        **_summarize_gedit_rows_single_language(rows, language=language, metric_prefix=metric_prefix),
-        "backbone": backbone,
-    }
+    return _summarize_gedit_rows_single_language(rows, language=language)
 
 
 def _require_datasets():
@@ -524,7 +503,6 @@ class GEditBenchEvaluator:
         summary = summarize_gedit_rows_with_backbone(
             results,
             language=instruction_language,
-            backbone=_infer_backbone_from_model_name(self.scorer.model),
         )
         write_json(save_dir / f"{model_name}_{task_type}_{instruction_language}_summary.json", summary)
         return {"results": results, "summary": summary, "csv_path": str(csv_path)}
@@ -596,7 +574,6 @@ def build_parser() -> argparse.ArgumentParser:
     summarize = subparsers.add_parser("summarize")
     summarize.add_argument("--csv-path", type=Path, required=True)
     summarize.add_argument("--language", choices=["all", "en", "cn"], default="all")
-    summarize.add_argument("--backbone", choices=["qwen25vl", "gpt4o"], default="qwen25vl")
 
     return parser
 
@@ -653,7 +630,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "summarize":
         with args.csv_path.open("r", encoding="utf-8", newline="") as handle:
             rows = list(csv.DictReader(handle))
-        summary = summarize_gedit_rows_with_backbone(rows, language=args.language, backbone=args.backbone)
+        summary = summarize_gedit_rows_with_backbone(rows, language=args.language)
         print(json.dumps(summary, indent=2, ensure_ascii=False))
         return 0
 
