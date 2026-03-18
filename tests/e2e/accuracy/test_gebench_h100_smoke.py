@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 
 import pytest
 
-from benchmarks.accuracy.text_to_image.gbench import main as gbench_main
+from benchmarks.accuracy.text_to_image.gbench import TYPE_TO_FOLDER, main as gbench_main
+from tests.e2e.accuracy.conftest import reset_artifact_dir
 from tests.utils import hardware_test
 
 
@@ -35,12 +37,12 @@ from tests.utils import hardware_test
 )
 def test_gebench_h100_smoke(
     accuracy_servers,
+    accuracy_artifact_root: Path,
     gebench_dataset_root: Path,
     gebench_samples_per_type: int,
     accuracy_workers: int,
-    tmp_path: Path,
 ) -> None:
-    output_root = tmp_path / "gebench"
+    output_root = reset_artifact_dir(accuracy_artifact_root / "gebench")
 
     with accuracy_servers.generate_server() as generate_server:
         assert gbench_main(
@@ -100,3 +102,12 @@ def test_gebench_h100_smoke(
     assert summary["evaluation"]["by_type"]["type3"]["count"] > 0
 
     assert 0.0 <= summary["evaluation"]["overall_mean"] <= 1.0
+
+    for folder in TYPE_TO_FOLDER.values():
+        candidate = output_root / folder
+        if candidate.exists():
+            shutil.rmtree(candidate)
+
+    evaluations_dir = output_root / "evaluations"
+    if evaluations_dir.exists():
+        shutil.rmtree(evaluations_dir)

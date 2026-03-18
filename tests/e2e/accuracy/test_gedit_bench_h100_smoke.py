@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 
 import pytest
 
 from benchmarks.accuracy.image_to_image.gedit_bench import GROUPS, main as gedit_main
+from tests.e2e.accuracy.conftest import reset_artifact_dir
 from tests.utils import hardware_test
 
 
@@ -35,13 +37,13 @@ from tests.utils import hardware_test
 )
 def test_gedit_bench_h100_smoke(
     accuracy_servers,
+    accuracy_artifact_root: Path,
     gedit_dataset_root: Path,
     gedit_samples_per_group: int,
     accuracy_workers: int,
-    tmp_path: Path,
 ) -> None:
-    output_root = tmp_path / "gedit_results"
-    score_root = tmp_path / "gedit_scores"
+    output_root = reset_artifact_dir(accuracy_artifact_root / "gedit_results")
+    score_root = reset_artifact_dir(accuracy_artifact_root / "gedit_scores")
     model_name = "smoke_qwen_image_edit"
 
     with accuracy_servers.generate_server() as generate_server:
@@ -114,3 +116,6 @@ def test_gedit_bench_h100_smoke(
         for group in GROUPS:
             group_summary = language_summary["by_group"][group]
             assert set(group_summary) == {"Q_SC", "Q_PQ", "Q_O"}
+
+    if output_root.exists():
+        shutil.rmtree(output_root)
