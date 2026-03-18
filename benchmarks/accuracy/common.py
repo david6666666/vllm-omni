@@ -112,6 +112,7 @@ class VllmOmniImageClient:
         num_inference_steps: int = 20,
         guidance_scale: float | None = None,
         seed: int | None = None,
+        output_compression: int | None = None,
     ) -> Image.Image:
         payload: dict[str, Any] = {
             "model": model,
@@ -125,6 +126,8 @@ class VllmOmniImageClient:
             payload["guidance_scale"] = guidance_scale
         if seed is not None:
             payload["seed"] = seed
+        if output_compression is not None:
+            payload["output_compression"] = output_compression
 
         response = requests.post(
             build_openai_url(self.base_url, "/images/generations"),
@@ -147,6 +150,7 @@ class VllmOmniImageClient:
         guidance_scale: float | None = None,
         seed: int | None = None,
         negative_prompt: str | None = None,
+        output_compression: int | None = None,
     ) -> Image.Image:
         if not isinstance(images, list):
             images = [images]
@@ -164,6 +168,8 @@ class VllmOmniImageClient:
             data["seed"] = str(seed)
         if negative_prompt:
             data["negative_prompt"] = negative_prompt
+        if output_compression is not None:
+            data["output_compression"] = str(output_compression)
 
         files = [
             (

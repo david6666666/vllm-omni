@@ -168,6 +168,42 @@ def test_image_edit_client_uses_openai_image_edit_endpoint(monkeypatch):
     assert captured["files"][0][0] == "image"
 
 
+def test_text_to_image_client_forwards_output_compression(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY0cAAAAASUVORK5CYII="}]}
+
+    def fake_post(url, json=None, headers=None, timeout=None, **kwargs):
+        captured["url"] = url
+        captured["json"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr("benchmarks.accuracy.common.requests.post", fake_post)
+
+    client = VllmOmniImageClient(base_url="http://127.0.0.1:8093", api_key="EMPTY")
+    output = client.generate_text_to_image(
+        model="Qwen/Qwen-Image",
+        prompt="generate a gui",
+        width=768,
+        height=576,
+        num_inference_steps=8,
+        output_compression=98,
+    )
+
+    assert output.size == (1, 1)
+    assert captured["url"] == "http://127.0.0.1:8093/v1/images/generations"
+    assert captured["json"]["size"] == "768x576"
+    assert captured["json"]["num_inference_steps"] == 8
+    assert captured["json"]["output_compression"] == 98
+
+
 def test_parse_score_payload_handles_raw_json_and_delimited_json():
     raw = '{"score": [7, 8], "reasoning": "ok"}'
     wrapped = 'prefix ||V^=^V|| {"score": [6], "reasoning": "fine"} ||V^=^V|| suffix'
