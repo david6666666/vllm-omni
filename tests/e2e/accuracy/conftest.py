@@ -4,6 +4,7 @@ import os
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+import shutil
 
 import pytest
 import torch
@@ -77,6 +78,20 @@ def gebench_samples_per_type() -> int:
 @pytest.fixture(scope="session")
 def gedit_samples_per_group() -> int:
     return _env_int("VLLM_TEST_GEDIT_SAMPLES_PER_GROUP", 10)
+
+
+@pytest.fixture(scope="session")
+def accuracy_artifact_root() -> Path:
+    root = Path(__file__).resolve().parent / "artifacts"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def reset_artifact_dir(path: Path) -> Path:
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 @pytest.fixture
