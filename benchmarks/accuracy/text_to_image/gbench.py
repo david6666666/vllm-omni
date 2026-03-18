@@ -353,6 +353,15 @@ def _type5_prompt(metadata: dict[str, Any]) -> str:
         metadata.get("grounding_explanation") or grounding.get("effect") or grounding.get("description"),
         "Predict the immediate GUI reaction to the indicated target.",
     )
+    return (
+        "Using the reference GUI screenshot, predict the immediate GUI state after the grounded interaction.\n\n"
+        f"Expected effect: {explanation}\n"
+        f"Grounding metadata: {json.dumps(grounding, ensure_ascii=False)}\n\n"
+        "Requirements:\n"
+        "- Apply only the interaction-triggered change.\n"
+        "- Preserve unrelated regions.\n"
+        "- Keep the UI realistic and readable.\n"
+    )
 
 
 def _make_storyboard_image(
@@ -386,15 +395,6 @@ def _trajectory_judge_payload(frames: list[Image.Image]) -> tuple[str, list[Imag
         "top-to-bottom as frame0, frame1, frame2, frame3, frame4, frame5."
     )
     return prompt_suffix, [storyboard]
-    return (
-        "Using the reference GUI screenshot, predict the immediate GUI state after the grounded interaction.\n\n"
-        f"Expected effect: {explanation}\n"
-        f"Grounding metadata: {json.dumps(grounding, ensure_ascii=False)}\n\n"
-        "Requirements:\n"
-        "- Apply only the interaction-triggered change.\n"
-        "- Preserve unrelated regions.\n"
-        "- Keep the UI realistic and readable.\n"
-    )
 
 
 class LocalJudgeClient:
@@ -476,9 +476,10 @@ class GEBenchRunner:
         base_url: str,
         model: str,
         api_key: str = "EMPTY",
-        width: int = 512,
-        height: int = 512,
+        width: int = 768,
+        height: int = 576,
         num_inference_steps: int = 8,
+        output_compression: int | None = 98,
         guidance_scale: float | None = None,
         seed: int | None = 42,
     ):
@@ -488,6 +489,7 @@ class GEBenchRunner:
         self.width = width
         self.height = height
         self.num_inference_steps = num_inference_steps
+        self.output_compression = output_compression
         self.guidance_scale = guidance_scale
         self.seed = seed
         self.client = VllmOmniImageClient(base_url=base_url, api_key=api_key)
@@ -546,6 +548,7 @@ class GEBenchRunner:
                 width=self.width,
                 height=self.height,
                 num_inference_steps=self.num_inference_steps,
+                output_compression=self.output_compression,
                 guidance_scale=self.guidance_scale,
                 seed=self.seed,
             )
@@ -575,6 +578,7 @@ class GEBenchRunner:
                     width=self.width,
                     height=self.height,
                     num_inference_steps=self.num_inference_steps,
+                    output_compression=self.output_compression,
                     guidance_scale=self.guidance_scale,
                     seed=self.seed,
                 )
@@ -595,6 +599,7 @@ class GEBenchRunner:
                     width=self.width,
                     height=self.height,
                     num_inference_steps=self.num_inference_steps,
+                    output_compression=self.output_compression,
                     guidance_scale=self.guidance_scale,
                     seed=self.seed,
                 )
@@ -613,6 +618,7 @@ class GEBenchRunner:
                     width=self.width,
                     height=self.height,
                     num_inference_steps=self.num_inference_steps,
+                    output_compression=self.output_compression,
                     guidance_scale=self.guidance_scale,
                     seed=self.seed,
                 )
@@ -637,6 +643,7 @@ class GEBenchRunner:
                 width=self.width,
                 height=self.height,
                 num_inference_steps=self.num_inference_steps,
+                output_compression=self.output_compression,
                 guidance_scale=self.guidance_scale,
                 seed=self.seed,
             )
@@ -770,9 +777,10 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--model", type=str, required=True)
     generate.add_argument("--data-type", choices=["all", *TYPE_TO_FOLDER.keys()], default="all")
     generate.add_argument("--api-key", type=str, default="EMPTY")
-    generate.add_argument("--width", type=int, default=512)
-    generate.add_argument("--height", type=int, default=512)
+    generate.add_argument("--width", type=int, default=768)
+    generate.add_argument("--height", type=int, default=576)
     generate.add_argument("--num-inference-steps", type=int, default=8)
+    generate.add_argument("--output-compression", type=int, default=98)
     generate.add_argument("--guidance-scale", type=float, default=None)
     generate.add_argument("--seed", type=int, default=42)
     generate.add_argument("--workers", type=int, default=1)
@@ -810,6 +818,7 @@ def main(argv: list[str] | None = None) -> int:
             width=args.width,
             height=args.height,
             num_inference_steps=args.num_inference_steps,
+            output_compression=args.output_compression,
             guidance_scale=args.guidance_scale,
             seed=args.seed,
         )
