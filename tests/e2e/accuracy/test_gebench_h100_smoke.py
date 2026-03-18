@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
-import shutil
 
 import pytest
 
-from benchmarks.accuracy.text_to_image.gbench import TYPE_TO_FOLDER, main as gbench_main
+from benchmarks.accuracy.text_to_image.gbench import main as gbench_main
 from tests.e2e.accuracy.conftest import infer_model_label, reset_artifact_dir
 from tests.utils import hardware_test
 
@@ -16,38 +14,17 @@ from tests.utils import hardware_test
 @pytest.mark.benchmark
 @pytest.mark.diffusion
 @hardware_test(res={"cuda": "H100"}, num_cards=1)
-@pytest.mark.parametrize(
-    "accuracy_servers",
-    [
-        pytest.param(
-            {
-                "generate_model": os.environ.get("VLLM_TEST_GEBENCH_MODEL", "/workspace/models/Qwen/Qwen-Image-2512"),
-                "judge_model": os.environ.get(
-                    "VLLM_TEST_ACCURACY_JUDGE_MODEL",
-                    "/workspace/models/QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ",
-                ),
-                "gpu": os.environ.get("VLLM_ACCURACY_GPU", os.environ.get("VLLM_ACCURACY_GEN_GPU", "0")),
-                "generate_port": int(os.environ.get("VLLM_TEST_GEBENCH_PORT", "8093")),
-                "judge_port": int(os.environ.get("VLLM_TEST_ACCURACY_JUDGE_PORT", "8094")),
-            },
-            id="gebench",
-        )
-    ],
-    indirect=True,
-)
 def test_gebench_h100_smoke(
-    accuracy_servers,
+    gebench_accuracy_servers,
     accuracy_artifact_root: Path,
     gebench_dataset_root: Path,
     gebench_samples_per_type: int,
     accuracy_workers: int,
 ) -> None:
-    model_label = os.environ.get("VLLM_TEST_GEBENCH_MODEL_LABEL") or infer_model_label(
-        accuracy_servers.generate_params.model
-    )
+    model_label = infer_model_label(gebench_accuracy_servers.generate_params.model).lower()
     output_root = reset_artifact_dir(accuracy_artifact_root / f"gebench_{model_label}")
 
-    with accuracy_servers.generate_server() as generate_server:
+    with gebench_accuracy_servers.generate_server() as generate_server:
         assert gbench_main(
             [
                 "generate",
@@ -68,7 +45,7 @@ def test_gebench_h100_smoke(
             ]
         ) == 0
 
-    with accuracy_servers.judge_server() as judge_server:
+    with gebench_accuracy_servers.judge_server() as judge_server:
         assert gbench_main(
             [
                 "evaluate",
@@ -105,12 +82,3 @@ def test_gebench_h100_smoke(
     assert summary["evaluation"]["by_type"]["type3"]["count"] > 0
 
     assert 0.0 <= summary["evaluation"]["overall_mean"] <= 1.0
-
-    for folder in TYPE_TO_FOLDER.values():
-        candidate = output_root / folder
-        if candidate.exists():
-            shutil.rmtree(candidate)
-
-    evaluations_dir = output_root / "evaluations"
-    if evaluations_dir.exists():
-        shutil.rmtree(evaluations_dir)

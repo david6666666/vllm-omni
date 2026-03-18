@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
-import shutil
 
 import pytest
 
@@ -16,38 +14,19 @@ from tests.utils import hardware_test
 @pytest.mark.benchmark
 @pytest.mark.diffusion
 @hardware_test(res={"cuda": "H100"}, num_cards=1)
-@pytest.mark.parametrize(
-    "accuracy_servers",
-    [
-        pytest.param(
-            {
-                "generate_model": os.environ.get("VLLM_TEST_GEDIT_MODEL", "/workspace/models/Qwen/Qwen-Image-Edit"),
-                "judge_model": os.environ.get(
-                    "VLLM_TEST_ACCURACY_JUDGE_MODEL",
-                    "/workspace/models/QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ",
-                ),
-                "gpu": os.environ.get("VLLM_ACCURACY_GPU", os.environ.get("VLLM_ACCURACY_GEN_GPU", "0")),
-                "generate_port": int(os.environ.get("VLLM_TEST_GEDIT_PORT", "8093")),
-                "judge_port": int(os.environ.get("VLLM_TEST_ACCURACY_JUDGE_PORT", "8094")),
-            },
-            id="gedit-bench",
-        )
-    ],
-    indirect=True,
-)
 def test_gedit_bench_h100_smoke(
-    accuracy_servers,
+    gedit_accuracy_servers,
     accuracy_artifact_root: Path,
     gedit_dataset_root: Path,
     gedit_samples_per_group: int,
     accuracy_workers: int,
 ) -> None:
-    model_label = os.environ.get("VLLM_TEST_GEDIT_MODEL_LABEL") or infer_model_label(accuracy_servers.generate_params.model)
+    model_label = infer_model_label(gedit_accuracy_servers.generate_params.model).lower()
     output_root = reset_artifact_dir(accuracy_artifact_root / f"gedit_results_{model_label}")
     score_root = reset_artifact_dir(accuracy_artifact_root / f"gedit_scores_{model_label}")
     model_name = model_label
 
-    with accuracy_servers.generate_server() as generate_server:
+    with gedit_accuracy_servers.generate_server() as generate_server:
         assert gedit_main(
             [
                 "generate",
@@ -72,7 +51,7 @@ def test_gedit_bench_h100_smoke(
             ]
         ) == 0
 
-    with accuracy_servers.judge_server() as judge_server:
+    with gedit_accuracy_servers.judge_server() as judge_server:
         assert gedit_main(
             [
                 "evaluate",
@@ -117,6 +96,3 @@ def test_gedit_bench_h100_smoke(
         for group in GROUPS:
             group_summary = language_summary["by_group"][group]
             assert set(group_summary) == {"Q_SC", "Q_PQ", "Q_O"}
-
-    if output_root.exists():
-        shutil.rmtree(output_root)
