@@ -1273,7 +1273,8 @@ def _build_omni_server(
         )
 
     server_args = params.server_args or []
-    server_args = ["--stage-init-timeout", "120", *server_args]
+    if params.use_omni:
+        server_args = ["--stage-init-timeout", "120", *server_args]
     if stage_config_path is not None:
         server_args += ["--stage-configs-path", stage_config_path]
 
