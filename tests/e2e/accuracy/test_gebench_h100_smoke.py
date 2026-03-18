@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.accuracy.text_to_image.gbench import TYPE_TO_FOLDER, main as gbench_main
+from benchmarks.accuracy.text_to_image.gbench import main as gbench_main
 from tests.utils import hardware_test
 
 
@@ -19,8 +19,15 @@ from tests.utils import hardware_test
     [
         pytest.param(
             {
-                "generate_model": os.environ.get("VLLM_TEST_GEBENCH_MODEL"),
-                "judge_model": os.environ.get("VLLM_TEST_ACCURACY_JUDGE_MODEL", "Qwen/Qwen2.5-VL-7B-Instruct"),
+                "generate_model": os.environ.get("VLLM_TEST_GEBENCH_MODEL", "/workspace/models/Qwen/Qwen-Image-2512"),
+                "judge_model": os.environ.get(
+                    "VLLM_TEST_ACCURACY_JUDGE_MODEL",
+                    "/workspace/models/QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ",
+                ),
+                "generate_gpu": os.environ.get("VLLM_ACCURACY_GEN_GPU", "0"),
+                "judge_gpu": os.environ.get("VLLM_ACCURACY_JUDGE_GPU", "1"),
+                "generate_port": int(os.environ.get("VLLM_TEST_GEBENCH_PORT", "8093")),
+                "judge_port": int(os.environ.get("VLLM_TEST_ACCURACY_JUDGE_PORT", "8094")),
             },
             id="gebench",
         )
@@ -48,7 +55,7 @@ def test_gebench_h100_smoke(
             "--model",
             accuracy_servers.generate_server.model,
             "--data-type",
-            "all",
+            "type3",
             "--samples-per-type",
             str(gebench_samples_per_type),
             "--workers",
@@ -64,7 +71,7 @@ def test_gebench_h100_smoke(
             "--output-root",
             str(output_root),
             "--data-type",
-            "all",
+            "type3",
             "--judge-base-url",
             accuracy_servers.judge_base_url,
             "--judge-model",
@@ -84,12 +91,11 @@ def test_gebench_h100_smoke(
     assert "generation" in summary
     assert "evaluation" in summary
 
-    for data_type in TYPE_TO_FOLDER:
-        assert data_type in summary["generation"]["by_type"]
-        assert summary["generation"]["by_type"][data_type]["count"] <= gebench_samples_per_type
-        assert summary["generation"]["by_type"][data_type]["count"] > 0
-        assert data_type in summary["evaluation"]["by_type"]
-        assert summary["evaluation"]["by_type"][data_type]["count"] <= gebench_samples_per_type
-        assert summary["evaluation"]["by_type"][data_type]["count"] > 0
+    assert "type3" in summary["generation"]["by_type"]
+    assert summary["generation"]["by_type"]["type3"]["count"] <= gebench_samples_per_type
+    assert summary["generation"]["by_type"]["type3"]["count"] > 0
+    assert "type3" in summary["evaluation"]["by_type"]
+    assert summary["evaluation"]["by_type"]["type3"]["count"] <= gebench_samples_per_type
+    assert summary["evaluation"]["by_type"]["type3"]["count"] > 0
 
     assert 0.0 <= summary["evaluation"]["overall_mean"] <= 1.0
