@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from tests.conftest import OmniServerParams, _build_omni_server
+from tests.conftest import OmniServer, OmniServerParams
 
 
 def pytest_addoption(parser):
@@ -98,19 +98,31 @@ class AccuracyServerConfig:
 
     @contextmanager
     def generate_server(self):
-        with _build_omni_server(
-            self.generate_params,
-            run_level=self.run_level,
-            model_prefix=self.model_prefix,
+        params = self.generate_params
+        model = self.model_prefix + params.model
+        server_args = params.server_args or []
+        if params.use_omni:
+            server_args = ["--stage-init-timeout", "120", *server_args]
+        with OmniServer(
+            model,
+            server_args,
+            port=params.port,
+            env_dict=params.env_dict,
+            use_omni=params.use_omni,
         ) as server:
             yield server
 
     @contextmanager
     def judge_server(self):
-        with _build_omni_server(
-            self.judge_params,
-            run_level=self.run_level,
-            model_prefix=self.model_prefix,
+        params = self.judge_params
+        model = self.model_prefix + params.model
+        server_args = params.server_args or []
+        with OmniServer(
+            model,
+            server_args,
+            port=params.port,
+            env_dict=params.env_dict,
+            use_omni=params.use_omni,
         ) as server:
             yield server
 
