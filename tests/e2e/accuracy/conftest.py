@@ -32,7 +32,6 @@ def pytest_addoption(parser):
     group.addoption("--accuracy-gpu", action="store", default="0", help="Single GPU id used sequentially")
     group.addoption("--gebench-port", action="store", type=int, default=8093, help="Generate port for GEBench")
     group.addoption("--gedit-port", action="store", type=int, default=8093, help="Generate port for GEdit-Bench")
-    group.addoption("--accuracy-judge-port", action="store", type=int, default=8094, help="Judge server port")
     group.addoption(
         "--gebench-samples-per-type",
         action="store",
@@ -165,8 +164,7 @@ def _build_accuracy_server_config(
     generate_model: str,
     judge_model: str,
     shared_gpu: str,
-    generate_port: int,
-    judge_port: int,
+    port: int,
     run_level: str,
     model_prefix: str,
 ) -> AccuracyServerConfig:
@@ -192,14 +190,14 @@ def _build_accuracy_server_config(
     return AccuracyServerConfig(
         generate_params=OmniServerParams(
             model=generate_model,
-            port=generate_port,
+            port=port,
             server_args=generate_server_args,
             env_dict={"CUDA_VISIBLE_DEVICES": shared_gpu},
             use_omni=True,
         ),
         judge_params=OmniServerParams(
             model=judge_model,
-            port=judge_port,
+            port=port,
             server_args=judge_server_args,
             env_dict=judge_env,
             use_omni=False,
@@ -219,8 +217,7 @@ def gebench_accuracy_servers(
         generate_model=request.config.getoption("gebench_model"),
         judge_model=request.config.getoption("accuracy_judge_model"),
         shared_gpu=str(request.config.getoption("accuracy_gpu")),
-        generate_port=int(request.config.getoption("gebench_port")),
-        judge_port=int(request.config.getoption("accuracy_judge_port")),
+        port=int(request.config.getoption("gebench_port")),
         run_level=run_level,
         model_prefix=model_prefix,
     )
@@ -236,8 +233,7 @@ def gedit_accuracy_servers(
         generate_model=request.config.getoption("gedit_model"),
         judge_model=request.config.getoption("accuracy_judge_model"),
         shared_gpu=str(request.config.getoption("accuracy_gpu")),
-        generate_port=int(request.config.getoption("gedit_port")),
-        judge_port=int(request.config.getoption("accuracy_judge_port")),
+        port=int(request.config.getoption("gedit_port")),
         run_level=run_level,
         model_prefix=model_prefix,
     )

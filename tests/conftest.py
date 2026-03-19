@@ -1240,15 +1240,12 @@ def _build_omni_server(
     port = params.port
     stage_config_path = params.stage_config_path
     if run_level == "advanced_model" and stage_config_path is not None:
+        with open(stage_config_path, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        stage_ids = [stage["stage_id"] for stage in cfg.get("stage_args", []) if "stage_id" in stage]
         stage_config_path = modify_stage_config(
             stage_config_path,
-            deletes={
-                "stage_args": {
-                    0: ["engine_args.load_format"],
-                    1: ["engine_args.load_format"],
-                    2: ["engine_args.load_format"],
-                }
-            },
+            deletes={"stage_args": {stage_id: ["engine_args.load_format"] for stage_id in stage_ids}},
         )
 
     server_args = params.server_args or []
