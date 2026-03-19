@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import shutil
+import subprocess
 
 import pytest
 import torch
@@ -16,9 +17,14 @@ def pytest_addoption(parser):
     group = parser.getgroup("accuracy-e2e")
     group.addoption("--gebench-root", action="store", default=None, help="Local GEBench dataset root")
     group.addoption("--gedit-root", action="store", default=None, help="Local GEdit-Bench dataset root")
-    group.addoption("--gebench-model", action="store", default=None, help="Generate model for GEBench smoke")
-    group.addoption("--gedit-model", action="store", default=None, help="Generate model for GEdit-Bench smoke")
-    group.addoption("--accuracy-judge-model", action="store", default=None, help="Judge model path")
+    group.addoption("--gebench-model", action="store", default="Qwen/Qwen-Image-2512", help="Generate model for GEBench smoke")
+    group.addoption("--gedit-model", action="store", default="Qwen/Qwen-Image-Edit", help="Generate model for GEdit-Bench smoke")
+    group.addoption(
+        "--accuracy-judge-model",
+        action="store",
+        default="QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ",
+        help="Judge model path",
+    )
     group.addoption("--accuracy-gpu", action="store", default="0", help="Single GPU id used sequentially")
     group.addoption("--gebench-port", action="store", type=int, default=8093, help="Generate port for GEBench")
     group.addoption("--gedit-port", action="store", type=int, default=8093, help="Generate port for GEdit-Bench")
@@ -40,14 +46,40 @@ def pytest_addoption(parser):
     group.addoption("--accuracy-workers", action="store", type=int, default=1, help="Worker count for accuracy benches")
 
 
-def _option_path_or_skip(request: pytest.FixtureRequest, name: str) -> Path:
-    value = request.config.getoption(name)
-    if not value:
-        pytest.skip(f"Missing required pytest option: --{name.replace('_', '-')}")
-    path = Path(value)
-    if not path.exists():
-        pytest.skip(f"Dataset path does not exist: {path}")
-    return path
+def _hf_cache_root() -> Path:
+    return Path(os.environ.get("HF_HOME", "/root/.cache/huggingface"))
+
+
+def _dataset_cache_dirs(dataset_id: str) -> list[Path]:
+    cache_root = _hf_cache_root() / "hub" / f"datasets--{dataset_id.replace('/', '--')}" / "snapshots"
+    if not cache_root.exists():
+        return []
+    return sorted((path for path in cache_root.iterdir() if path.is_dir()), key=lambda path: path.stat().st_mtime, reverse=True)
+
+
+def _ensure_dataset_snapshot(dataset_id: str) -> Path:
+    candidates = _dataset_cache_dirs(dataset_id)
+    if candidates:
+        return candidates[0]
+
+    subprocess.run(
+        ["huggingface-cli", "download", "--repo-type", "dataset", dataset_id],
+        check=True,
+    )
+    candidates = _dataset_cache_dirs(dataset_id)
+    if not candidates:
+        raise FileNotFoundError(f"Dataset {dataset_id} was downloaded but no snapshot was found under {_hf_cache_root()}")
+    return candidates[0]
+
+
+def _resolve_dataset_root(request: pytest.FixtureRequest, option_name: str, dataset_id: str) -> Path:
+    value = request.config.getoption(option_name)
+    if value:
+        path = Path(value)
+        if not path.exists():
+            pytest.skip(f"Dataset path does not exist: {path}")
+        return path
+    return _ensure_dataset_snapshot(dataset_id)
 
 
 @dataclass
@@ -78,12 +110,12 @@ class AccuracyServerConfig:
 
 @pytest.fixture(scope="session")
 def gebench_dataset_root(request: pytest.FixtureRequest) -> Path:
-    return _option_path_or_skip(request, "gebench_root")
+    return _resolve_dataset_root(request, "gebench_root", "stepfun-ai/GEBench")
 
 
 @pytest.fixture(scope="session")
 def gedit_dataset_root(request: pytest.FixtureRequest) -> Path:
-    return _option_path_or_skip(request, "gedit_root")
+    return _resolve_dataset_root(request, "gedit_root", "stepfun-ai/GEdit-Bench")
 
 
 @pytest.fixture(scope="session")
