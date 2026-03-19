@@ -25,53 +25,59 @@ def test_gebench_h100_smoke(
 
     with gebench_accuracy_servers.generate_server() as generate_server:
         for data_type in ("type3", "type4"):
-            assert gbench_main(
-                [
-                    "generate",
-                    "--dataset-root",
-                    str(gebench_dataset_root),
-                    "--output-root",
-                    str(output_root),
-                    "--base-url",
-                    f"http://{generate_server.host}:{generate_server.port}",
-                    "--model",
-                    generate_server.model,
-                    "--data-type",
-                    data_type,
-                    "--width",
-                    "768",
-                    "--height",
-                    "576",
-                    "--output-compression",
-                    "98",
-                    "--num-inference-steps",
-                    "8",
-                    "--workers",
-                    str(accuracy_workers),
-                ]
-            ) == 0
+            assert (
+                gbench_main(
+                    [
+                        "generate",
+                        "--dataset-root",
+                        str(gebench_dataset_root),
+                        "--output-root",
+                        str(output_root),
+                        "--base-url",
+                        f"http://{generate_server.host}:{generate_server.port}",
+                        "--model",
+                        generate_server.model,
+                        "--data-type",
+                        data_type,
+                        "--width",
+                        "768",
+                        "--height",
+                        "576",
+                        "--output-compression",
+                        "98",
+                        "--num-inference-steps",
+                        "8",
+                        "--workers",
+                        str(accuracy_workers),
+                    ]
+                )
+                == 0
+            )
 
     with gebench_accuracy_servers.judge_server() as judge_server:
         for data_type in ("type3", "type4"):
-            assert gbench_main(
-                [
-                    "evaluate",
-                    "--dataset-root",
-                    str(gebench_dataset_root),
-                    "--output-root",
-                    str(output_root),
-                    "--data-type",
-                    data_type,
-                    "--judge-base-url",
-                    f"http://{judge_server.host}:{judge_server.port}",
-                    "--judge-model",
-                    judge_server.model,
-                    "--judge-api-key",
-                    "EMPTY",
-                    "--workers",
-                    str(accuracy_workers),
-                ]
-            ) == 0
+            assert (
+                gbench_main(
+                    [
+                        "evaluate",
+                        "--dataset-root",
+                        str(gebench_dataset_root),
+                        "--output-root",
+                        str(output_root),
+                        "--data-type",
+                        data_type,
+                        "--judge-base-url",
+                        f"http://{judge_server.host}:{judge_server.port}",
+                        "--judge-model",
+                        judge_server.model,
+                        "--judge-api-key",
+                        "EMPTY",
+                        "--workers",
+                        str(accuracy_workers),
+                    ]
+                )
+                == 0
+            )
 
     assert gbench_main(["summarize", "--output-root", str(output_root)]) == 0
 

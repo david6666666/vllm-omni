@@ -213,10 +213,7 @@ def _summarize_gedit_rows_single_language(
 
     return {
         "language": language,
-        "by_group": {
-            group: _to_q_metrics(section)
-            for group, section in per_group.items()
-        },
+        "by_group": {group: _to_q_metrics(section) for group, section in per_group.items()},
         "overall": _to_q_metrics(overall_section),
         "intersection": _to_q_metrics(intersection_section),
     }
@@ -288,13 +285,14 @@ class LocalVIEScorer:
         self.sc_prompt = (
             "You are evaluating image editing quality.\n"
             "Two images are provided: the source image and the edited image.\n"
-            "Return JSON only in the format {\"score\": [edit_success, content_preservation], \"reasoning\": \"...\"}.\n"
+            'Return JSON only in the format {"score": [edit_success, content_preservation], '
+            '"reasoning": "..."}.\n'
             "Each score must be an integer from 0 to 10.\n"
             "Editing instruction: <instruction>"
         )
         self.pq_prompt = (
             "You are evaluating image quality.\n"
-            "Return JSON only in the format {\"score\": [naturalness, artifact_free], \"reasoning\": \"...\"}.\n"
+            'Return JSON only in the format {"score": [naturalness, artifact_free], "reasoning": "..."}.\n'
             "Each score must be an integer from 0 to 10."
         )
 

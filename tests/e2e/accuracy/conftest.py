@@ -1,24 +1,28 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
-from dataclasses import dataclass
 import os
-from pathlib import Path
 import shutil
 import subprocess
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 import torch
 
-from tests.conftest import OmniServer, OmniServerParams, _build_omni_server
+from tests.conftest import OmniServerParams, _build_omni_server
 
 
 def pytest_addoption(parser):
     group = parser.getgroup("accuracy-e2e")
     group.addoption("--gebench-root", action="store", default=None, help="Local GEBench dataset root")
     group.addoption("--gedit-root", action="store", default=None, help="Local GEdit-Bench dataset root")
-    group.addoption("--gebench-model", action="store", default="Qwen/Qwen-Image-2512", help="Generate model for GEBench smoke")
-    group.addoption("--gedit-model", action="store", default="Qwen/Qwen-Image-Edit", help="Generate model for GEdit-Bench smoke")
+    group.addoption(
+        "--gebench-model", action="store", default="Qwen/Qwen-Image-2512", help="Generate model for GEBench smoke"
+    )
+    group.addoption(
+        "--gedit-model", action="store", default="Qwen/Qwen-Image-Edit", help="Generate model for GEdit-Bench smoke"
+    )
     group.addoption(
         "--accuracy-judge-model",
         action="store",
@@ -54,7 +58,9 @@ def _dataset_cache_dirs(dataset_id: str) -> list[Path]:
     cache_root = _hf_cache_root() / "hub" / f"datasets--{dataset_id.replace('/', '--')}" / "snapshots"
     if not cache_root.exists():
         return []
-    return sorted((path for path in cache_root.iterdir() if path.is_dir()), key=lambda path: path.stat().st_mtime, reverse=True)
+    return sorted(
+        (path for path in cache_root.iterdir() if path.is_dir()), key=lambda path: path.stat().st_mtime, reverse=True
+    )
 
 
 def _ensure_dataset_snapshot(dataset_id: str) -> Path:
@@ -68,7 +74,9 @@ def _ensure_dataset_snapshot(dataset_id: str) -> Path:
     )
     candidates = _dataset_cache_dirs(dataset_id)
     if not candidates:
-        raise FileNotFoundError(f"Dataset {dataset_id} was downloaded but no snapshot was found under {_hf_cache_root()}")
+        raise FileNotFoundError(
+            f"Dataset {dataset_id} was downloaded but no snapshot was found under {_hf_cache_root()}"
+        )
     return candidates[0]
 
 

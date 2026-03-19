@@ -1,3 +1,4 @@
+# ruff: noqa: E402, I001
 import math
 import sys
 from pathlib import Path
@@ -139,7 +140,13 @@ def test_image_edit_client_uses_openai_image_edit_endpoint(monkeypatch):
             return None
 
         def json(self):
-            return {"data": [{"b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY0cAAAAASUVORK5CYII="}]}
+            return {
+                "data": [
+                    {
+                        "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY0cAAAAASUVORK5CYII="
+                    }
+                ]
+            }
 
     def fake_post(url, data=None, files=None, headers=None, timeout=None, **kwargs):
         captured["url"] = url
@@ -178,7 +185,13 @@ def test_text_to_image_client_forwards_output_compression(monkeypatch):
             return None
 
         def json(self):
-            return {"data": [{"b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY0cAAAAASUVORK5CYII="}]}
+            return {
+                "data": [
+                    {
+                        "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY0cAAAAASUVORK5CYII="
+                    }
+                ]
+            }
 
     def fake_post(url, json=None, headers=None, timeout=None, **kwargs):
         captured["url"] = url
@@ -314,6 +327,7 @@ def test_resolve_gedit_split_accepts_dataset_like_input():
     rows = [{"key": "a"}]
 
     assert _resolve_gedit_split(rows) == rows
+
 
 def test_summarize_gedit_rows_computes_group_and_intersection_means():
     rows = []

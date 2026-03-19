@@ -3,9 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
-from dataclasses import dataclass
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -314,9 +314,7 @@ def _type34_initial_prompt(metadata: dict[str, Any], first_step: dict[str, Any])
     app_name = _text_or_default(metadata.get("app_name"), "App")
     final_goal = _text_or_default(metadata.get("final_goal") or metadata.get("instruction"), "Complete the task.")
     visual_description = _text_or_default(
-        metadata.get("visual_description")
-        or first_step.get("visual_description")
-        or first_step.get("description"),
+        metadata.get("visual_description") or first_step.get("visual_description") or first_step.get("description"),
         "A clean product-quality app home screen.",
     )
     return (
@@ -459,8 +457,7 @@ class LocalJudgeClient:
             return extract_json_object(text)
         except ValueError:
             retry_prompt = (
-                self._build_scoring_prompt(prompt)
-                + "\n\nYour previous response was not valid JSON. "
+                self._build_scoring_prompt(prompt) + "\n\nYour previous response was not valid JSON. "
                 "Return only the JSON object with integer scores."
             )
             retry_text = self._request_text(retry_prompt, images)
@@ -535,7 +532,11 @@ class GEBenchRunner:
         if data_type == "type1":
             output_path = output_dir / "generated.png"
             if output_path.exists():
-                return {"data_type": data_type, "sample_name": f"{lang_device}/{sample_name}", "output_path": str(output_path)}
+                return {
+                    "data_type": data_type,
+                    "sample_name": f"{lang_device}/{sample_name}",
+                    "output_path": str(output_path),
+                }
             source = _resolve_referenced_image(
                 metadata=metadata, sample_path=sample_path, dataset_root=self.dataset_root, data_type=data_type
             )
@@ -553,7 +554,11 @@ class GEBenchRunner:
                 seed=self.seed,
             )
             save_image(output_path, generated)
-            return {"data_type": data_type, "sample_name": f"{lang_device}/{sample_name}", "output_path": str(output_path)}
+            return {
+                "data_type": data_type,
+                "sample_name": f"{lang_device}/{sample_name}",
+                "output_path": str(output_path),
+            }
 
         if data_type == "type2":
             goal = _text_or_default(metadata.get("question") or metadata.get("caption"), "Complete the task.")
@@ -585,7 +590,11 @@ class GEBenchRunner:
                 save_image(frame_path, generated)
                 previous = generated
             output_path = output_dir / "frame5.png"
-            return {"data_type": data_type, "sample_name": f"{lang_device}/{sample_name}", "output_path": str(output_path)}
+            return {
+                "data_type": data_type,
+                "sample_name": f"{lang_device}/{sample_name}",
+                "output_path": str(output_path),
+            }
 
         if data_type in {"type3", "type4"}:
             steps = _trajectory_steps(metadata)
@@ -625,12 +634,20 @@ class GEBenchRunner:
                 save_image(frame_path, generated)
                 previous = generated
             output_path = output_dir / "frame5.png"
-            return {"data_type": data_type, "sample_name": f"{lang_device}/{sample_name}", "output_path": str(output_path)}
+            return {
+                "data_type": data_type,
+                "sample_name": f"{lang_device}/{sample_name}",
+                "output_path": str(output_path),
+            }
 
         if data_type == "type5":
             output_path = output_dir / "generated.png"
             if output_path.exists():
-                return {"data_type": data_type, "sample_name": f"{lang_device}/{sample_name}", "output_path": str(output_path)}
+                return {
+                    "data_type": data_type,
+                    "sample_name": f"{lang_device}/{sample_name}",
+                    "output_path": str(output_path),
+                }
             source = _resolve_referenced_image(
                 metadata=metadata, sample_path=sample_path, dataset_root=self.dataset_root, data_type=data_type
             )
@@ -648,7 +665,11 @@ class GEBenchRunner:
                 seed=self.seed,
             )
             save_image(output_path, generated)
-            return {"data_type": data_type, "sample_name": f"{lang_device}/{sample_name}", "output_path": str(output_path)}
+            return {
+                "data_type": data_type,
+                "sample_name": f"{lang_device}/{sample_name}",
+                "output_path": str(output_path),
+            }
 
         raise ValueError(f"Unsupported data type: {data_type}")
 
@@ -686,7 +707,11 @@ class GEBenchEvaluator:
         results: list[dict[str, Any]] = []
         if workers <= 1:
             for sample_dir in sample_dirs:
-                result = self._evaluate_one(data_type, sample_dir, sample_specs_by_name[(sample_dir.parent.name, sample_dir.name)])
+                result = self._evaluate_one(
+                    data_type,
+                    sample_dir,
+                    sample_specs_by_name[(sample_dir.parent.name, sample_dir.name)],
+                )
                 if result:
                     results.append(result)
         else:

@@ -209,3 +209,5 @@ extend-ignore-identifiers-re = [
 ]
 [tool.typos.default.extend-words]
 ue = "ue"
+sementics = "sementics"
+fullset = "fullset"

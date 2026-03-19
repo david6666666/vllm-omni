@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.accuracy.image_to_image.gedit_bench import GROUPS, main as gedit_main
+from benchmarks.accuracy.image_to_image.gedit_bench import GROUPS
+from benchmarks.accuracy.image_to_image.gedit_bench import main as gedit_main
 from tests.e2e.accuracy.conftest import infer_model_label, reset_artifact_dir
 from tests.utils import hardware_test
 
@@ -27,58 +28,64 @@ def test_gedit_bench_h100_smoke(
     model_name = model_label
 
     with gedit_accuracy_servers.generate_server() as generate_server:
-        assert gedit_main(
-            [
-                "generate",
-                "--dataset-ref",
-                str(gedit_dataset_root),
-                "--output-root",
-                str(output_root),
-                "--base-url",
-                f"http://{generate_server.host}:{generate_server.port}",
-                "--model",
-                generate_server.model,
-                "--model-name",
-                model_name,
-                "--task-type",
-                "all",
-                "--instruction-language",
-                "all",
-                "--samples-per-group",
-                str(gedit_samples_per_group),
-                "--workers",
-                str(accuracy_workers),
-            ]
-        ) == 0
+        assert (
+            gedit_main(
+                [
+                    "generate",
+                    "--dataset-ref",
+                    str(gedit_dataset_root),
+                    "--output-root",
+                    str(output_root),
+                    "--base-url",
+                    f"http://{generate_server.host}:{generate_server.port}",
+                    "--model",
+                    generate_server.model,
+                    "--model-name",
+                    model_name,
+                    "--task-type",
+                    "all",
+                    "--instruction-language",
+                    "all",
+                    "--samples-per-group",
+                    str(gedit_samples_per_group),
+                    "--workers",
+                    str(accuracy_workers),
+                ]
+            )
+            == 0
+        )
 
     with gedit_accuracy_servers.judge_server() as judge_server:
-        assert gedit_main(
-            [
-                "evaluate",
-                "--dataset-ref",
-                str(gedit_dataset_root),
-                "--output-root",
-                str(output_root),
-                "--model-name",
-                model_name,
-                "--save-dir",
-                str(score_root),
-                "--task-type",
-                "all",
-                "--instruction-language",
-                "all",
-                "--judge-base-url",
-                f"http://{judge_server.host}:{judge_server.port}",
-                "--judge-model",
-                judge_server.model,
-                "--judge-api-key",
-                "EMPTY",
-                "--samples-per-group",
-                str(gedit_samples_per_group),
-                "--workers",
-                str(accuracy_workers),
-            ]
-        ) == 0
+        assert (
+            gedit_main(
+                [
+                    "evaluate",
+                    "--dataset-ref",
+                    str(gedit_dataset_root),
+                    "--output-root",
+                    str(output_root),
+                    "--model-name",
+                    model_name,
+                    "--save-dir",
+                    str(score_root),
+                    "--task-type",
+                    "all",
+                    "--instruction-language",
+                    "all",
+                    "--judge-base-url",
+                    f"http://{judge_server.host}:{judge_server.port}",
+                    "--judge-model",
+                    judge_server.model,
+                    "--judge-api-key",
+                    "EMPTY",
+                    "--samples-per-group",
+                    str(gedit_samples_per_group),
+                    "--workers",
+                    str(accuracy_workers),
+                ]
+            )
+            == 0
+        )
 
     csv_path = score_root / f"{model_name}_all_all_vie_score.csv"
     assert gedit_main(["summarize", "--csv-path", str(csv_path), "--language", "all"]) == 0
