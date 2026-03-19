@@ -167,7 +167,7 @@ steps:
     if: build.env("NIGHTLY") == "1"
     commands:
       - export VLLM_WORKER_MULTIPROC_METHOD=spawn
-      - pytest -s -v tests/e2e/accuracy/test_gebench_h100_smoke.py --run-level advanced_model --gebench-root /workspace/models/dataset/stepfun-ai/GEBench --gebench-model /workspace/models/Qwen/Qwen-Image-2512 --accuracy-judge-model /workspace/models/QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ --accuracy-gpu 0 --gebench-port 8093 --accuracy-judge-port 8094 --accuracy-workers 1
+      - pytest -s -v tests/e2e/accuracy/test_gebench_h100_smoke.py --run-level advanced_model --gebench-model Qwen/Qwen-Image-2512 --accuracy-judge-model QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ --accuracy-gpu 0 --gebench-port 8093 --accuracy-judge-port 8094 --accuracy-workers 1
       - buildkite-agent artifact upload "tests/e2e/accuracy/artifacts/gebench_qwen-image-2512/summary.json"
     agents:
       queue: "mithril-h100-pool"
@@ -205,7 +205,7 @@ steps:
     if: build.env("NIGHTLY") == "1"
     commands:
       - export VLLM_WORKER_MULTIPROC_METHOD=spawn
-      - pytest -s -v tests/e2e/accuracy/test_gedit_bench_h100_smoke.py --run-level advanced_model --gedit-root /workspace/models/dataset/stepfun-ai/GEdit-Bench --gedit-model /workspace/models/Qwen/Qwen-Image-Edit --accuracy-judge-model /workspace/models/QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ --accuracy-gpu 0 --gedit-port 8093 --accuracy-judge-port 8094 --gedit-samples-per-group 10 --accuracy-workers 1
+      - pytest -s -v tests/e2e/accuracy/test_gedit_bench_h100_smoke.py --run-level advanced_model --gedit-model Qwen/Qwen-Image-Edit --accuracy-judge-model QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ --accuracy-gpu 0 --gedit-port 8093 --accuracy-judge-port 8094 --gedit-samples-per-group 10 --accuracy-workers 1
       - buildkite-agent artifact upload "tests/e2e/accuracy/artifacts/gedit_scores_qwen-image-edit/qwen-image-edit_all_all_vie_score.csv"
       - buildkite-agent artifact upload "tests/e2e/accuracy/artifacts/gedit_scores_qwen-image-edit/qwen-image-edit_all_all_summary.json"
     agents:
