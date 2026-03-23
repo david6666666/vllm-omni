@@ -191,13 +191,9 @@ def _build_accuracy_server_config(
         "32768",
         "--gpu-memory-utilization",
         "0.8",
-        "--limit-mm-per-prompt.image",
-        "4",
     ]
 
     judge_env = {"CUDA_VISIBLE_DEVICES": shared_gpu}
-    if os.environ.get("VLLM_LIMIT_MM_PER_PROMPT"):
-        judge_env["VLLM_LIMIT_MM_PER_PROMPT"] = os.environ["VLLM_LIMIT_MM_PER_PROMPT"]
 
     return AccuracyServerConfig(
         generate_params=OmniServerParams(
