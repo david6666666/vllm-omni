@@ -296,7 +296,7 @@ class LocalVIEScorer:
             "Each score must be an integer from 0 to 10."
         )
 
-    def _request_text(self, prompt: str, images: list[Image.Image]) -> str:
+    def _request(self, prompt: str, images: list[Image.Image]) -> dict[str, Any]:
         from benchmarks.accuracy.common import pil_to_data_url
 
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
@@ -319,20 +319,10 @@ class LocalVIEScorer:
         response.raise_for_status()
         message_content = response.json()["choices"][0]["message"]["content"]
         if isinstance(message_content, list):
-            return "\n".join(part.get("text", "") for part in message_content if part.get("type") == "text")
-        return str(message_content)
-
-    def _request(self, prompt: str, images: list[Image.Image]) -> dict[str, Any]:
-        text = self._request_text(prompt, images)
-        try:
-            return parse_score_payload(text)
-        except Exception:
-            retry_prompt = (
-                prompt
-                + "\n\nYour previous response was not valid JSON. Return only the JSON object in the required schema."
-            )
-            retry_text = self._request_text(retry_prompt, images)
-            return parse_score_payload(retry_text)
+            text = "\n".join(part.get("text", "") for part in message_content if part.get("type") == "text")
+        else:
+            text = str(message_content)
+        return parse_score_payload(text)
 
     def evaluate(self, source_image: Image.Image, edited_image: Image.Image, instruction: str) -> dict[str, float]:
         sc_payload = self._request(self.sc_prompt.replace("<instruction>", instruction), [source_image, edited_image])

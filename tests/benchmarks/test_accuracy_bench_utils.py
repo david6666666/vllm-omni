@@ -12,7 +12,6 @@ if str(REPO_ROOT) not in sys.path:
 from benchmarks.accuracy.common import VllmOmniImageClient
 from benchmarks.accuracy.image_to_image.gedit_bench import (
     GROUPS as GEDIT_GROUPS,
-    LocalVIEScorer,
     _resolve_gedit_split,
     infer_model_name,
     resolve_model_name,
@@ -224,25 +223,6 @@ def test_parse_score_payload_handles_raw_json_and_delimited_json():
 
     assert parse_score_payload(raw)["score"] == [7, 8]
     assert parse_score_payload(wrapped)["score"] == [6]
-
-
-def test_local_vie_scorer_retries_when_first_response_is_not_json(monkeypatch):
-    responses = iter(
-        [
-            "The edited image mostly follows the instruction with decent quality.",
-            '{"score": [8, 7], "reasoning": "valid retry response"}',
-        ]
-    )
-
-    def fake_request_text(self, prompt, images):
-        return next(responses)
-
-    monkeypatch.setattr(LocalVIEScorer, "_request_text", fake_request_text)
-
-    scorer = LocalVIEScorer(base_url="http://127.0.0.1:8094", api_key="EMPTY", model="judge")
-    result = scorer._request("score this image edit", [Image.new("RGB", (2, 2), color="white")])
-
-    assert result["score"] == [8, 7]
 
 
 def test_summarize_gedit_generated_records_groups_by_task_and_language():
