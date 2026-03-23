@@ -19,7 +19,6 @@ def test_gedit_bench_h100_smoke(
     gedit_accuracy_servers,
     accuracy_artifact_root: Path,
     gedit_dataset_root: Path,
-    gedit_samples_per_group: int,
     accuracy_workers: int,
 ) -> None:
     model_label = infer_model_label(gedit_accuracy_servers.generate_params.model).lower()
@@ -42,15 +41,13 @@ def test_gedit_bench_h100_smoke(
                     generate_server.model,
                     "--model-name",
                     model_name,
-                    "--task-type",
-                    "all",
-                    "--instruction-language",
-                    "all",
-                    "--samples-per-group",
-                    str(gedit_samples_per_group),
-                    "--workers",
-                    str(accuracy_workers),
-                ]
+                        "--task-type",
+                        "all",
+                        "--instruction-language",
+                        "all",
+                        "--workers",
+                        str(accuracy_workers),
+                    ]
             )
             == 0
         )
@@ -68,21 +65,19 @@ def test_gedit_bench_h100_smoke(
                     model_name,
                     "--save-dir",
                     str(score_root),
-                    "--task-type",
-                    "all",
-                    "--instruction-language",
-                    "all",
-                    "--judge-base-url",
+                        "--task-type",
+                        "all",
+                        "--instruction-language",
+                        "all",
+                        "--judge-base-url",
                     f"http://{judge_server.host}:{judge_server.port}",
                     "--judge-model",
                     judge_server.model,
-                    "--judge-api-key",
-                    "EMPTY",
-                    "--samples-per-group",
-                    str(gedit_samples_per_group),
-                    "--workers",
-                    str(accuracy_workers),
-                ]
+                        "--judge-api-key",
+                        "EMPTY",
+                        "--workers",
+                        str(accuracy_workers),
+                    ]
             )
             == 0
         )

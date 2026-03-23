@@ -43,10 +43,7 @@ def test_summarize_gebench_generated_records_groups_by_type():
     assert summary["count"] == 3
     assert summary["by_type"]["type1"]["count"] == 2
     assert summary["by_type"]["type2"]["count"] == 1
-    assert summary["by_type"]["type1"]["samples"] == [
-        "english_phone/folder_1",
-        "english_phone/folder_2",
-    ]
+    assert "samples" not in summary["by_type"]["type1"]
 
 
 def test_summarize_gebench_results_computes_type_and_global_means():

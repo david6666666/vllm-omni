@@ -53,7 +53,6 @@ def summarize_generated_records(records: list[dict[str, Any]]) -> dict[str, Any]
         "by_type": {
             data_type: {
                 "count": len(rows),
-                "samples": sorted(row["sample_name"] for row in rows),
             }
             for data_type, rows in sorted(by_type.items())
         },
