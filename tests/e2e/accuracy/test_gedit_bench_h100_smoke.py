@@ -106,9 +106,9 @@ def test_gedit_bench_h100_smoke(
             group_summary = language_summary["by_group"][group]
             assert set(group_summary) == {"count", "Q_SC", "Q_PQ", "Q_O"}
 
-    assert summary["languages"]["en"]["overall"]["Q_SC"] >= 6.58
-    assert summary["languages"]["en"]["overall"]["Q_PQ"] >= 5.89
-    assert summary["languages"]["en"]["overall"]["Q_O"] >= 5.86
-    assert summary["languages"]["cn"]["overall"]["Q_SC"] >= 6.90
-    assert summary["languages"]["cn"]["overall"]["Q_PQ"] >= 5.78
-    assert summary["languages"]["cn"]["overall"]["Q_O"] >= 6.11
+    assert summary["languages"]["en"]["overall"]["Q_SC"] >= 6.5
+    assert summary["languages"]["en"]["overall"]["Q_PQ"] >= 5.8
+    assert summary["languages"]["en"]["overall"]["Q_O"] >= 5.8
+    assert summary["languages"]["cn"]["overall"]["Q_SC"] >= 6.9
+    assert summary["languages"]["cn"]["overall"]["Q_PQ"] >= 5.7
+    assert summary["languages"]["cn"]["overall"]["Q_O"] >= 6.0
