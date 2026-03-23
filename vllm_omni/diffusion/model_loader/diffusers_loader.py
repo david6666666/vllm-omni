@@ -260,7 +260,7 @@ class DiffusersPipelineLoader:
     ) -> nn.Module:
         """Load a model with the given configurations."""
         # CPU offload + FP8: load weights on device for FP8 quantization
-        if load_device == "cpu" and od_config.quantization and od_config.quantization.lower() != "none":
+        if load_device == "cpu" and od_config.quantization_config is not None:
             load_device = device.type
             logger.info(f"Quantization enabled with CPU offload, using {load_device} for weight loading")
 
@@ -351,11 +351,23 @@ class DiffusersPipelineLoader:
                 raise ValueError("GGUF quantization requires gguf_model")
             return True
 
+        # Dict-style config: {"method": "gguf", "gguf_model": "..."}
+        if isinstance(quant_config, dict):
+            if quant_config.get("method") == "gguf":
+                if not quant_config.get("gguf_model"):
+                    raise ValueError("GGUF quantization requires gguf_model")
+                return True
+            return False
+
         # Check by name for any config that reports as "gguf"
         if hasattr(quant_config, "get_name") and quant_config.get_name() == "gguf":
             gguf_model = getattr(quant_config, "gguf_model", None)
             if gguf_model is None:
                 raise ValueError("GGUF quantization requires gguf_model")
+            return True
+
+        # Fallback: object with gguf_model attribute but no get_name
+        if hasattr(quant_config, "gguf_model") and quant_config.gguf_model:
             return True
 
         return False

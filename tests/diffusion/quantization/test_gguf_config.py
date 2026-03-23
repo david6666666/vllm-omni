@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 from vllm.model_executor.layers.linear import LinearBase
-from vllm.model_executor.layers.quantization.gguf import UNQUANTIZED_TYPES
+from vllm.model_executor.layers.quantization.gguf import UNQUANTIZED_TYPES, UnquantizedLinearMethod
 
 from vllm_omni.quantization import build_quant_config
 from vllm_omni.quantization.gguf_config import (
@@ -17,7 +17,6 @@ from vllm_omni.quantization.gguf_config import (
     DiffusionGGUFLinearMethod,
     dequant_gemm_gguf,
 )
-from vllm.model_executor.layers.quantization.gguf import UnquantizedLinearMethod
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
 
