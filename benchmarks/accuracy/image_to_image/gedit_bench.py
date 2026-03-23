@@ -168,6 +168,7 @@ def _mean_or_none(values: list[float]) -> float | None:
 
 def _to_q_metrics(section: dict[str, float | None]) -> dict[str, float | None]:
     return {
+        "count": section.get("count"),
         "Q_SC": section.get("avg_semantics"),
         "Q_PQ": section.get("avg_quality"),
         "Q_O": section.get("avg_overall"),
@@ -196,6 +197,7 @@ def _summarize_gedit_rows_single_language(
         overall = [math.sqrt(float(row["sementics_score"]) * float(row["quality_score"])) for row in group_rows]
 
         per_group[group] = {
+            "count": len(group_rows),
             "avg_semantics": _mean_or_none(semantics),
             "avg_quality": _mean_or_none(quality),
             "avg_overall": _mean_or_none(overall),
@@ -208,12 +210,14 @@ def _summarize_gedit_rows_single_language(
             math.sqrt(float(row["sementics_score"]) * float(row["quality_score"])) for row in intersection_rows
         ]
         intersection_group[group] = {
+            "count": len(intersection_rows),
             "avg_semantics": _mean_or_none(intersection_semantics),
             "avg_quality": _mean_or_none(intersection_quality),
             "avg_overall": _mean_or_none(intersection_overall),
         }
 
     overall_section = {
+        "count": len(filtered_rows),
         "avg_semantics": _mean_or_none(
             [score["avg_semantics"] for score in per_group.values() if score["avg_semantics"] is not None]
         ),
@@ -225,6 +229,7 @@ def _summarize_gedit_rows_single_language(
         ),
     }
     intersection_section = {
+        "count": sum(score["count"] for score in intersection_group.values()),
         "avg_semantics": _mean_or_none(
             [score["avg_semantics"] for score in intersection_group.values() if score["avg_semantics"] is not None]
         ),

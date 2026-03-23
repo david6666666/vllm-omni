@@ -19,6 +19,7 @@ def test_gedit_bench_h100_smoke(
     gedit_accuracy_servers,
     accuracy_artifact_root: Path,
     gedit_dataset_root: Path,
+    gedit_samples_per_group: int,
     accuracy_workers: int,
 ) -> None:
     model_label = infer_model_label(gedit_accuracy_servers.generate_params.model).lower()
@@ -41,13 +42,15 @@ def test_gedit_bench_h100_smoke(
                     generate_server.model,
                     "--model-name",
                     model_name,
-                        "--task-type",
-                        "all",
-                        "--instruction-language",
-                        "all",
-                        "--workers",
-                        str(accuracy_workers),
-                    ]
+                    "--task-type",
+                    "all",
+                    "--instruction-language",
+                    "all",
+                    "--samples-per-group",
+                    str(gedit_samples_per_group),
+                    "--workers",
+                    str(accuracy_workers),
+                ]
             )
             == 0
         )
@@ -65,19 +68,21 @@ def test_gedit_bench_h100_smoke(
                     model_name,
                     "--save-dir",
                     str(score_root),
-                        "--task-type",
-                        "all",
-                        "--instruction-language",
-                        "all",
-                        "--judge-base-url",
+                    "--task-type",
+                    "all",
+                    "--instruction-language",
+                    "all",
+                    "--judge-base-url",
                     f"http://{judge_server.host}:{judge_server.port}",
                     "--judge-model",
                     judge_server.model,
-                        "--judge-api-key",
-                        "EMPTY",
-                        "--workers",
-                        str(accuracy_workers),
-                    ]
+                    "--judge-api-key",
+                    "EMPTY",
+                    "--samples-per-group",
+                    str(gedit_samples_per_group),
+                    "--workers",
+                    str(accuracy_workers),
+                ]
             )
             == 0
         )
@@ -91,10 +96,19 @@ def test_gedit_bench_h100_smoke(
 
     for language in ["en", "cn"]:
         language_summary = summary["languages"][language]
+        assert language_summary["overall"]["count"] is not None
+        assert language_summary["intersection"]["count"] is not None
         assert language_summary["overall"]["Q_SC"] is not None
         assert language_summary["overall"]["Q_PQ"] is not None
         assert language_summary["overall"]["Q_O"] is not None
 
         for group in GROUPS:
             group_summary = language_summary["by_group"][group]
-            assert set(group_summary) == {"Q_SC", "Q_PQ", "Q_O"}
+            assert set(group_summary) == {"count", "Q_SC", "Q_PQ", "Q_O"}
+
+    assert summary["languages"]["en"]["overall"]["Q_SC"] >= 6.58
+    assert summary["languages"]["en"]["overall"]["Q_PQ"] >= 5.89
+    assert summary["languages"]["en"]["overall"]["Q_O"] >= 5.86
+    assert summary["languages"]["cn"]["overall"]["Q_SC"] >= 6.90
+    assert summary["languages"]["cn"]["overall"]["Q_PQ"] >= 5.78
+    assert summary["languages"]["cn"]["overall"]["Q_O"] >= 6.11

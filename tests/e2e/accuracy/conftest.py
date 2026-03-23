@@ -43,7 +43,7 @@ def pytest_addoption(parser):
         "--gedit-samples-per-group",
         action="store",
         type=int,
-        default=10,
+        default=20,
         help="Balanced sample count per GEdit task group",
     )
     group.addoption("--accuracy-workers", action="store", type=int, default=1, help="Worker count for accuracy benches")

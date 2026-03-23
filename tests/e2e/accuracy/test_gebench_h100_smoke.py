@@ -91,4 +91,6 @@ def test_gebench_h100_smoke(
         assert data_type in summary["evaluation"]["by_type"]
         assert summary["evaluation"]["by_type"][data_type]["count"] > 0
 
-    assert 0.0 <= summary["evaluation"]["overall_mean"] <= 1.0
+    assert summary["evaluation"]["overall_mean"] >= 0.48
+    assert summary["evaluation"]["by_type"]["type3"]["overall_mean"] >= 0.48
+    assert summary["evaluation"]["by_type"]["type4"]["overall_mean"] >= 0.48
