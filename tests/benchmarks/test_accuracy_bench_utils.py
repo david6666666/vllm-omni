@@ -291,6 +291,39 @@ def test_select_balanced_gedit_rows_limits_each_group_independently():
     assert selected_background[-1]["key"] == "background_change_9"
 
 
+def test_select_balanced_gedit_rows_balances_languages_when_all_requested():
+    rows = []
+    for idx in range(10):
+        rows.append(
+            {
+                "task_type": "background_change",
+                "instruction_language": "cn",
+                "key": f"background_change_cn_{idx}",
+            }
+        )
+    for idx in range(10):
+        rows.append(
+            {
+                "task_type": "background_change",
+                "instruction_language": "en",
+                "key": f"background_change_en_{idx}",
+            }
+        )
+
+    selected = select_balanced_gedit_rows(
+        rows,
+        task_type="all",
+        instruction_language="all",
+        samples_per_group=10,
+    )
+
+    selected_background = [row for row in selected if row["task_type"] == "background_change"]
+
+    assert len(selected_background) == 10
+    assert sum(1 for row in selected_background if row["instruction_language"] == "en") == 5
+    assert sum(1 for row in selected_background if row["instruction_language"] == "cn") == 5
+
+
 def test_infer_model_name_uses_last_path_segment():
     assert infer_model_name("/workspace/models/Qwen/Qwen-Image-Edit") == "Qwen-Image-Edit"
 

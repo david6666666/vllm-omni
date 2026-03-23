@@ -120,8 +120,33 @@ def select_balanced_gedit_rows(
     if samples_per_group is None:
         return filtered_rows
 
+    def _select_rows_for_group(group_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if instruction_language != "all":
+            return group_rows[:samples_per_group]
+
+        rows_by_language: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in group_rows:
+            rows_by_language[str(row.get("instruction_language", "")).strip()].append(row)
+
+        ordered_languages = ["en", "cn"]
+        per_language_quota = samples_per_group // max(len(ordered_languages), 1)
+        remainder = samples_per_group % max(len(ordered_languages), 1)
+
+        selected_rows: list[dict[str, Any]] = []
+        leftovers: list[dict[str, Any]] = []
+        for index, language in enumerate(ordered_languages):
+            language_rows = rows_by_language.get(language, [])
+            quota = per_language_quota + (1 if index < remainder else 0)
+            selected_rows.extend(language_rows[:quota])
+            leftovers.extend(language_rows[quota:])
+
+        if len(selected_rows) < samples_per_group:
+            selected_rows.extend(leftovers[: samples_per_group - len(selected_rows)])
+
+        return selected_rows
+
     if task_type != "all":
-        return filtered_rows[:samples_per_group]
+        return _select_rows_for_group(filtered_rows)
 
     grouped_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in filtered_rows:
@@ -129,7 +154,7 @@ def select_balanced_gedit_rows(
 
     selected: list[dict[str, Any]] = []
     for group in GROUPS:
-        selected.extend(grouped_rows.get(group, [])[:samples_per_group])
+        selected.extend(_select_rows_for_group(grouped_rows.get(group, [])))
     return selected
 
 
