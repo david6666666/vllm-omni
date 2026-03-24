@@ -281,7 +281,9 @@ def _load_gedit_dataset(dataset_ref: str):
     load_dataset, load_from_disk = _require_datasets()
     dataset_path = Path(dataset_ref)
     if dataset_path.exists():
-        return load_from_disk(str(dataset_path))
+        if (dataset_path / "state.json").exists() and (dataset_path / "dataset_info.json").exists():
+            return load_from_disk(str(dataset_path))
+        return load_dataset(str(dataset_path))
     return load_dataset(dataset_ref)
 
 

@@ -13,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
 from benchmarks.accuracy.common import VllmOmniImageClient
 from benchmarks.accuracy.image_to_image.gedit_bench import (
     GROUPS as GEDIT_GROUPS,
+    _load_gedit_dataset,
     _resolve_gedit_split,
     infer_model_name,
     resolve_model_name,
@@ -377,6 +378,55 @@ def test_resolve_gedit_split_accepts_dataset_like_input():
     rows = [{"key": "a"}]
 
     assert _resolve_gedit_split(rows) == rows
+
+
+def test_load_gedit_dataset_uses_load_from_disk_for_saved_dataset(monkeypatch, tmp_path: Path):
+    (tmp_path / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "dataset_info.json").write_text("{}", encoding="utf-8")
+    captured = {}
+
+    def fake_load_dataset(path):
+        captured["load_dataset"] = path
+        return "load_dataset"
+
+    def fake_load_from_disk(path):
+        captured["load_from_disk"] = path
+        return "load_from_disk"
+
+    monkeypatch.setattr(
+        "benchmarks.accuracy.image_to_image.gedit_bench._require_datasets",
+        lambda: (fake_load_dataset, fake_load_from_disk),
+    )
+
+    result = _load_gedit_dataset(str(tmp_path))
+
+    assert result == "load_from_disk"
+    assert captured["load_from_disk"] == str(tmp_path)
+    assert "load_dataset" not in captured
+
+
+def test_load_gedit_dataset_uses_load_dataset_for_local_snapshot_path(monkeypatch, tmp_path: Path):
+    (tmp_path / "README.md").write_text("dataset repo snapshot", encoding="utf-8")
+    captured = {}
+
+    def fake_load_dataset(path):
+        captured["load_dataset"] = path
+        return "load_dataset"
+
+    def fake_load_from_disk(path):
+        captured["load_from_disk"] = path
+        return "load_from_disk"
+
+    monkeypatch.setattr(
+        "benchmarks.accuracy.image_to_image.gedit_bench._require_datasets",
+        lambda: (fake_load_dataset, fake_load_from_disk),
+    )
+
+    result = _load_gedit_dataset(str(tmp_path))
+
+    assert result == "load_dataset"
+    assert captured["load_dataset"] == str(tmp_path)
+    assert "load_from_disk" not in captured
 
 
 def test_summarize_gedit_rows_computes_group_and_intersection_means():
