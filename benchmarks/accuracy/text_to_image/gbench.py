@@ -26,10 +26,13 @@ from benchmarks.accuracy.common import (
 
 TYPE_TO_FOLDER = {
     "type1": "01_single_step",
-    "type2": "02_multi_step",
+    "type2": "02_mutli_step",
     "type3": "03_trajectory_text_fictionalapp",
     "type4": "04_trajectory_text_realapp",
     "type5": "05_grounding_data",
+}
+TYPE_TO_FOLDER_ALIASES = {
+    "type2": ("02_multi_step",),
 }
 SCORE_KEYS = ("goal", "logic", "cons", "ui", "qual")
 DEFAULT_SAMPLES_PER_TYPE = 10
@@ -97,9 +100,9 @@ def select_balanced_gebench_samples(
 
 def collect_gebench_generation_summary(output_root: Path) -> dict[str, Any]:
     records: list[dict[str, Any]] = []
-    for data_type, folder_name in TYPE_TO_FOLDER.items():
-        type_root = output_root / folder_name
-        if not type_root.exists():
+    for data_type in TYPE_TO_FOLDER:
+        type_root = _resolve_existing_type_dir(output_root, data_type)
+        if type_root is None:
             continue
         for lang_dir in sorted(path for path in type_root.iterdir() if path.is_dir()):
             for sample_dir in sorted(path for path in lang_dir.iterdir() if path.is_dir()):
@@ -153,10 +156,22 @@ def _compute_overall(scores: dict[str, int]) -> float:
     return sum(scores.values()) / (len(SCORE_KEYS) * 5.0)
 
 
+def _type_folder_candidates(data_type: str) -> list[str]:
+    return [TYPE_TO_FOLDER[data_type], *TYPE_TO_FOLDER_ALIASES.get(data_type, ())]
+
+
+def _resolve_existing_type_dir(root: Path, data_type: str) -> Path | None:
+    for folder_name in _type_folder_candidates(data_type):
+        candidate = root / folder_name
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def _iter_sample_paths(dataset_root: Path, data_type: str) -> list[Path]:
-    data_dir = dataset_root / TYPE_TO_FOLDER[data_type]
-    if not data_dir.exists():
-        raise FileNotFoundError(f"Dataset path not found: {data_dir}")
+    data_dir = _resolve_existing_type_dir(dataset_root, data_type)
+    if data_dir is None:
+        raise FileNotFoundError(f"Dataset path not found: {dataset_root / TYPE_TO_FOLDER[data_type]}")
 
     samples: list[Path] = []
     for lang_dir in sorted(path for path in data_dir.iterdir() if path.is_dir()):
@@ -687,10 +702,14 @@ class GEBenchEvaluator:
         max_samples: int | None = None,
         samples_per_type: int | None = None,
     ) -> dict[str, Any]:
-        output_type_dir = self.output_root / TYPE_TO_FOLDER[data_type]
+        output_type_dir = _resolve_existing_type_dir(self.output_root, data_type)
         sample_specs_by_name = {
             (spec.lang_device, spec.sample_name): spec for spec in _iter_sample_specs(self.dataset_root, data_type)
         }
+        if output_type_dir is None:
+            payload = {"data_type": data_type, "results": [], "summary": summarize_gebench_results([])}
+            write_json(self.output_root / "evaluations" / f"{data_type}.json", payload)
+            return payload
         sample_dirs = [
             sample_dir
             for lang_dir in sorted(path for path in output_type_dir.iterdir() if path.is_dir())

@@ -3,6 +3,7 @@ import math
 import sys
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -23,12 +24,17 @@ from benchmarks.accuracy.image_to_image.gedit_bench import (
 )
 from benchmarks.accuracy.text_to_image.gbench import (
     _expand_sample_path,
+    _iter_sample_paths,
     _trajectory_judge_payload,
     LocalJudgeClient,
+    GEBenchEvaluator,
+    TYPE_TO_FOLDER,
     select_balanced_gebench_samples,
     summarize_generated_records as summarize_gebench_generated_records,
     summarize_gebench_results,
 )
+
+pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
 
 
 def test_summarize_gebench_generated_records_groups_by_type():
@@ -77,6 +83,16 @@ def test_select_balanced_gebench_samples_limits_each_type_independently():
     assert selected["type3"][-1].name == "type3_9"
 
 
+def test_iter_sample_paths_accepts_official_type2_directory_name(tmp_path: Path):
+    type2_root = tmp_path / "02_mutli_step" / "english_phone"
+    (type2_root / "sample_a").mkdir(parents=True)
+
+    sample_paths = _iter_sample_paths(tmp_path, "type2")
+
+    assert len(sample_paths) == 1
+    assert sample_paths[0].name == "sample_a"
+
+
 def test_expand_sample_path_flattens_json_list_samples(tmp_path: Path):
     sample_path = tmp_path / "trajectories.json"
     sample_path.write_text(
@@ -95,6 +111,21 @@ def test_expand_sample_path_flattens_json_list_samples(tmp_path: Path):
     assert specs[0].sample_name == "sample_a"
     assert specs[1].sample_name == "sample_b"
     assert specs[0].lang_device == "english_phone"
+
+
+def test_gebench_evaluate_skips_missing_output_folder(tmp_path: Path):
+    dataset_type_root = tmp_path / TYPE_TO_FOLDER["type3"] / "english_phone"
+    sample_dir = dataset_type_root / "sample_a"
+    sample_dir.mkdir(parents=True)
+    (sample_dir / "meta_data.json").write_text("{}", encoding="utf-8")
+
+    judge = LocalJudgeClient(base_url="http://127.0.0.1:8094", api_key="EMPTY", model="judge")
+    evaluator = GEBenchEvaluator(dataset_root=tmp_path, output_root=tmp_path / "outputs", judge=judge)
+
+    payload = evaluator.evaluate(data_type="type3")
+
+    assert payload["results"] == []
+    assert payload["summary"]["count"] == 0
 
 
 def test_local_judge_client_retries_when_first_response_is_not_json(monkeypatch):
