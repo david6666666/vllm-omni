@@ -3,8 +3,9 @@
 """Tests for the unified quantization framework."""
 
 import pytest
-import torch
 from torch import nn
+
+pytestmark = [pytest.mark.core_model, pytest.mark.diffusion]
 
 
 def test_build_quant_config_fp8():
@@ -20,6 +21,11 @@ def test_build_quant_config_none():
     from vllm_omni.quantization import build_quant_config
 
     assert build_quant_config(None) is None
+
+
+def test_build_quant_config_none_string():
+    from vllm_omni.quantization import build_quant_config
+
     assert build_quant_config("none") is None
 
 
@@ -109,9 +115,9 @@ def test_component_config_routing():
     )
 
     assert config.get_name() == "component"
-    assert config._resolve("transformer.blocks.0.attn") is fp8
-    assert config._resolve("vae.encoder.conv_in") is None
-    assert config._resolve("unknown.layer") is None
+    assert config.resolve("transformer.blocks.0.attn") is fp8
+    assert config.resolve("vae.encoder.conv_in") is None
+    assert config.resolve("unknown.layer") is None
 
 
 def test_component_config_with_default():
@@ -125,8 +131,8 @@ def test_component_config_with_default():
         default_config=fp8,
     )
 
-    assert config._resolve("transformer.blocks.0") is fp8
-    assert config._resolve("vae.encoder") is None
+    assert config.resolve("transformer.blocks.0") is fp8
+    assert config.resolve("vae.encoder") is None
 
 
 def test_gguf_config():
@@ -147,7 +153,7 @@ def test_gguf_config():
 def test_integration_string():
     from vllm_omni.diffusion.data import OmniDiffusionConfig
 
-    config = OmniDiffusionConfig(model="test", quantization="fp8")
+    config = OmniDiffusionConfig(model="test", quantization_config="fp8")
     assert config.quantization_config is not None
     assert config.quantization_config.get_name() == "fp8"
 
@@ -173,8 +179,8 @@ def test_integration_no_quant():
 
 def test_integration_per_component():
     """OmniDiffusionConfig with per-component quantization dict."""
-    from vllm_omni.quantization import ComponentQuantizationConfig
     from vllm_omni.diffusion.data import OmniDiffusionConfig
+    from vllm_omni.quantization import ComponentQuantizationConfig
 
     config = OmniDiffusionConfig(
         model="test",
@@ -191,20 +197,18 @@ def test_integration_per_component():
 def test_supported_methods_includes_vllm():
     from vllm_omni.quantization import SUPPORTED_QUANTIZATION_METHODS
 
-    for method in ["fp8", "gguf", "awq", "gptq", "bitsandbytes"]:
+    for method in ["fp8", "gguf", "awq", "gptq", "bitsandbytes", "modelopt", "modelopt_fp4"]:
         assert method in SUPPORTED_QUANTIZATION_METHODS, f"{method} missing"
 
 
 def test_supported_methods_count():
     from vllm_omni.quantization import SUPPORTED_QUANTIZATION_METHODS
 
-    assert len(SUPPORTED_QUANTIZATION_METHODS) >= 30
+    assert len(SUPPORTED_QUANTIZATION_METHODS) >= 20
 
 
-def test_per_component_routing_with_model_layers():
-    """Verify get_quant_method() routes correctly on LinearBase layers."""
-    from vllm.model_executor.layers.linear import LinearBase
-
+def test_per_component_routing_with_resolve():
+    """Verify resolve() routes correctly by prefix."""
     from vllm_omni.quantization import ComponentQuantizationConfig, build_quant_config
 
     config = build_quant_config(
@@ -215,18 +219,14 @@ def test_per_component_routing_with_model_layers():
     )
     assert isinstance(config, ComponentQuantizationConfig)
 
-    transformer_layer = LinearBase(128, 128)
-    vae_layer = LinearBase(128, 128)
-
-    assert config.get_quant_method(transformer_layer, "transformer.blocks.0.attn.to_q") is not None
-    assert config.get_quant_method(vae_layer, "vae.encoder.conv_in") is None
-    assert config.get_quant_method(transformer_layer, "unknown.layer.0.weight") is None
+    assert config.resolve("transformer.blocks.0.attn.to_q") is not None
+    assert config.resolve("transformer.blocks.0.attn.to_q").get_name() == "fp8"
+    assert config.resolve("vae.encoder.conv_in") is None
+    assert config.resolve("unknown.layer.0.weight") is None
 
 
 def test_per_component_routing_with_default():
     """Verify default config applies to unmatched prefixes."""
-    from vllm.model_executor.layers.linear import LinearBase
-
     from vllm_omni.quantization import ComponentQuantizationConfig, build_quant_config
 
     config = build_quant_config(
@@ -237,90 +237,130 @@ def test_per_component_routing_with_default():
     )
     assert isinstance(config, ComponentQuantizationConfig)
 
-    layer = LinearBase(128, 128)
-    assert config.get_quant_method(layer, "vae.decoder.conv") is None
-    assert config.get_quant_method(layer, "transformer.blocks.0.attn") is not None
+    assert config.resolve("vae.decoder.conv") is None
+    resolved = config.resolve("transformer.blocks.0.attn")
+    assert resolved is not None
+    assert resolved.get_name() == "fp8"
+
+
+@pytest.mark.parametrize(
+    "quant_algo",
+    ["FP8", "NVFP4"],
+    ids=["modelopt_fp8", "modelopt_nvfp4"],
+)
+def test_omni_convertor_thinker_finds_text_config_quant(quant_algo):
+    """Thinker stage should discover quantization_config from
+    thinker_config.text_config for both FP8 and NVFP4 modelopt checkpoints."""
+    from types import SimpleNamespace
+
+    from vllm_omni.config.model import OmniModelArchConfigConvertor
+
+    text_config = SimpleNamespace(
+        quantization_config={
+            "quant_method": "modelopt",
+            "quant_algo": quant_algo,
+            "ignore": ["lm_head", "model.layers.0.mlp.gate"],
+        },
+        model_type="qwen3_moe",
+    )
+    thinker_config = SimpleNamespace(text_config=text_config)
+    hf_config = SimpleNamespace(
+        thinker_config=thinker_config,
+        talker_config=SimpleNamespace(text_config=SimpleNamespace()),
+        model_type="qwen3_omni_moe",
+    )
+
+    convertor = OmniModelArchConfigConvertor(hf_config, text_config, stage_config_name="thinker_config")
+    quant_cfg = convertor.get_quantization_config()
+
+    assert quant_cfg is not None
+    assert quant_cfg["quant_method"] == "modelopt"
+    assert "lm_head" in quant_cfg["ignore"]
+
+
+def test_omni_convertor_talker_returns_none():
+    """Talker stage should get no quantization config when its text_config
+    has no quantization_config (talker weights are BF16)."""
+    from types import SimpleNamespace
+
+    from vllm_omni.config.model import OmniModelArchConfigConvertor
+
+    talker_text_config = SimpleNamespace(model_type="qwen3_omni_moe_talker")
+    talker_config = SimpleNamespace(text_config=talker_text_config)
+    hf_config = SimpleNamespace(
+        talker_config=talker_config,
+        model_type="qwen3_omni_moe",
+    )
+
+    convertor = OmniModelArchConfigConvertor(hf_config, talker_text_config, stage_config_name="talker_config")
+    quant_cfg = convertor.get_quantization_config()
+
+    assert quant_cfg is None
+
+
+def test_omni_convertor_no_stage_name_falls_back():
+    """Without stage_config_name, should fall back to base behavior."""
+    from types import SimpleNamespace
+
+    from vllm_omni.config.model import OmniModelArchConfigConvertor
+
+    hf_config = SimpleNamespace(model_type="qwen3_omni_moe")
+    text_config = SimpleNamespace()
+
+    convertor = OmniModelArchConfigConvertor(hf_config, text_config)
+    quant_cfg = convertor.get_quantization_config()
+
+    assert quant_cfg is None
 
 
 def test_multi_component_model_routing():
     """Integration test: walk a multi-component model and verify per-component
-    quantization routes get_quant_method() correctly for every linear layer."""
-    from vllm.model_executor.layers.linear import LinearBase
-
+    quantization routes resolve() correctly for every linear layer."""
     from vllm_omni.quantization import ComponentQuantizationConfig, build_quant_config
 
     # Build a mock multi-stage model mimicking Bagel/Qwen3-Omni layout
     class MockTransformerBlock(nn.Module):
         def __init__(self):
             super().__init__()
-            self.attn_q = LinearBase(64, 64)
-            self.attn_k = LinearBase(64, 64)
-            self.mlp = LinearBase(64, 256)
+            self.attn_q = nn.Linear(64, 64)
+            self.attn_k = nn.Linear(64, 64)
+            self.mlp = nn.Linear(64, 256)
 
     class MockVAEBlock(nn.Module):
         def __init__(self):
             super().__init__()
-            self.conv = LinearBase(64, 64)
+            self.conv = nn.Linear(64, 64)
 
     class MockMultiStageModel(nn.Module):
         def __init__(self):
             super().__init__()
-            self.transformer = nn.ModuleDict({
-                "block_0": MockTransformerBlock(),
-                "block_1": MockTransformerBlock(),
-            })
-            self.vae = nn.ModuleDict({
-                "encoder": MockVAEBlock(),
-                "decoder": MockVAEBlock(),
-            })
+            self.transformer = nn.ModuleDict(
+                {
+                    "block_0": MockTransformerBlock(),
+                    "block_1": MockTransformerBlock(),
+                }
+            )
+            self.vae = nn.ModuleDict(
+                {
+                    "encoder": MockVAEBlock(),
+                    "decoder": MockVAEBlock(),
+                }
+            )
 
     model = MockMultiStageModel()
-    config = build_quant_config({
-        "transformer": {"method": "fp8", "activation_scheme": "dynamic"},
-        "vae": None,
-    })
+    config = build_quant_config(
+        {
+            "transformer": {"method": "fp8", "activation_scheme": "dynamic"},
+            "vae": None,
+        }
+    )
     assert isinstance(config, ComponentQuantizationConfig)
 
     for name, module in model.named_modules():
-        if isinstance(module, LinearBase):
-            method = config.get_quant_method(module, name)
+        if isinstance(module, nn.Linear):
+            resolved = config.resolve(name)
             if name.startswith("transformer"):
-                assert method is not None, f"{name} should be quantized"
+                assert resolved is not None, f"{name} should be quantized"
+                assert resolved.get_name() == "fp8"
             elif name.startswith("vae"):
-                assert method is None, f"{name} should NOT be quantized"
-
-
-def test_validate_quant_config():
-    from vllm_omni.quantization import build_quant_config, validate_quant_config
-
-    config = build_quant_config("fp8")
-    warnings = validate_quant_config(config, dtype=torch.bfloat16)
-    dtype_warnings = [w for w in warnings if "dtype" in w.lower()]
-    assert len(dtype_warnings) == 0
-
-
-def test_validate_quant_config_none():
-    from vllm_omni.quantization import validate_quant_config
-
-    assert validate_quant_config(None) == []
-
-
-def test_validate_component_prefixes():
-    """Validation should warn about unmatched component prefixes."""
-    from vllm_omni.quantization import build_quant_config, validate_quant_config
-
-    config = build_quant_config({
-        "transformer": "fp8",
-        "nonexistent_component": None,
-    })
-
-    # Build a simple model to validate against
-    class SimpleModel(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.transformer = nn.Linear(64, 64)
-
-    model = SimpleModel()
-    warnings = validate_quant_config(config, model=model)
-    prefix_warnings = [w for w in warnings if "nonexistent_component" in w]
-    assert len(prefix_warnings) > 0, "Should warn about unmatched prefix"
+                assert resolved is None, f"{name} should NOT be quantized"

@@ -34,15 +34,26 @@ def _build_gguf(**kw: Any) -> QuantizationConfig:
     return DiffusionGGUFConfig(**kw)
 
 
+def _build_int8(**kw: Any) -> QuantizationConfig:
+    """Lazy import for Int8 diffusion config (supports CUDA + NPU)."""
+    from .int8_config import DiffusionInt8Config
+
+    return DiffusionInt8Config(**kw)
+
+
 _OVERRIDES: dict[str, Callable[..., QuantizationConfig]] = {
     "gguf": _build_gguf,
+    "int8": _build_int8,
 }
 
 SUPPORTED_QUANTIZATION_METHODS: list[str] = list(dict.fromkeys(QUANTIZATION_METHODS + list(_OVERRIDES.keys())))
 
 
 def _build_single(method: str, **kwargs: Any) -> QuantizationConfig:
-    """Build a single QuantizationConfig by method name."""
+    """Build a single QuantizationConfig by method name.
+
+    Resolution: _OVERRIDES first, then vLLM registry via from_config().
+    """
     method = method.lower()
 
     if method in _OVERRIDES:
@@ -53,31 +64,12 @@ def _build_single(method: str, **kwargs: Any) -> QuantizationConfig:
 
     config_cls = get_quantization_config(method)
 
-    if kwargs:
-        try:
-            return config_cls(**kwargs)
-        except TypeError:
-            pass
-        try:
-            return config_cls.from_config(kwargs)
-        except (TypeError, KeyError, ValueError):
-            sig = inspect.signature(config_cls.__init__)
-            raise TypeError(
-                f"Cannot instantiate {config_cls.__name__} with kwargs {kwargs}. Expected signature: {sig}"
-            ) from None
-
     try:
-        return config_cls()
+        return config_cls(**kwargs)
     except TypeError:
-        pass
-    try:
-        return config_cls.from_config({})
-    except (TypeError, KeyError, ValueError):
         sig = inspect.signature(config_cls.__init__)
         raise TypeError(
-            f"Cannot instantiate {config_cls.__name__} without arguments. "
-            f"Expected signature: {sig}. "
-            f"Provide constructor kwargs via dict config."
+            f"Cannot instantiate {config_cls.__name__} with kwargs {kwargs}. Expected signature: {sig}"
         ) from None
 
 

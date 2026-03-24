@@ -35,7 +35,13 @@ class ComponentQuantizationConfig(QuantizationConfig):
         self._default = default_config
         self._sorted_prefixes = sorted(self._components.keys(), key=len, reverse=True)
 
-    def _resolve(self, prefix: str) -> QuantizationConfig | None:
+    def resolve(self, prefix: str) -> QuantizationConfig | None:
+        """Find the config for a given layer prefix (longest-prefix match).
+
+        Note: vLLM may remap quantization prefixes vs model definition
+        prefixes (e.g. via WeightsMapper). If prefixes don't match after
+        remapping, layers may fall through to the default config.
+        """
         for comp_prefix in self._sorted_prefixes:
             if prefix.startswith(comp_prefix):
                 return self._components[comp_prefix]
@@ -45,7 +51,7 @@ class ComponentQuantizationConfig(QuantizationConfig):
         return "component"
 
     def get_quant_method(self, layer: torch.nn.Module, prefix: str) -> QuantizeMethodBase | None:
-        config = self._resolve(prefix)
+        config = self.resolve(prefix)
         if config is None:
             return None
         return config.get_quant_method(layer, prefix)
@@ -54,9 +60,12 @@ class ComponentQuantizationConfig(QuantizationConfig):
     def get_supported_act_dtypes(cls) -> list[torch.dtype]:
         return [torch.bfloat16, torch.float16]
 
-    @classmethod
-    def get_min_capability(cls) -> int:
-        return 0
+    def get_min_capability(self) -> int:
+        """Return the minimum capability across all component configs."""
+        caps = [c.get_min_capability() for c in self._components.values() if c is not None]
+        if self._default is not None:
+            caps.append(self._default.get_min_capability())
+        return min(caps) if caps else 0
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> ComponentQuantizationConfig:
