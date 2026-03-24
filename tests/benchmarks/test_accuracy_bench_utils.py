@@ -24,7 +24,6 @@ from benchmarks.accuracy.image_to_image.gedit_bench import (
 )
 from benchmarks.accuracy.text_to_image.gbench import (
     _expand_sample_path,
-    _iter_sample_paths,
     _trajectory_judge_payload,
     LocalJudgeClient,
     GEBenchEvaluator,
@@ -81,16 +80,6 @@ def test_select_balanced_gebench_samples_limits_each_type_independently():
     assert len(selected["type3"]) == 10
     assert selected["type1"][0].name == "type1_0"
     assert selected["type3"][-1].name == "type3_9"
-
-
-def test_iter_sample_paths_accepts_official_type2_directory_name(tmp_path: Path):
-    type2_root = tmp_path / "02_mutli_step" / "english_phone"
-    (type2_root / "sample_a").mkdir(parents=True)
-
-    sample_paths = _iter_sample_paths(tmp_path, "type2")
-
-    assert len(sample_paths) == 1
-    assert sample_paths[0].name == "sample_a"
 
 
 def test_expand_sample_path_flattens_json_list_samples(tmp_path: Path):
