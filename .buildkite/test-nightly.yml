@@ -248,7 +248,7 @@ steps:
     key: nightly-gebench-accuracy
     timeout_in_minutes: 60
     depends_on: upload-nightly-pipeline
-    if: build.env("NIGHTLY") == "1"
+    if: build.env("NIGHTLY") == "1" || build.pull_request.labels includes "nightly-test"
     commands:
       - export VLLM_WORKER_MULTIPROC_METHOD=spawn
       - pytest -s -v tests/e2e/accuracy/test_gebench_h100_smoke.py --run-level advanced_model --gebench-model Qwen/Qwen-Image-2512 --accuracy-judge-model QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ --accuracy-gpu 0 --gebench-port 8093 --accuracy-workers 1
@@ -291,7 +291,7 @@ steps:
     key: nightly-gedit-bench-accuracy
     timeout_in_minutes: 60
     depends_on: upload-nightly-pipeline
-    if: build.env("NIGHTLY") == "1"
+    if: build.env("NIGHTLY") == "1" || build.pull_request.labels includes "nightly-test"
     commands:
       - export VLLM_WORKER_MULTIPROC_METHOD=spawn
       - pytest -s -v tests/e2e/accuracy/test_gedit_bench_h100_smoke.py --run-level advanced_model --gedit-model Qwen/Qwen-Image-Edit --accuracy-judge-model QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ --accuracy-gpu 0 --gedit-port 8093 --gedit-samples-per-group 20 --accuracy-workers 1
