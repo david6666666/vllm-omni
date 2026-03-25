@@ -515,7 +515,11 @@ def test_gedit_runner_uses_tqdm_progress(monkeypatch, tmp_path: Path):
     )
 
     def fake_generate_one(self, model_name, item):
-        return {"key": item["key"], "task_type": item["task_type"], "instruction_language": item["instruction_language"]}
+        return {
+            "key": item["key"],
+            "task_type": item["task_type"],
+            "instruction_language": item["instruction_language"],
+        }
 
     monkeypatch.setattr(GEditBenchRunner, "_generate_one", fake_generate_one)
 
