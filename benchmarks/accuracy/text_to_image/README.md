@@ -57,6 +57,41 @@ python benchmarks/accuracy/text_to_image/run_gebench.py summarize \
   --output-root benchmarks/accuracy/text_to_image/outputs
 ```
 
+Example summary output:
+
+```json
+{
+  "generation": {
+    "count": 20,
+    "by_type": {
+      "type3": {"count": 10},
+      "type4": {"count": 10}
+    }
+  },
+  "evaluation": {
+    "count": 20,
+    "overall_mean": 0.52,
+    "by_type": {
+      "type3": {"count": 10, "overall_mean": 0.50, "overall_mean_100": 50.0},
+      "type4": {"count": 10, "overall_mean": 0.54, "overall_mean_100": 54.0}
+    }
+  }
+}
+```
+
+Example generated images to inspect:
+
+- `benchmarks/accuracy/text_to_image/outputs/03_trajectory_text_fictionalapp/<lang_device>/<sample>/frame0.png`
+- `benchmarks/accuracy/text_to_image/outputs/03_trajectory_text_fictionalapp/<lang_device>/<sample>/frame5.png`
+- `benchmarks/accuracy/text_to_image/outputs/04_trajectory_text_realapp/<lang_device>/<sample>/frame0.png`
+- `benchmarks/accuracy/text_to_image/outputs/04_trajectory_text_realapp/<lang_device>/<sample>/frame5.png`
+
+What to expect:
+
+- `overall_mean` is normalized to `0.0 ~ 1.0`; higher is better.
+- `frame0.png` is the initial GUI frame; `frame5.png` is the final trajectory frame most often used for quick inspection.
+- For full debugging, inspect the whole `frame0.png` ... `frame5.png` sequence for one sample directory.
+
 Notes:
 
 - GEBench upstream leaves type3/type4 generation unfinished. This integration

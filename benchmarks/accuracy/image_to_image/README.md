@@ -58,6 +58,42 @@ python benchmarks/accuracy/image_to_image/run_gedit_bench.py summarize \
   --language en
 ```
 
+Example summary output:
+
+```json
+{
+  "language": "all",
+  "languages": {
+    "en": {
+      "overall": {"count": 110, "Q_SC": 6.58, "Q_PQ": 5.89, "Q_O": 5.86},
+      "intersection": {"count": 78, "Q_SC": 6.50, "Q_PQ": 5.66, "Q_O": 5.65}
+    },
+    "cn": {
+      "overall": {"count": 110, "Q_SC": 6.90, "Q_PQ": 5.78, "Q_O": 6.11},
+      "intersection": {"count": 63, "Q_SC": 7.22, "Q_PQ": 5.59, "Q_O": 6.28}
+    }
+  }
+}
+```
+
+Example generated images to inspect:
+
+- `benchmarks/accuracy/image_to_image/results/qwen_image_edit/fullset/background_change/en/<sample>.png`
+- `benchmarks/accuracy/image_to_image/results/qwen_image_edit/fullset/text_change/en/<sample>.png`
+- `benchmarks/accuracy/image_to_image/results/qwen_image_edit/fullset/subject-replace/cn/<sample>.png`
+
+Example score artifacts to inspect together with the images:
+
+- `benchmarks/accuracy/image_to_image/scores/qwen_image_edit_all_all_vie_score.csv`
+- `benchmarks/accuracy/image_to_image/scores/qwen_image_edit_all_all_summary.json`
+
+What to expect:
+
+- `Q_SC` measures instruction following and content preservation.
+- `Q_PQ` measures image naturalness and artifact quality.
+- `Q_O` is the combined overall score; higher is better.
+- `overall.count` is the number of evaluated samples for that language, while `intersection.count` is the subset with `intersection_exist == True`.
+
 Notes:
 
 - This flow requires the optional Hugging Face `datasets` package.
