@@ -13,6 +13,8 @@ if str(REPO_ROOT) not in sys.path:
 from benchmarks.accuracy.common import VllmOmniImageClient
 from benchmarks.accuracy.image_to_image.gedit_bench import (
     GROUPS as GEDIT_GROUPS,
+    GEditBenchEvaluator,
+    GEditBenchRunner,
     _load_gedit_dataset,
     _resolve_gedit_split,
     infer_model_name,
@@ -26,6 +28,7 @@ from benchmarks.accuracy.image_to_image.gedit_bench import (
 from benchmarks.accuracy.text_to_image.gbench import (
     _expand_sample_path,
     _trajectory_judge_payload,
+    _write_json_with_timestamp,
     LocalJudgeClient,
     GEBenchEvaluator,
     TYPE_TO_FOLDER,
@@ -65,6 +68,19 @@ def test_summarize_gebench_results_computes_type_and_global_means():
     assert math.isclose(summary["by_type"]["type1"]["overall_mean"], 0.7)
     assert math.isclose(summary["by_type"]["type2"]["overall_mean"], 0.5)
     assert math.isclose(summary["by_type"]["type1"]["score_means"]["goal"], 4.0)
+
+
+def test_write_json_with_timestamp_writes_stable_and_timestamped_files(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(
+        "benchmarks.accuracy.text_to_image.gbench._utc_timestamp",
+        lambda: "20260325T130000Z",
+    )
+
+    timestamped_path = _write_json_with_timestamp(tmp_path / "summary.json", {"ok": True})
+
+    assert (tmp_path / "summary.json").exists()
+    assert timestamped_path == tmp_path / "summary_20260325T130000Z.json"
+    assert timestamped_path.exists()
 
 
 def test_select_balanced_gebench_samples_limits_each_type_independently():
@@ -136,6 +152,30 @@ def test_local_judge_client_retries_when_first_response_is_not_json(monkeypatch)
 
     assert result["goal"] == 4
     assert result["cons"] == 5
+
+
+def test_local_judge_client_returns_zero_scores_when_retry_is_still_invalid(monkeypatch):
+    responses = iter(
+        [
+            "not json",
+            "still not json",
+        ]
+    )
+
+    def fake_request_text(self, prompt, images):
+        return next(responses)
+
+    monkeypatch.setattr(LocalJudgeClient, "_request_text", fake_request_text)
+
+    judge = LocalJudgeClient(base_url="http://127.0.0.1:8094", api_key="EMPTY", model="judge")
+    result = judge.evaluate(prompt="Evaluate this GUI trajectory.", images=[Image.new("RGB", (2, 2), color="white")])
+
+    assert result["goal"] == 0
+    assert result["logic"] == 0
+    assert result["cons"] == 0
+    assert result["ui"] == 0
+    assert result["qual"] == 0
+    assert result["reasoning"] == "still not json"
 
 
 def test_trajectory_judge_payload_collapses_six_frames_into_single_storyboard():
@@ -429,6 +469,80 @@ def test_load_gedit_dataset_uses_load_dataset_for_local_snapshot_path(monkeypatc
     assert "load_from_disk" not in captured
 
 
+def test_gedit_runner_generate_skips_failed_samples(monkeypatch, tmp_path: Path):
+    rows = [
+        {"key": "ok", "task_type": "background_change", "instruction_language": "en"},
+        {"key": "bad", "task_type": "background_change", "instruction_language": "en"},
+    ]
+
+    monkeypatch.setattr("benchmarks.accuracy.image_to_image.gedit_bench._load_gedit_dataset", lambda ref: rows)
+    runner = GEditBenchRunner(
+        dataset_ref="dataset",
+        output_root=tmp_path,
+        base_url="http://127.0.0.1:8093",
+        model="model",
+    )
+
+    def fake_generate_one(self, model_name, item):
+        if item["key"] == "bad":
+            raise RuntimeError("boom")
+        return {"key": item["key"], "task_type": item["task_type"], "instruction_language": item["instruction_language"]}
+
+    monkeypatch.setattr(GEditBenchRunner, "_generate_one", fake_generate_one)
+
+    outputs = runner.generate(model_name="demo", workers=1)
+
+    assert outputs == [{"key": "ok", "task_type": "background_change", "instruction_language": "en"}]
+
+
+def test_gedit_evaluator_skips_failed_samples(monkeypatch, tmp_path: Path):
+    rows = [
+        {"key": "ok", "task_type": "background_change", "instruction_language": "en"},
+        {"key": "bad", "task_type": "background_change", "instruction_language": "en"},
+    ]
+
+    monkeypatch.setattr("benchmarks.accuracy.image_to_image.gedit_bench._load_gedit_dataset", lambda ref: rows)
+    evaluator = GEditBenchEvaluator(dataset_ref="dataset", output_root=tmp_path / "results", scorer=object())
+
+    def fake_evaluate_one(self, model_name, item):
+        if item["key"] == "bad":
+            raise RuntimeError("boom")
+        return {
+            "key": item["key"],
+            "task_type": item["task_type"],
+            "edited_image": "ok.png",
+            "instruction": "edit",
+            "semantics_score": 8.0,
+            "quality_score": 7.0,
+            "overall_score": math.sqrt(56.0),
+            "intersection_exist": True,
+            "instruction_language": item["instruction_language"],
+        }
+
+    monkeypatch.setattr(GEditBenchEvaluator, "_evaluate_one", fake_evaluate_one)
+    monkeypatch.setattr(
+        "benchmarks.accuracy.image_to_image.gedit_bench._utc_timestamp",
+        lambda: "20260325T120000Z",
+    )
+
+    payload = evaluator.evaluate(
+        model_name="demo",
+        save_dir=tmp_path / "scores",
+        instruction_language="en",
+        workers=1,
+    )
+
+    assert len(payload["results"]) == 1
+    assert payload["results"][0]["key"] == "ok"
+    assert payload["summary"]["overall"]["count"] == 1
+    assert Path(payload["csv_path"]).name == "demo_all_en_vie_score.csv"
+    assert Path(payload["summary_path"]).name == "demo_all_en_summary.json"
+    assert Path(payload["timestamped_csv_path"]).name == "demo_all_en_vie_score_20260325T120000Z.csv"
+    assert Path(payload["timestamped_summary_path"]).name == "demo_all_en_summary_20260325T120000Z.json"
+    assert Path(payload["timestamped_csv_path"]).exists()
+    assert Path(payload["timestamped_summary_path"]).exists()
+
+
 def test_summarize_gedit_rows_computes_group_and_intersection_means():
     rows = []
     for group in GEDIT_GROUPS:
@@ -436,7 +550,7 @@ def test_summarize_gedit_rows_computes_group_and_intersection_means():
             {
                 "task_type": group,
                 "instruction_language": "en",
-                "sementics_score": 8.0,
+                "semantics_score": 8.0,
                 "quality_score": 9.0,
                 "intersection_exist": True,
             }
@@ -445,7 +559,7 @@ def test_summarize_gedit_rows_computes_group_and_intersection_means():
             {
                 "task_type": group,
                 "instruction_language": "en",
-                "sementics_score": 6.0,
+                "semantics_score": 6.0,
                 "quality_score": 4.0,
                 "intersection_exist": False,
             }
@@ -467,7 +581,7 @@ def test_summarize_gedit_rows_uses_macro_average_across_groups():
             {
                 "task_type": "background_change",
                 "instruction_language": "en",
-                "sementics_score": 10.0,
+                "semantics_score": 10.0,
                 "quality_score": 10.0,
                 "intersection_exist": True,
             }
@@ -477,7 +591,7 @@ def test_summarize_gedit_rows_uses_macro_average_across_groups():
             {
                 "task_type": group,
                 "instruction_language": "en",
-                "sementics_score": 1.0,
+                "semantics_score": 1.0,
                 "quality_score": 1.0,
                 "intersection_exist": True,
             }
@@ -498,7 +612,7 @@ def test_summarize_gedit_rows_with_all_language_splits_en_and_cn():
             {
                 "task_type": group,
                 "instruction_language": "en",
-                "sementics_score": 8.0,
+                "semantics_score": 8.0,
                 "quality_score": 6.0,
                 "intersection_exist": True,
             }
@@ -507,7 +621,7 @@ def test_summarize_gedit_rows_with_all_language_splits_en_and_cn():
             {
                 "task_type": group,
                 "instruction_language": "cn",
-                "sementics_score": 4.0,
+                "semantics_score": 4.0,
                 "quality_score": 2.0,
                 "intersection_exist": True,
             }

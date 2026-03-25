@@ -3,10 +3,12 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 import math
 import statistics
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -35,6 +37,7 @@ GROUPS = [
     "tone_transfer",
 ]
 DEFAULT_SAMPLES_PER_GROUP = 10
+logger = logging.getLogger(__name__)
 
 
 def infer_model_name(model: str) -> str:
@@ -74,6 +77,10 @@ def parse_score_payload(raw_text: str) -> dict[str, Any]:
         score = [score]
     parsed["score"] = [int(value) for value in score]
     return parsed
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
 def summarize_generated_records(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -192,9 +199,9 @@ def _summarize_gedit_rows_single_language(
 
     for group in GROUPS:
         group_rows = [row for row in filtered_rows if row.get("task_type") == group]
-        semantics = [float(row["sementics_score"]) for row in group_rows]
+        semantics = [float(row["semantics_score"]) for row in group_rows]
         quality = [float(row["quality_score"]) for row in group_rows]
-        overall = [math.sqrt(float(row["sementics_score"]) * float(row["quality_score"])) for row in group_rows]
+        overall = [math.sqrt(float(row["semantics_score"]) * float(row["quality_score"])) for row in group_rows]
 
         per_group[group] = {
             "count": len(group_rows),
@@ -204,10 +211,10 @@ def _summarize_gedit_rows_single_language(
         }
 
         intersection_rows = [row for row in group_rows if _to_bool(row.get("intersection_exist", False))]
-        intersection_semantics = [float(row["sementics_score"]) for row in intersection_rows]
+        intersection_semantics = [float(row["semantics_score"]) for row in intersection_rows]
         intersection_quality = [float(row["quality_score"]) for row in intersection_rows]
         intersection_overall = [
-            math.sqrt(float(row["sementics_score"]) * float(row["quality_score"])) for row in intersection_rows
+            math.sqrt(float(row["semantics_score"]) * float(row["quality_score"])) for row in intersection_rows
         ]
         intersection_group[group] = {
             "count": len(intersection_rows),
@@ -363,7 +370,7 @@ class LocalVIEScorer:
         quality = float(min(pq_payload["score"])) if pq_payload["score"] else 0.0
         overall = math.sqrt(semantics * quality)
         return {
-            "sementics_score": semantics,
+            "semantics_score": semantics,
             "quality_score": quality,
             "overall_score": overall,
         }
@@ -417,18 +424,25 @@ class GEditBenchRunner:
         outputs: list[dict[str, Any]] = []
         if workers <= 1:
             for item in rows:
-                result = self._generate_one(model_name, item)
+                result = self._safe_generate_one(model_name, item)
                 if result:
                     outputs.append(result)
             return outputs
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(self._generate_one, model_name, item) for item in rows]
+            futures = [executor.submit(self._safe_generate_one, model_name, item) for item in rows]
             for future in as_completed(futures):
                 result = future.result()
                 if result:
                     outputs.append(result)
         return outputs
+
+    def _safe_generate_one(self, model_name: str, item: dict[str, Any]) -> dict[str, Any] | None:
+        try:
+            return self._generate_one(model_name, item)
+        except Exception:
+            logger.exception("Failed to generate GEdit-Bench sample %s", item.get("key", "<unknown>"))
+            return None
 
     def _generate_one(self, model_name: str, item: dict[str, Any]) -> dict[str, Any] | None:
         output_path = (
@@ -498,44 +512,69 @@ class GEditBenchEvaluator:
         results: list[dict[str, Any]] = []
         if workers <= 1:
             for item in rows:
-                result = self._evaluate_one(model_name, item)
+                result = self._safe_evaluate_one(model_name, item)
                 if result:
                     results.append(result)
         else:
             with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures = [executor.submit(self._evaluate_one, model_name, item) for item in rows]
+                futures = [executor.submit(self._safe_evaluate_one, model_name, item) for item in rows]
                 for future in as_completed(futures):
                     result = future.result()
                     if result:
                         results.append(result)
 
         save_dir.mkdir(parents=True, exist_ok=True)
-        csv_path = save_dir / f"{model_name}_{task_type}_{instruction_language}_vie_score.csv"
-        with csv_path.open("w", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(
-                handle,
-                fieldnames=[
-                    "key",
-                    "task_type",
-                    "edited_image",
-                    "instruction",
-                    "sementics_score",
-                    "quality_score",
-                    "overall_score",
-                    "intersection_exist",
-                    "instruction_language",
-                ],
-            )
-            writer.writeheader()
-            for row in results:
-                writer.writerow(row)
+        base_name = f"{model_name}_{task_type}_{instruction_language}"
+        timestamp = _utc_timestamp()
+        csv_path = save_dir / f"{base_name}_vie_score.csv"
+        timestamped_csv_path = save_dir / f"{base_name}_vie_score_{timestamp}.csv"
+
+        def _write_csv(path: Path) -> None:
+            with path.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=[
+                        "key",
+                        "task_type",
+                        "edited_image",
+                        "instruction",
+                        "semantics_score",
+                        "quality_score",
+                        "overall_score",
+                        "intersection_exist",
+                        "instruction_language",
+                    ],
+                )
+                writer.writeheader()
+                for row in results:
+                    writer.writerow(row)
+
+        _write_csv(csv_path)
+        _write_csv(timestamped_csv_path)
 
         summary = summarize_gedit_rows_with_backbone(
             results,
             language=instruction_language,
         )
-        write_json(save_dir / f"{model_name}_{task_type}_{instruction_language}_summary.json", summary)
-        return {"results": results, "summary": summary, "csv_path": str(csv_path)}
+        summary_path = save_dir / f"{base_name}_summary.json"
+        timestamped_summary_path = save_dir / f"{base_name}_summary_{timestamp}.json"
+        write_json(summary_path, summary)
+        write_json(timestamped_summary_path, summary)
+        return {
+            "results": results,
+            "summary": summary,
+            "csv_path": str(csv_path),
+            "summary_path": str(summary_path),
+            "timestamped_csv_path": str(timestamped_csv_path),
+            "timestamped_summary_path": str(timestamped_summary_path),
+        }
+
+    def _safe_evaluate_one(self, model_name: str, item: dict[str, Any]) -> dict[str, Any] | None:
+        try:
+            return self._evaluate_one(model_name, item)
+        except Exception:
+            logger.exception("Failed to evaluate GEdit-Bench sample %s", item.get("key", "<unknown>"))
+            return None
 
     def _evaluate_one(self, model_name: str, item: dict[str, Any]) -> dict[str, Any] | None:
         edited_image_path = (
@@ -557,7 +596,7 @@ class GEditBenchEvaluator:
             "task_type": item["task_type"],
             "edited_image": str(edited_image_path),
             "instruction": item["instruction"],
-            "sementics_score": scores["sementics_score"],
+            "semantics_score": scores["semantics_score"],
             "quality_score": scores["quality_score"],
             "overall_score": scores["overall_score"],
             "intersection_exist": item.get("Intersection_exist", False),

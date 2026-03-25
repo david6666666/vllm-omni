@@ -6,6 +6,7 @@ import statistics
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,17 @@ TYPE_TO_FOLDER = {
 }
 SCORE_KEYS = ("goal", "logic", "cons", "ui", "qual")
 DEFAULT_SAMPLES_PER_TYPE = 10
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _write_json_with_timestamp(path: Path, payload: dict[str, Any]) -> Path:
+    write_json(path, payload)
+    timestamped_path = path.with_name(f"{path.stem}_{_utc_timestamp()}{path.suffix}")
+    write_json(timestamped_path, payload)
+    return timestamped_path
 
 
 @dataclass(frozen=True)
@@ -460,7 +472,17 @@ class LocalJudgeClient:
                 "Return only the JSON object with integer scores."
             )
             retry_text = self._request_text(retry_prompt, images)
-            return extract_json_object(retry_text)
+            try:
+                return extract_json_object(retry_text)
+            except ValueError:
+                return {
+                    "goal": 0,
+                    "logic": 0,
+                    "cons": 0,
+                    "ui": 0,
+                    "qual": 0,
+                    "reasoning": retry_text.strip() or text.strip() or "Judge response was not valid JSON.",
+                }
 
 
 class GEBenchRunner:
@@ -880,7 +902,7 @@ def main(argv: list[str] | None = None) -> int:
                 samples_per_type=args.samples_per_type,
             )
             combined_results.extend(payload["results"])
-        write_json(
+        _write_json_with_timestamp(
             args.output_root / "evaluations" / "summary.json",
             {"summary": summarize_gebench_results(combined_results)},
         )
@@ -897,7 +919,7 @@ def main(argv: list[str] | None = None) -> int:
         payload: dict[str, Any] = {"generation": generation_summary}
         if result_records:
             payload["evaluation"] = summarize_gebench_results(result_records)
-        write_json(args.output_root / "summary.json", payload)
+        _write_json_with_timestamp(args.output_root / "summary.json", payload)
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
 
