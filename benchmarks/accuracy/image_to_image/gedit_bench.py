@@ -15,6 +15,7 @@ from typing import Any
 
 import requests
 from PIL import Image
+from tqdm.auto import tqdm
 
 from benchmarks.accuracy.common import (
     VllmOmniImageClient,
@@ -422,19 +423,24 @@ class GEditBenchRunner:
             rows = rows[:max_samples]
 
         outputs: list[dict[str, Any]] = []
+        total = len(rows)
         if workers <= 1:
-            for item in rows:
-                result = self._safe_generate_one(model_name, item)
-                if result:
-                    outputs.append(result)
+            with tqdm(total=total, desc="GEdit generate", unit="sample") as progress:
+                for item in rows:
+                    result = self._safe_generate_one(model_name, item)
+                    if result:
+                        outputs.append(result)
+                    progress.update(1)
             return outputs
 
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(self._safe_generate_one, model_name, item) for item in rows]
-            for future in as_completed(futures):
-                result = future.result()
-                if result:
-                    outputs.append(result)
+        with tqdm(total=total, desc="GEdit generate", unit="sample") as progress:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = [executor.submit(self._safe_generate_one, model_name, item) for item in rows]
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result:
+                        outputs.append(result)
+                    progress.update(1)
         return outputs
 
     def _safe_generate_one(self, model_name: str, item: dict[str, Any]) -> dict[str, Any] | None:
@@ -510,18 +516,23 @@ class GEditBenchEvaluator:
             rows = rows[:max_samples]
 
         results: list[dict[str, Any]] = []
+        total = len(rows)
         if workers <= 1:
-            for item in rows:
-                result = self._safe_evaluate_one(model_name, item)
-                if result:
-                    results.append(result)
-        else:
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures = [executor.submit(self._safe_evaluate_one, model_name, item) for item in rows]
-                for future in as_completed(futures):
-                    result = future.result()
+            with tqdm(total=total, desc="GEdit evaluate", unit="sample") as progress:
+                for item in rows:
+                    result = self._safe_evaluate_one(model_name, item)
                     if result:
                         results.append(result)
+                    progress.update(1)
+        else:
+            with tqdm(total=total, desc="GEdit evaluate", unit="sample") as progress:
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures = [executor.submit(self._safe_evaluate_one, model_name, item) for item in rows]
+                    for future in as_completed(futures):
+                        result = future.result()
+                        if result:
+                            results.append(result)
+                        progress.update(1)
 
         save_dir.mkdir(parents=True, exist_ok=True)
         base_name = f"{model_name}_{task_type}_{instruction_language}"

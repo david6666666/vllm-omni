@@ -486,13 +486,59 @@ def test_gedit_runner_generate_skips_failed_samples(monkeypatch, tmp_path: Path)
     def fake_generate_one(self, model_name, item):
         if item["key"] == "bad":
             raise RuntimeError("boom")
-        return {"key": item["key"], "task_type": item["task_type"], "instruction_language": item["instruction_language"]}
+        return {
+            "key": item["key"],
+            "task_type": item["task_type"],
+            "instruction_language": item["instruction_language"],
+        }
 
     monkeypatch.setattr(GEditBenchRunner, "_generate_one", fake_generate_one)
 
     outputs = runner.generate(model_name="demo", workers=1)
 
     assert outputs == [{"key": "ok", "task_type": "background_change", "instruction_language": "en"}]
+
+
+def test_gedit_runner_uses_tqdm_progress(monkeypatch, tmp_path: Path):
+    rows = [
+        {"key": "one", "task_type": "background_change", "instruction_language": "en"},
+        {"key": "two", "task_type": "background_change", "instruction_language": "en"},
+    ]
+    updates = []
+
+    monkeypatch.setattr("benchmarks.accuracy.image_to_image.gedit_bench._load_gedit_dataset", lambda ref: rows)
+    runner = GEditBenchRunner(
+        dataset_ref="dataset",
+        output_root=tmp_path,
+        base_url="http://127.0.0.1:8093",
+        model="model",
+    )
+
+    def fake_generate_one(self, model_name, item):
+        return {"key": item["key"], "task_type": item["task_type"], "instruction_language": item["instruction_language"]}
+
+    monkeypatch.setattr(GEditBenchRunner, "_generate_one", fake_generate_one)
+
+    class FakeTqdm:
+        def __init__(self, total, desc, unit):
+            self.total = total
+            self.desc = desc
+            self.unit = unit
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def update(self, value):
+            updates.append(value)
+
+    monkeypatch.setattr("benchmarks.accuracy.image_to_image.gedit_bench.tqdm", FakeTqdm)
+
+    runner.generate(model_name="demo", workers=1)
+
+    assert updates == [1, 1]
 
 
 def test_gedit_evaluator_skips_failed_samples(monkeypatch, tmp_path: Path):
