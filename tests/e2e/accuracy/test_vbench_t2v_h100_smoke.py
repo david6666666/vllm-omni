@@ -19,7 +19,7 @@ from tests.utils import hardware_test
 @pytest.mark.benchmark
 @pytest.mark.diffusion
 @hardware_test(res={"cuda": "H100"}, num_cards=1)
-def test_vbench_t2v_l4_smoke(
+def test_vbench_t2v_h100_smoke(
     vbench_t2v_server,
     vbench_root: Path,
     accuracy_artifact_root: Path,
