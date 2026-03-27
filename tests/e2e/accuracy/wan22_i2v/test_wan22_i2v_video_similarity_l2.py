@@ -6,13 +6,16 @@ import re
 import shutil
 import subprocess
 import sys
+from base64 import b64decode, b64encode
 from fractions import Fraction
+from mimetypes import guess_type
 from pathlib import Path
 from typing import Any
 
 import pytest
 import requests
 import torch
+from PIL import Image
 
 from tests.conftest import OmniServerParams
 from tests.e2e.accuracy.wan22_i2v.wan22_i2v_video_similarity_common import (
@@ -76,6 +79,7 @@ def test_build_diffusers_command_uses_torchrun_and_runner_path(tmp_path: Path) -
     runner_path = tmp_path / "run_wan22_i2v_diffusers_cp.py"
     command = _build_diffusers_command(
         runner_path=runner_path,
+        image_source=RABBIT_IMAGE_URL,
         output_path=tmp_path / "offline.mp4",
         metadata_path=tmp_path / "offline.json",
     )
@@ -92,12 +96,32 @@ def test_build_diffusers_command_uses_torchrun_and_runner_path(tmp_path: Path) -
     assert "--metadata-output" in command
 
 
+def test_resolve_image_source_prefers_existing_local_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    image_path = tmp_path / "rabbit.png"
+    Image.new("RGB", (8, 8), color=(255, 128, 64)).save(image_path)
+    monkeypatch.setenv(IMAGE_SOURCE_ENV, str(image_path))
+
+    assert _resolve_image_source() == str(image_path.resolve())
+
+
+def test_build_online_image_reference_uses_data_url_for_local_path(tmp_path: Path) -> None:
+    image_path = tmp_path / "rabbit.png"
+    Image.new("RGB", (4, 2), color=(10, 20, 30)).save(image_path)
+
+    reference = _build_online_image_reference(str(image_path))
+
+    assert reference.startswith("data:image/png;base64,")
+    encoded = reference.split(",", 1)[1]
+    assert len(b64decode(encoded)) > 0
+
+
 REPO_ROOT = Path(__file__).resolve().parents[4]
 WORKSPACE_ROOT = REPO_ROOT.parent
 RUNNER_PATH = Path(__file__).with_name("run_wan22_i2v_diffusers_cp.py")
 VIDEO_TIMEOUT_SECONDS = 60 * 60
 _SSIM_RE = re.compile(r"All:(?P<score>[0-9.]+)")
 _PSNR_RE = re.compile(r"average:(?P<score>[0-9.]+)")
+IMAGE_SOURCE_ENV = "VLLM_TEST_WAN22_I2V_IMAGE_SOURCE"
 
 SERVER_CASES = [
     pytest.param(
@@ -162,6 +186,7 @@ def _probe_binary(binary: str) -> str:
 def _build_diffusers_command(
     *,
     runner_path: Path,
+    image_source: str,
     output_path: Path,
     metadata_path: Path,
 ) -> list[str]:
@@ -174,8 +199,8 @@ def _build_diffusers_command(
         str(runner_path),
         "--model",
         MODEL_NAME,
-        "--image-url",
-        RABBIT_IMAGE_URL,
+        "--image-source",
+        image_source,
         "--prompt",
         PROMPT,
         "--negative-prompt",
@@ -217,9 +242,37 @@ def _runner_env() -> dict[str, str]:
     return env
 
 
-def _fetch_remote_image(url: str) -> None:
-    response = requests.get(url, timeout=60)
-    response.raise_for_status()
+def _resolve_image_source() -> str:
+    configured = os.environ.get(IMAGE_SOURCE_ENV, RABBIT_IMAGE_URL)
+    candidate = Path(configured)
+    if candidate.exists():
+        return str(candidate.resolve())
+    return configured
+
+
+def _is_remote_image_source(source: str) -> bool:
+    return source.startswith("http://") or source.startswith("https://")
+
+
+def _validate_image_source(source: str) -> None:
+    if _is_remote_image_source(source):
+        response = requests.get(source, timeout=60)
+        response.raise_for_status()
+        return
+
+    image_path = Path(source)
+    if not image_path.exists():
+        raise FileNotFoundError(f"Local image source does not exist: {image_path}")
+
+
+def _build_online_image_reference(source: str) -> str:
+    if _is_remote_image_source(source) or source.startswith("data:image"):
+        return source
+
+    image_path = Path(source)
+    mime_type = guess_type(image_path.name)[0] or "image/png"
+    encoded = b64encode(image_path.read_bytes()).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
 
 
 def _probe_video(path: Path) -> dict[str, int | float]:
@@ -285,7 +338,8 @@ def test_wan22_i2v_serving_matches_diffusers_video_similarity(
     if not RUNNER_PATH.exists():
         raise AssertionError(f"Offline diffusers runner does not exist: {RUNNER_PATH}")
 
-    _fetch_remote_image(RABBIT_IMAGE_URL)
+    image_source = _resolve_image_source()
+    _validate_image_source(image_source)
 
     online_path = tmp_path / "online.mp4"
     offline_path = tmp_path / "offline.mp4"
@@ -305,7 +359,7 @@ def test_wan22_i2v_serving_matches_diffusers_video_similarity(
             "num_inference_steps": NUM_INFERENCE_STEPS,
             "seed": SEED,
         },
-        "image_reference": RABBIT_IMAGE_URL,
+        "image_reference": _build_online_image_reference(image_source),
     }
     online_response = openai_client.send_video_diffusion_request(request_config)[0]
     assert online_response.videos is not None and len(online_response.videos) == 1
@@ -313,6 +367,7 @@ def test_wan22_i2v_serving_matches_diffusers_video_similarity(
 
     command = _build_diffusers_command(
         runner_path=RUNNER_PATH,
+        image_source=image_source,
         output_path=offline_path,
         metadata_path=offline_metadata_path,
     )

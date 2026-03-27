@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 from io import BytesIO
@@ -25,7 +26,7 @@ from tests.e2e.accuracy.wan22_i2v.wan22_i2v_video_similarity_common import BOUND
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Wan2.2 I2V diffusers context-parallel offline generation.")
     parser.add_argument("--model", required=True)
-    parser.add_argument("--image-url", required=True)
+    parser.add_argument("--image-source", required=True)
     parser.add_argument("--prompt", required=True)
     parser.add_argument("--negative-prompt", required=True)
     parser.add_argument("--size", required=True)
@@ -46,8 +47,20 @@ def _parse_size(size: str) -> tuple[int, int]:
     return int(width_str), int(height_str)
 
 
-def _download_image(url: str) -> Image.Image:
-    response = requests.get(url, timeout=60)
+def _load_image(source: str) -> Image.Image:
+    if source.startswith("data:image"):
+        _, encoded = source.split(",", 1)
+        image = Image.open(BytesIO(base64.b64decode(encoded)))
+        image.load()
+        return image.convert("RGB")
+
+    source_path = Path(source)
+    if source_path.exists():
+        image = Image.open(source_path)
+        image.load()
+        return image.convert("RGB")
+
+    response = requests.get(source, timeout=60)
     response.raise_for_status()
     image = Image.open(BytesIO(response.content))
     image.load()
@@ -71,7 +84,7 @@ def _write_metadata(path: Path, *, args: argparse.Namespace, frame_count: int) -
     width, height = _parse_size(args.size)
     payload = {
         "model": args.model,
-        "image_url": args.image_url,
+        "image_source": args.image_source,
         "size": args.size,
         "width": width,
         "height": height,
@@ -125,7 +138,7 @@ def main() -> int:
         pipe.set_progress_bar_config(disable=local_rank != 0)
 
         width, height = _parse_size(args.size)
-        input_image = _download_image(args.image_url)
+        input_image = _load_image(args.image_source)
         generator = torch.Generator(device=device.type).manual_seed(args.seed)
 
         result = pipe(
