@@ -728,9 +728,7 @@ def test_image_edit_rejects_multiple_images_when_model_does_not_support_them(asy
     )
 
     assert response.status_code == 400
-    assert (
-        response.json()["detail"] == "Received multiple input images. Only a single image is supported by this model."
-    )
+    assert response.json()["detail"] == "Received multiple input images. Only a single image is supported by this model."
     assert engine.captured_prompt is None
 
 
