@@ -160,9 +160,16 @@ def test_send_video_request_with_timeout_uses_600_seconds(monkeypatch: pytest.Mo
     assert client.wait_args == ("video_123", 2, 600)
 
 
+def test_artifact_dir_is_under_repo_result_folder(tmp_path: Path) -> None:
+    artifact_dir = _artifact_dir(tmp_path)
+
+    assert artifact_dir == Path(__file__).parent / "result" / tmp_path.name
+
+
 REPO_ROOT = Path(__file__).resolve().parents[4]
 WORKSPACE_ROOT = REPO_ROOT.parent
 RUNNER_PATH = Path(__file__).with_name("run_wan22_i2v_diffusers_cp.py")
+RESULT_ROOT = Path(__file__).parent / "result"
 VIDEO_TIMEOUT_SECONDS = 60 * 60
 _SSIM_RE = re.compile(r"All:(?P<score>[0-9.]+)")
 _PSNR_RE = re.compile(r"average:(?P<score>[0-9.]+)")
@@ -366,6 +373,10 @@ def _run_ffmpeg_similarity(filter_name: str, first: Path, second: Path) -> str:
     return result.stderr
 
 
+def _artifact_dir(tmp_path: Path) -> Path:
+    return RESULT_ROOT / tmp_path.name
+
+
 def _send_video_request_with_timeout(
     openai_client,
     request_config: dict[str, Any],
@@ -435,9 +446,12 @@ def test_wan22_i2v_serving_matches_diffusers_video_similarity(
     image_source = _resolve_image_source()
     _validate_image_source(image_source)
 
-    online_path = tmp_path / "online.mp4"
-    offline_path = tmp_path / "offline.mp4"
-    offline_metadata_path = tmp_path / "offline_metadata.json"
+    artifact_dir = _artifact_dir(tmp_path)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    online_path = artifact_dir / "online.mp4"
+    offline_path = artifact_dir / "offline.mp4"
+    offline_metadata_path = artifact_dir / "offline_metadata.json"
 
     request_config = {
         "model": omni_server.model,
