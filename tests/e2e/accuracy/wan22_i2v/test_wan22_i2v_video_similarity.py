@@ -528,29 +528,6 @@ def _generate_offline_video(*, image_source: str) -> tuple[Path, Path]:
     return offline_path, offline_metadata_path
 
 
-def _ensure_online_video(
-    *,
-    omni_server,
-    openai_client,
-    image_source: str,
-) -> Path:
-    online_path, _, _ = _artifact_paths(image_source)
-    if online_path.exists():
-        return online_path
-    return _generate_online_video(
-        omni_server=omni_server,
-        openai_client=openai_client,
-        image_source=image_source,
-    )
-
-
-def _ensure_offline_video(*, image_source: str) -> tuple[Path, Path]:
-    _, offline_path, offline_metadata_path = _artifact_paths(image_source)
-    if offline_path.exists() and offline_metadata_path.exists():
-        return offline_path, offline_metadata_path
-    return _generate_offline_video(image_source=image_source)
-
-
 @pytest.mark.advanced_model
 @pytest.mark.benchmark
 @pytest.mark.diffusion
@@ -590,7 +567,7 @@ def test_wan22_i2v_online_serving_generates_video(
     _probe_binary("ffprobe")
     image_source = _resolve_image_source()
     _validate_image_source(image_source)
-    online_path = _ensure_online_video(
+    online_path = _generate_online_video(
         omni_server=omni_server,
         openai_client=openai_client,
         image_source=image_source,
@@ -607,11 +584,7 @@ def test_wan22_i2v_online_serving_generates_video(
 @pytest.mark.benchmark
 @pytest.mark.diffusion
 @hardware_test(res={"cuda": "H100"}, num_cards=2)
-@pytest.mark.parametrize("omni_server", SERVER_CASES, indirect=True)
-def test_wan22_i2v_serving_matches_diffusers_video_similarity(
-    omni_server,
-    openai_client,
-) -> None:
+def test_wan22_i2v_serving_matches_diffusers_video_similarity() -> None:
     if not torch.cuda.is_available() or torch.cuda.device_count() < 2:
         pytest.skip("Wan2.2 I2V similarity e2e test requires >= 2 CUDA GPUs.")
 
@@ -622,12 +595,15 @@ def test_wan22_i2v_serving_matches_diffusers_video_similarity(
 
     image_source = _resolve_image_source()
     _validate_image_source(image_source)
-    offline_path, offline_metadata_path = _ensure_offline_video(image_source=image_source)
-    online_path = _ensure_online_video(
-        omni_server=omni_server,
-        openai_client=openai_client,
-        image_source=image_source,
-    )
+    online_path, offline_path, offline_metadata_path = _artifact_paths(image_source)
+
+    if not online_path.exists():
+        pytest.skip(f"Missing online artifact from prerequisite test: {online_path}")
+    if not offline_path.exists() or not offline_metadata_path.exists():
+        pytest.skip(
+            "Missing offline artifacts from prerequisite test: "
+            f"{offline_path}, {offline_metadata_path}"
+        )
 
     assert online_path.exists(), f"Expected online video artifact at {online_path}"
     assert offline_path.exists(), f"Expected offline video artifact at {offline_path}"
