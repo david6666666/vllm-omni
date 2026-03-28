@@ -530,9 +530,10 @@ def _ensure_offline_video(*, image_source: str) -> tuple[Path, Path]:
     return _generate_offline_video(image_source=image_source)
 
 
-@pytest.mark.core_model
+@pytest.mark.advanced_model
+@pytest.mark.benchmark
 @pytest.mark.diffusion
-@hardware_test(res={"cuda": "L4"}, num_cards=2)
+@hardware_test(res={"cuda": "H100"}, num_cards=2)
 def test_wan22_i2v_diffusers_offline_generates_video() -> None:
     if not torch.cuda.is_available() or torch.cuda.device_count() < 2:
         pytest.skip("Wan2.2 I2V diffusers offline test requires >= 2 CUDA GPUs.")
@@ -553,9 +554,10 @@ def test_wan22_i2v_diffusers_offline_generates_video() -> None:
     assert offline_metadata["frame_count"] == NUM_FRAMES
 
 
-@pytest.mark.core_model
+@pytest.mark.advanced_model
+@pytest.mark.benchmark
 @pytest.mark.diffusion
-@hardware_test(res={"cuda": "L4"}, num_cards=2)
+@hardware_test(res={"cuda": "H100"}, num_cards=2)
 @pytest.mark.parametrize("omni_server", SERVER_CASES, indirect=True)
 def test_wan22_i2v_online_serving_generates_video(
     omni_server,
@@ -580,9 +582,10 @@ def test_wan22_i2v_online_serving_generates_video(
     assert online_metadata["frame_count"] == NUM_FRAMES
 
 
-@pytest.mark.core_model
+@pytest.mark.advanced_model
+@pytest.mark.benchmark
 @pytest.mark.diffusion
-@hardware_test(res={"cuda": "L4"}, num_cards=2)
+@hardware_test(res={"cuda": "H100"}, num_cards=2)
 @pytest.mark.parametrize("omni_server", SERVER_CASES, indirect=True)
 def test_wan22_i2v_serving_matches_diffusers_video_similarity(
     omni_server,
