@@ -40,6 +40,10 @@ def _parse_size(size: str) -> tuple[int, int]:
     return int(width_str), int(height_str)
 
 
+def _offline_cuda_device() -> torch.device:
+    return torch.device("cuda:0")
+
+
 def _load_input_image(source: str) -> Image.Image:
     if source.startswith("data:image"):
         _, encoded = source.split(",", 1)
@@ -110,7 +114,7 @@ def _write_metadata(
 
 def main() -> int:
     args = _parse_args()
-    device = torch.device("cuda")
+    device = _offline_cuda_device()
     torch.cuda.set_device(device)
 
     pipe = WanImageToVideoPipeline.from_pretrained(args.model, torch_dtype=torch.bfloat16)

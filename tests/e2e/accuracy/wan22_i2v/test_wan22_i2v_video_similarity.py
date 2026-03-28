@@ -22,6 +22,7 @@ import torch
 from PIL import Image
 
 from tests.conftest import OmniServerParams
+from tests.e2e.accuracy.wan22_i2v.run_wan22_i2v_diffusers_cp import _offline_cuda_device
 from tests.e2e.accuracy.wan22_i2v.wan22_i2v_video_similarity_common import (
     FLOW_SHIFT,
     FPS,
@@ -169,6 +170,10 @@ def test_artifact_dir_is_under_repo_result_folder(tmp_path: Path) -> None:
 
     assert artifact_dir.parent == Path(__file__).parent / "result"
     assert artifact_dir.name.startswith("rabbit-")
+
+
+def test_offline_cuda_device_uses_indexed_cuda_device() -> None:
+    assert _offline_cuda_device() == torch.device("cuda:0")
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
