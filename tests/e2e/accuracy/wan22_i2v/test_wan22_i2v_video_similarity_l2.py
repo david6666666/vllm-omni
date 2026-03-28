@@ -79,7 +79,7 @@ def test_parse_psnr_summary_extracts_average_score() -> None:
     assert _parse_psnr_score(output) == 32.148004
 
 
-def test_build_diffusers_command_uses_python_runner_path(tmp_path: Path) -> None:
+def test_build_diffusers_command_uses_torchrun_and_runner_path(tmp_path: Path) -> None:
     runner_path = tmp_path / "run_wan22_i2v_diffusers_cp.py"
     command = _build_diffusers_command(
         runner_path=runner_path,
@@ -88,10 +88,14 @@ def test_build_diffusers_command_uses_python_runner_path(tmp_path: Path) -> None
         metadata_path=tmp_path / "offline.json",
     )
 
-    assert command[:2] == [
+    assert command[:5] == [
         sys.executable,
-        str(runner_path),
+        "-m",
+        "torch.distributed.run",
+        "--nproc-per-node",
+        "2",
     ]
+    assert command[5] == str(runner_path)
     assert "--output" in command
     assert "--metadata-output" in command
 
@@ -250,6 +254,10 @@ def _build_diffusers_command(
 ) -> list[str]:
     return [
         sys.executable,
+        "-m",
+        "torch.distributed.run",
+        "--nproc-per-node",
+        "2",
         str(runner_path),
         "--model",
         MODEL_NAME,
@@ -524,10 +532,10 @@ def _ensure_offline_video(*, image_source: str) -> tuple[Path, Path]:
 
 @pytest.mark.core_model
 @pytest.mark.diffusion
-@hardware_test(res={"cuda": "L4"})
+@hardware_test(res={"cuda": "L4"}, num_cards=2)
 def test_wan22_i2v_diffusers_offline_generates_video() -> None:
-    if not torch.cuda.is_available():
-        pytest.skip("Wan2.2 I2V diffusers offline test requires CUDA.")
+    if not torch.cuda.is_available() or torch.cuda.device_count() < 2:
+        pytest.skip("Wan2.2 I2V diffusers offline test requires >= 2 CUDA GPUs.")
 
     _probe_binary("ffprobe")
     if not RUNNER_PATH.exists():
@@ -539,8 +547,8 @@ def test_wan22_i2v_diffusers_offline_generates_video() -> None:
     assert offline_path.exists(), f"Expected offline video artifact at {offline_path}"
     assert offline_metadata_path.exists(), f"Expected offline metadata artifact at {offline_metadata_path}"
     offline_metadata = _probe_video(offline_path)
-    assert offline_metadata["width"] > 0
-    assert offline_metadata["height"] > 0
+    assert offline_metadata["width"] == WIDTH
+    assert offline_metadata["height"] == HEIGHT
     assert offline_metadata["fps"] == float(FPS)
     assert offline_metadata["frame_count"] == NUM_FRAMES
 
