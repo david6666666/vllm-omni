@@ -6,8 +6,10 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from base64 import b64decode, b64encode
 from fractions import Fraction
+from io import BytesIO
 from mimetypes import guess_type
 from pathlib import Path
 from typing import Any
@@ -113,6 +115,49 @@ def test_build_online_image_reference_uses_data_url_for_local_path(tmp_path: Pat
     assert reference.startswith("data:image/png;base64,")
     encoded = reference.split(",", 1)[1]
     assert len(b64decode(encoded)) > 0
+
+
+def test_send_video_request_with_timeout_uses_600_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    class DummyResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, str]:
+            return {"id": "video_123"}
+
+    class DummyClient:
+        def __init__(self) -> None:
+            self.run_level = "core_model"
+            self.wait_args: tuple[str, int, int] | None = None
+
+        def _build_url(self, path: str) -> str:
+            return f"http://localhost:8000{path}"
+
+        def _wait_until_video_completed(
+            self,
+            video_id: str,
+            poll_interval_seconds: int = 2,
+            timeout_seconds: int = 300,
+        ) -> None:
+            self.wait_args = (video_id, poll_interval_seconds, timeout_seconds)
+
+        def _download_video_content(self, video_id: str) -> bytes:
+            return b"video-bytes"
+
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: DummyResponse())
+
+    client = DummyClient()
+    result = _send_video_request_with_timeout(
+        client,
+        {
+            "form_data": {"prompt": "test"},
+            "image_reference": RABBIT_IMAGE_URL,
+        },
+        timeout_seconds=600,
+    )
+
+    assert result == b"video-bytes"
+    assert client.wait_args == ("video_123", 2, 600)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -321,6 +366,55 @@ def _run_ffmpeg_similarity(filter_name: str, first: Path, second: Path) -> str:
     return result.stderr
 
 
+def _send_video_request_with_timeout(
+    openai_client,
+    request_config: dict[str, Any],
+    *,
+    timeout_seconds: int,
+) -> bytes:
+    form_data = request_config.get("form_data")
+    if not isinstance(form_data, dict):
+        raise ValueError("Video request_config must contain 'form_data'")
+
+    if not form_data.get("prompt"):
+        raise ValueError("Video request_config['form_data'] must contain 'prompt'")
+
+    normalized_form_data = {key: str(value) for key, value in form_data.items() if value is not None}
+
+    files: dict[str, tuple[str, BytesIO, str]] = {}
+    image_reference = request_config.get("image_reference")
+    if image_reference:
+        if image_reference.startswith("data:image"):
+            header, encoded = image_reference.split(",", 1)
+            content_type = header.split(";")[0].removeprefix("data:")
+            extension = content_type.split("/")[-1]
+            file_data = b64decode(encoded)
+            files["input_reference"] = (
+                f"reference.{extension}",
+                BytesIO(file_data),
+                content_type,
+            )
+        else:
+            normalized_form_data["image_reference"] = json.dumps({"image_url": image_reference})
+
+    start_time = time.perf_counter()
+    create_url = openai_client._build_url("/v1/videos")
+    response = requests.post(
+        create_url,
+        data=normalized_form_data,
+        files=files,
+        headers={"Accept": "application/json"},
+        timeout=60,
+    )
+    response.raise_for_status()
+    job_data = response.json()
+    video_id = job_data["id"]
+    openai_client._wait_until_video_completed(video_id, timeout_seconds=timeout_seconds)
+    video_content = openai_client._download_video_content(video_id)
+    print(f"online_video_e2e_latency_s={time.perf_counter() - start_time:.3f}")
+    return video_content
+
+
 @pytest.mark.core_model
 @pytest.mark.diffusion
 @hardware_test(res={"cuda": "L4"}, num_cards=2)
@@ -361,9 +455,12 @@ def test_wan22_i2v_serving_matches_diffusers_video_similarity(
         },
         "image_reference": _build_online_image_reference(image_source),
     }
-    online_response = openai_client.send_video_diffusion_request(request_config)[0]
-    assert online_response.videos is not None and len(online_response.videos) == 1
-    online_path.write_bytes(online_response.videos[0])
+    online_video_bytes = _send_video_request_with_timeout(
+        openai_client,
+        request_config,
+        timeout_seconds=600,
+    )
+    online_path.write_bytes(online_video_bytes)
 
     command = _build_diffusers_command(
         runner_path=RUNNER_PATH,
