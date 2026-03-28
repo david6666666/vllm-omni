@@ -22,7 +22,11 @@ import torch
 from PIL import Image
 
 from tests.conftest import OmniServerParams
-from tests.e2e.accuracy.wan22_i2v.run_wan22_i2v_diffusers_cp import _offline_cuda_device
+from tests.e2e.accuracy.wan22_i2v.run_wan22_i2v_diffusers_cp import (
+    _ensure_wan_ftfy_fallback,
+    _IdentityFtfy,
+    _offline_cuda_device,
+)
 from tests.e2e.accuracy.wan22_i2v.wan22_i2v_video_similarity_common import (
     FLOW_SHIFT,
     FPS,
@@ -174,6 +178,17 @@ def test_artifact_dir_is_under_repo_result_folder(tmp_path: Path) -> None:
 
 def test_offline_cuda_device_uses_indexed_cuda_device() -> None:
     assert _offline_cuda_device() == torch.device("cuda:0")
+
+
+def test_ensure_wan_ftfy_fallback_sets_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    from diffusers.pipelines.wan import pipeline_wan_i2v as wan_i2v_module
+
+    monkeypatch.delattr(wan_i2v_module, "ftfy", raising=False)
+    _ensure_wan_ftfy_fallback()
+
+    assert hasattr(wan_i2v_module, "ftfy")
+    assert isinstance(wan_i2v_module.ftfy, _IdentityFtfy)
+    assert wan_i2v_module.ftfy.fix_text("abc") == "abc"
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
