@@ -4,14 +4,12 @@ import argparse
 import base64
 import json
 import math
-import os
 from io import BytesIO
 from pathlib import Path
 
 import requests
 import torch
-import torch.distributed as dist
-from diffusers import ContextParallelConfig, FlowMatchEulerDiscreteScheduler, WanImageToVideoPipeline
+from diffusers import FlowMatchEulerDiscreteScheduler, WanImageToVideoPipeline
 from diffusers.utils import export_to_video, load_image
 from PIL import Image
 
@@ -19,7 +17,7 @@ from tests.e2e.accuracy.wan22_i2v.wan22_i2v_video_similarity_common import BOUND
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run Wan2.2 I2V diffusers offline generation with Ulysses CP.")
+    parser = argparse.ArgumentParser(description="Run Wan2.2 I2V diffusers offline generation.")
     parser.add_argument("--model", required=True)
     parser.add_argument("--image-source", required=True)
     parser.add_argument("--prompt", required=True)
@@ -104,7 +102,7 @@ def _write_metadata(
         "flow_shift": args.flow_shift,
         "num_inference_steps": args.num_inference_steps,
         "seed": args.seed,
-        "world_size": dist.get_world_size(),
+        "world_size": 1,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -112,10 +110,8 @@ def _write_metadata(
 
 def main() -> int:
     args = _parse_args()
-    local_rank = int(os.environ["LOCAL_RANK"])
-    dist.init_process_group(backend="nccl")
-    torch.cuda.set_device(local_rank)
-    device = torch.device(f"cuda:{local_rank}")
+    device = torch.device("cuda")
+    torch.cuda.set_device(device)
 
     pipe = WanImageToVideoPipeline.from_pretrained(args.model, torch_dtype=torch.bfloat16)
     pipe.register_to_config(boundary_ratio=BOUNDARY_RATIO)
@@ -123,11 +119,8 @@ def main() -> int:
         pipe.scheduler.config,
         shift=args.flow_shift,
     )
-    pipe.transformer.enable_parallelism(config=ContextParallelConfig(ulysses_degree=dist.get_world_size()))
-    if getattr(pipe, "transformer_2", None) is not None:
-        pipe.transformer_2.enable_parallelism(config=ContextParallelConfig(ulysses_degree=dist.get_world_size()))
     pipe.to(device)
-    pipe.set_progress_bar_config(disable=local_rank != 0)
+    pipe.set_progress_bar_config(disable=False)
 
     input_image = _load_input_image(args.image_source)
     target_width, target_height = _parse_size(args.size)
@@ -151,18 +144,14 @@ def main() -> int:
         generator=generator,
     ).frames[0]
 
-    dist.barrier()
-    if dist.get_rank() == 0:
-        output_path = Path(args.output)
-        metadata_path = Path(args.metadata_output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        export_to_video(frames, str(output_path), fps=args.fps)
-        _write_metadata(metadata_path, args=args, width=width, height=height, frame_count=len(frames))
-    dist.barrier()
+    output_path = Path(args.output)
+    metadata_path = Path(args.metadata_output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    export_to_video(frames, str(output_path), fps=args.fps)
+    _write_metadata(metadata_path, args=args, width=width, height=height, frame_count=len(frames))
 
     if hasattr(pipe, "maybe_free_model_hooks"):
         pipe.maybe_free_model_hooks()
-    dist.destroy_process_group()
     return 0
 
 
