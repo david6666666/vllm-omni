@@ -19,10 +19,12 @@ from urllib.parse import urlparse
 import pytest
 import requests
 import torch
+from diffusers import UniPCMultistepScheduler
 from PIL import Image
 
 from tests.conftest import OmniServerParams
 from tests.e2e.accuracy.wan22_i2v.run_wan22_i2v_diffusers_cp import (
+    _configure_scheduler,
     _ensure_wan_ftfy_fallback,
     _IdentityFtfy,
     _offline_cuda_device,
@@ -198,6 +200,18 @@ def test_resize_to_target_matches_requested_dimensions() -> None:
     resized = _resize_to_target(image, width=832, height=480)
 
     assert resized.size == (832, 480)
+
+
+def test_configure_scheduler_switches_to_unipc() -> None:
+    class DummyPipe:
+        def __init__(self) -> None:
+            self.scheduler = UniPCMultistepScheduler(num_train_timesteps=1000, flow_shift=1.0)
+
+    pipe = DummyPipe()
+    _configure_scheduler(pipe, flow_shift=5.0)
+
+    assert isinstance(pipe.scheduler, UniPCMultistepScheduler)
+    assert pipe.scheduler.config.flow_shift == 5.0
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]

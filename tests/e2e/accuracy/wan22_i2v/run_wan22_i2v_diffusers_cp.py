@@ -8,7 +8,7 @@ from pathlib import Path
 
 import requests
 import torch
-from diffusers import FlowMatchEulerDiscreteScheduler, WanImageToVideoPipeline
+from diffusers import UniPCMultistepScheduler, WanImageToVideoPipeline
 from diffusers.pipelines.wan import pipeline_wan_i2v as wan_i2v_module
 from diffusers.utils import export_to_video, load_image
 from PIL import Image
@@ -84,6 +84,13 @@ def _resize_to_target(image: Image.Image, *, width: int, height: int) -> Image.I
     return image.resize((width, height), Image.Resampling.LANCZOS)
 
 
+def _configure_scheduler(pipe: WanImageToVideoPipeline, *, flow_shift: float) -> None:
+    pipe.scheduler = UniPCMultistepScheduler.from_config(
+        pipe.scheduler.config,
+        flow_shift=flow_shift,
+    )
+
+
 def _write_metadata(
     path: Path,
     *,
@@ -121,10 +128,7 @@ def main() -> int:
 
     pipe = WanImageToVideoPipeline.from_pretrained(args.model, torch_dtype=torch.bfloat16)
     pipe.register_to_config(boundary_ratio=BOUNDARY_RATIO)
-    pipe.scheduler = FlowMatchEulerDiscreteScheduler.from_config(
-        pipe.scheduler.config,
-        shift=args.flow_shift,
-    )
+    _configure_scheduler(pipe, flow_shift=args.flow_shift)
     pipe.to(device)
     pipe.set_progress_bar_config(disable=False)
 
