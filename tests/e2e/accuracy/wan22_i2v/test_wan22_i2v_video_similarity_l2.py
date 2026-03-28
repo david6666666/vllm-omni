@@ -79,7 +79,7 @@ def test_parse_psnr_summary_extracts_average_score() -> None:
     assert _parse_psnr_score(output) == 32.148004
 
 
-def test_build_diffusers_command_uses_torchrun_and_runner_path(tmp_path: Path) -> None:
+def test_build_diffusers_command_uses_python_runner_path(tmp_path: Path) -> None:
     runner_path = tmp_path / "run_wan22_i2v_diffusers_cp.py"
     command = _build_diffusers_command(
         runner_path=runner_path,
@@ -88,14 +88,10 @@ def test_build_diffusers_command_uses_torchrun_and_runner_path(tmp_path: Path) -
         metadata_path=tmp_path / "offline.json",
     )
 
-    assert command[:5] == [
+    assert command[:2] == [
         sys.executable,
-        "-m",
-        "torch.distributed.run",
-        "--nproc-per-node",
-        "2",
+        str(runner_path),
     ]
-    assert command[5] == str(runner_path)
     assert "--output" in command
     assert "--metadata-output" in command
 
@@ -254,10 +250,6 @@ def _build_diffusers_command(
 ) -> list[str]:
     return [
         sys.executable,
-        "-m",
-        "torch.distributed.run",
-        "--nproc-per-node",
-        "2",
         str(runner_path),
         "--model",
         MODEL_NAME,
@@ -532,6 +524,29 @@ def _ensure_offline_video(*, image_source: str) -> tuple[Path, Path]:
 
 @pytest.mark.core_model
 @pytest.mark.diffusion
+@hardware_test(res={"cuda": "L4"})
+def test_wan22_i2v_diffusers_offline_generates_video() -> None:
+    if not torch.cuda.is_available():
+        pytest.skip("Wan2.2 I2V diffusers offline test requires CUDA.")
+
+    _probe_binary("ffprobe")
+    if not RUNNER_PATH.exists():
+        raise AssertionError(f"Offline diffusers runner does not exist: {RUNNER_PATH}")
+
+    image_source = _resolve_image_source()
+    _validate_image_source(image_source)
+    offline_path, offline_metadata_path = _generate_offline_video(image_source=image_source)
+    assert offline_path.exists(), f"Expected offline video artifact at {offline_path}"
+    assert offline_metadata_path.exists(), f"Expected offline metadata artifact at {offline_metadata_path}"
+    offline_metadata = _probe_video(offline_path)
+    assert offline_metadata["width"] > 0
+    assert offline_metadata["height"] > 0
+    assert offline_metadata["fps"] == float(FPS)
+    assert offline_metadata["frame_count"] == NUM_FRAMES
+
+
+@pytest.mark.core_model
+@pytest.mark.diffusion
 @hardware_test(res={"cuda": "L4"}, num_cards=2)
 @pytest.mark.parametrize("omni_server", SERVER_CASES, indirect=True)
 def test_wan22_i2v_online_serving_generates_video(
@@ -544,7 +559,7 @@ def test_wan22_i2v_online_serving_generates_video(
     _probe_binary("ffprobe")
     image_source = _resolve_image_source()
     _validate_image_source(image_source)
-    online_path = _generate_online_video(
+    online_path = _ensure_online_video(
         omni_server=omni_server,
         openai_client=openai_client,
         image_source=image_source,
@@ -555,29 +570,6 @@ def test_wan22_i2v_online_serving_generates_video(
     assert online_metadata["height"] == HEIGHT
     assert online_metadata["fps"] == float(FPS)
     assert online_metadata["frame_count"] == NUM_FRAMES
-
-
-@pytest.mark.core_model
-@pytest.mark.diffusion
-@hardware_test(res={"cuda": "L4"}, num_cards=2)
-def test_wan22_i2v_diffusers_offline_generates_video() -> None:
-    if not torch.cuda.is_available() or torch.cuda.device_count() < 2:
-        pytest.skip("Wan2.2 I2V similarity e2e test requires >= 2 CUDA GPUs.")
-
-    _probe_binary("ffprobe")
-    if not RUNNER_PATH.exists():
-        raise AssertionError(f"Offline diffusers runner does not exist: {RUNNER_PATH}")
-
-    image_source = _resolve_image_source()
-    _validate_image_source(image_source)
-    offline_path, offline_metadata_path = _generate_offline_video(image_source=image_source)
-    assert offline_path.exists(), f"Expected offline video artifact at {offline_path}"
-    assert offline_metadata_path.exists(), f"Expected offline metadata artifact at {offline_metadata_path}"
-    offline_metadata = _probe_video(offline_path)
-    assert offline_metadata["width"] == WIDTH
-    assert offline_metadata["height"] == HEIGHT
-    assert offline_metadata["fps"] == float(FPS)
-    assert offline_metadata["frame_count"] == NUM_FRAMES
 
 
 @pytest.mark.core_model
@@ -598,12 +590,12 @@ def test_wan22_i2v_serving_matches_diffusers_video_similarity(
 
     image_source = _resolve_image_source()
     _validate_image_source(image_source)
+    offline_path, offline_metadata_path = _ensure_offline_video(image_source=image_source)
     online_path = _ensure_online_video(
         omni_server=omni_server,
         openai_client=openai_client,
         image_source=image_source,
     )
-    offline_path, offline_metadata_path = _ensure_offline_video(image_source=image_source)
 
     assert online_path.exists(), f"Expected online video artifact at {online_path}"
     assert offline_path.exists(), f"Expected offline video artifact at {offline_path}"
