@@ -1428,6 +1428,11 @@ async def edit_images(
         if not input_images_list:
             raise HTTPException(status_code=422, detail="Field 'image' or 'url' is required")
         pil_images = await _load_input_images(input_images_list)
+        if len(pil_images) > 1 and not _supports_multimodal_image_inputs(raw_request, engine_client):
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST.value,
+                detail="Received multiple input images. Only a single image is supported by this model.",
+            )
         prompt["multi_modal_data"] = {}
         prompt["multi_modal_data"]["image"] = pil_images
 
@@ -1604,6 +1609,55 @@ def _get_engine_and_model(raw_request: Request):
         model_name = "unknown"
 
     return engine_client, model_name, normalized_stage_configs
+
+
+def _supports_multimodal_image_inputs(raw_request: Request, engine_client: Any) -> bool:
+    od_config = _find_diffusion_od_config(raw_request, engine_client)
+    if od_config is None:
+        # Preserve the existing compatibility behavior when the diffusion
+        # config is not exposed on the serving surface.
+        return True
+    return bool(getattr(od_config, "supports_multimodal_inputs", False))
+
+
+def _find_diffusion_od_config(raw_request: Request, engine_client: Any) -> Any | None:
+    candidate_clients = [
+        getattr(raw_request.app.state, "diffusion_engine", None),
+        engine_client,
+    ]
+
+    for client in candidate_clients:
+        if client is None:
+            continue
+
+        od_config = getattr(client, "od_config", None)
+        if od_config is not None:
+            return od_config
+
+        inner_engine = getattr(client, "_engine", None)
+        od_config = getattr(inner_engine, "od_config", None)
+        if od_config is not None:
+            return od_config
+
+        orchestrator = getattr(client, "engine", None)
+        stage_clients = getattr(orchestrator, "stage_clients", None)
+        if stage_clients is None:
+            continue
+
+        for stage_client in stage_clients:
+            if getattr(stage_client, "stage_type", None) != "diffusion":
+                continue
+
+            od_config = getattr(stage_client, "od_config", None)
+            if od_config is not None:
+                return od_config
+
+            inner_engine = getattr(stage_client, "_engine", None)
+            od_config = getattr(inner_engine, "od_config", None)
+            if od_config is not None:
+                return od_config
+
+    return None
 
 
 def _get_lora_from_json_str(lora_body):
