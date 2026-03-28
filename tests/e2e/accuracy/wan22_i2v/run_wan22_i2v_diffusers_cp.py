@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import base64
 import json
-import math
 from io import BytesIO
 from pathlib import Path
 
@@ -81,18 +80,8 @@ def _load_input_image(source: str) -> Image.Image:
     return image.convert("RGB")
 
 
-def _resize_like_example(
-    pipe: WanImageToVideoPipeline,
-    image: Image.Image,
-    *,
-    target_area: int,
-) -> tuple[Image.Image, int, int]:
-    aspect_ratio = image.height / image.width
-    mod_value = pipe.vae_scale_factor_spatial * pipe.transformer.config.patch_size[1]
-    height = round(math.sqrt(target_area * aspect_ratio)) // mod_value * mod_value
-    width = round(math.sqrt(target_area / aspect_ratio)) // mod_value * mod_value
-    resized = image.resize((width, height))
-    return resized, width, height
+def _resize_to_target(image: Image.Image, *, width: int, height: int) -> Image.Image:
+    return image.resize((width, height), Image.Resampling.LANCZOS)
 
 
 def _write_metadata(
@@ -140,12 +129,8 @@ def main() -> int:
     pipe.set_progress_bar_config(disable=False)
 
     input_image = _load_input_image(args.image_source)
-    target_width, target_height = _parse_size(args.size)
-    resized_image, width, height = _resize_like_example(
-        pipe,
-        input_image,
-        target_area=target_width * target_height,
-    )
+    width, height = _parse_size(args.size)
+    resized_image = _resize_to_target(input_image, width=width, height=height)
 
     generator = torch.Generator(device=device.type).manual_seed(args.seed)
     frames = pipe(

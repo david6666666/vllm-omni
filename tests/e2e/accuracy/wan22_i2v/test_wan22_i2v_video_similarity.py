@@ -26,6 +26,7 @@ from tests.e2e.accuracy.wan22_i2v.run_wan22_i2v_diffusers_cp import (
     _ensure_wan_ftfy_fallback,
     _IdentityFtfy,
     _offline_cuda_device,
+    _resize_to_target,
 )
 from tests.e2e.accuracy.wan22_i2v.wan22_i2v_video_similarity_common import (
     FLOW_SHIFT,
@@ -189,6 +190,14 @@ def test_ensure_wan_ftfy_fallback_sets_identity(monkeypatch: pytest.MonkeyPatch)
     assert hasattr(wan_i2v_module, "ftfy")
     assert isinstance(wan_i2v_module.ftfy, _IdentityFtfy)
     assert wan_i2v_module.ftfy.fix_text("abc") == "abc"
+
+
+def test_resize_to_target_matches_requested_dimensions() -> None:
+    image = Image.new("RGB", (100, 50), color=(1, 2, 3))
+
+    resized = _resize_to_target(image, width=832, height=480)
+
+    assert resized.size == (832, 480)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
