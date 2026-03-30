@@ -84,9 +84,9 @@ from vllm.utils.system_utils import decorate_logs
 from vllm_omni.entrypoints.async_omni import AsyncOmni
 from vllm_omni.entrypoints.openai.errors import InvalidInputReferenceError
 from vllm_omni.entrypoints.openai.image_api_utils import (
+    SUPPORTED_LAYERED_RESOLUTIONS,
     encode_image_base64,
     parse_size,
-    SUPPORTED_LAYERED_RESOLUTIONS,
     validate_layered_layers,
 )
 from vllm_omni.entrypoints.openai.protocol.audio import BatchSpeechRequest, OpenAICreateSpeechRequest
