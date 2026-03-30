@@ -1613,12 +1613,10 @@ def _get_engine_and_model(raw_request: Request):
 
 def _supports_multimodal_image_inputs(raw_request: Request, engine_client: Any) -> bool:
     diffusion_engine = getattr(raw_request.app.state, "diffusion_engine", None) or engine_client
-    od_config = None
     get_diffusion_od_config = getattr(diffusion_engine, "get_diffusion_od_config", None)
-    if callable(get_diffusion_od_config):
-        od_config = get_diffusion_od_config()
-    elif diffusion_engine is not None:
-        od_config = getattr(diffusion_engine, "od_config", None)
+    od_config = (
+        get_diffusion_od_config() if callable(get_diffusion_od_config) else getattr(diffusion_engine, "od_config", None)
+    )
 
     if od_config is None:
         # Preserve the existing compatibility behavior when the diffusion
