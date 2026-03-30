@@ -614,10 +614,7 @@ def test_wan22_i2v_serving_matches_diffusers_video_similarity() -> None:
     if not online_path.exists():
         pytest.skip(f"Missing online artifact from prerequisite test: {online_path}")
     if not offline_path.exists() or not offline_metadata_path.exists():
-        pytest.skip(
-            "Missing offline artifacts from prerequisite test: "
-            f"{offline_path}, {offline_metadata_path}"
-        )
+        pytest.skip(f"Missing offline artifacts from prerequisite test: {offline_path}, {offline_metadata_path}")
 
     assert online_path.exists(), f"Expected online video artifact at {online_path}"
     assert offline_path.exists(), f"Expected offline video artifact at {offline_path}"
