@@ -1612,52 +1612,19 @@ def _get_engine_and_model(raw_request: Request):
 
 
 def _supports_multimodal_image_inputs(raw_request: Request, engine_client: Any) -> bool:
-    od_config = _find_diffusion_od_config(raw_request, engine_client)
+    diffusion_engine = getattr(raw_request.app.state, "diffusion_engine", None) or engine_client
+    od_config = None
+    get_diffusion_od_config = getattr(diffusion_engine, "get_diffusion_od_config", None)
+    if callable(get_diffusion_od_config):
+        od_config = get_diffusion_od_config()
+    elif diffusion_engine is not None:
+        od_config = getattr(diffusion_engine, "od_config", None)
+
     if od_config is None:
         # Preserve the existing compatibility behavior when the diffusion
         # config is not exposed on the serving surface.
         return True
     return bool(getattr(od_config, "supports_multimodal_inputs", False))
-
-
-def _find_diffusion_od_config(raw_request: Request, engine_client: Any) -> Any | None:
-    candidate_clients = [
-        getattr(raw_request.app.state, "diffusion_engine", None),
-        engine_client,
-    ]
-
-    for client in candidate_clients:
-        if client is None:
-            continue
-
-        od_config = getattr(client, "od_config", None)
-        if od_config is not None:
-            return od_config
-
-        inner_engine = getattr(client, "_engine", None)
-        od_config = getattr(inner_engine, "od_config", None)
-        if od_config is not None:
-            return od_config
-
-        orchestrator = getattr(client, "engine", None)
-        stage_clients = getattr(orchestrator, "stage_clients", None)
-        if stage_clients is None:
-            continue
-
-        for stage_client in stage_clients:
-            if getattr(stage_client, "stage_type", None) != "diffusion":
-                continue
-
-            od_config = getattr(stage_client, "od_config", None)
-            if od_config is not None:
-                return od_config
-
-            inner_engine = getattr(stage_client, "_engine", None)
-            od_config = getattr(inner_engine, "od_config", None)
-            if od_config is not None:
-                return od_config
-
-    return None
 
 
 def _get_lora_from_json_str(lora_body):

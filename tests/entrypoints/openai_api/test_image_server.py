@@ -716,7 +716,7 @@ def test_image_edit_rejects_multiple_images_when_model_does_not_support_them(asy
     img_bytes_2 = make_test_image_bytes((32, 32))
 
     engine = async_omni_test_client.app.state.engine_client
-    engine.od_config = SimpleNamespace(supports_multimodal_inputs=False)
+    engine.get_diffusion_od_config = lambda: SimpleNamespace(supports_multimodal_inputs=False)
 
     response = async_omni_test_client.post(
         "/v1/images/edits",
