@@ -383,7 +383,6 @@ steps:
     commands:
       - export VLLM_WORKER_MULTIPROC_METHOD=spawn
       - pytest -s -v tests/e2e/accuracy/wan22_i2v/test_wan22_i2v_video_similarity.py --run-level advanced_model
-      - buildkite-agent artifact upload "tests/e2e/accuracy/wan22_i2v/result/**/*"
     agents:
       queue: "mithril-h100-pool"
     plugins:
