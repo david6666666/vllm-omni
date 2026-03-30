@@ -642,7 +642,23 @@ def test_wan22_i2v_serving_matches_diffusers_video_similarity() -> None:
     ssim_score = _parse_ssim_score(ssim_output)
     psnr_score = _parse_psnr_score(psnr_output)
 
-    print(f"wan22_i2v_similarity: ssim={ssim_score:.6f}, psnr={psnr_score:.6f}")
+    print("wan22_i2v_similarity metrics:")
+    print(
+        "  SSIM:"
+        f" value={ssim_score:.6f},"
+        f" threshold>={SSIM_THRESHOLD:.6f},"
+        " range=[0, 1],"
+        " higher_is_better=True,"
+        " interpretation=structural_similarity"
+    )
+    print(
+        "  PSNR:"
+        f" value={psnr_score:.6f} dB,"
+        f" threshold>={PSNR_THRESHOLD:.6f} dB,"
+        " range=[0, +inf),"
+        " higher_is_better=True,"
+        " interpretation=pixel_error_in_decibels"
+    )
     print(f"online_video={online_path}")
     print(f"offline_video={offline_path}")
     print(f"offline_metadata={offline_metadata_path}")
