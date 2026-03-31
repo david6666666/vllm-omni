@@ -109,7 +109,7 @@ def test_resolve_image_source_prefers_existing_local_path(tmp_path: Path, monkey
     Image.new("RGB", (8, 8), color=(255, 128, 64)).save(image_path)
     monkeypatch.setenv(IMAGE_SOURCE_ENV, str(image_path))
 
-    assert _resolve_image_source() == str(image_path.resolve())
+    assert _resolve_image_source(env_var_name=IMAGE_SOURCE_ENV) == str(image_path.resolve())
 
 
 def test_build_online_image_reference_uses_data_url_for_local_path(tmp_path: Path) -> None:
@@ -169,7 +169,7 @@ def test_send_video_request_with_timeout_uses_requested_timeout(monkeypatch: pyt
 def test_online_timeout_defaults_to_1200(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(ONLINE_TIMEOUT_ENV, raising=False)
 
-    assert _online_timeout_seconds() == 1200
+    assert _online_timeout_seconds(env_var_name=ONLINE_TIMEOUT_ENV) == 1200
 
 
 def test_artifact_dir_is_under_repo_result_folder(tmp_path: Path) -> None:
@@ -339,8 +339,8 @@ def _runner_env() -> dict[str, str]:
     return env
 
 
-def _resolve_image_source() -> str:
-    configured = os.environ.get(IMAGE_SOURCE_ENV, RABBIT_IMAGE_URL)
+def _resolve_image_source(*, env_var_name: str) -> str:
+    configured = os.environ.get(env_var_name, RABBIT_IMAGE_URL)
     candidate = Path(configured)
     if candidate.exists():
         return str(candidate.resolve())
@@ -418,8 +418,8 @@ def _run_ffmpeg_similarity(filter_name: str, first: Path, second: Path) -> str:
     return result.stderr
 
 
-def _online_timeout_seconds() -> int:
-    return int(os.environ.get(ONLINE_TIMEOUT_ENV, "1200"))
+def _online_timeout_seconds(*, env_var_name: str) -> int:
+    return int(os.environ.get(env_var_name, "1200"))
 
 
 def _artifact_dir(image_source: str) -> Path:
@@ -518,7 +518,7 @@ def _generate_online_video(
     online_video_bytes = _send_video_request_with_timeout(
         openai_client,
         request_config,
-        timeout_seconds=_online_timeout_seconds(),
+        timeout_seconds=_online_timeout_seconds(env_var_name=ONLINE_TIMEOUT_ENV),
     )
     online_path.write_bytes(online_video_bytes)
     return online_path
@@ -554,7 +554,7 @@ def test_wan22_i2v_diffusers_offline_generates_video() -> None:
     if not RUNNER_PATH.exists():
         raise AssertionError(f"Offline diffusers runner does not exist: {RUNNER_PATH}")
 
-    image_source = _resolve_image_source()
+    image_source = _resolve_image_source(env_var_name=IMAGE_SOURCE_ENV)
     _validate_image_source(image_source)
     offline_path, offline_metadata_path = _generate_offline_video(image_source=image_source)
     assert offline_path.exists(), f"Expected offline video artifact at {offline_path}"
@@ -579,7 +579,7 @@ def test_wan22_i2v_online_serving_generates_video(
         pytest.skip("Wan2.2 I2V similarity e2e test requires >= 2 CUDA GPUs.")
 
     _probe_binary("ffprobe")
-    image_source = _resolve_image_source()
+    image_source = _resolve_image_source(env_var_name=IMAGE_SOURCE_ENV)
     _validate_image_source(image_source)
     online_path = _generate_online_video(
         omni_server=omni_server,
@@ -607,7 +607,7 @@ def test_wan22_i2v_serving_matches_diffusers_video_similarity() -> None:
     if not RUNNER_PATH.exists():
         raise AssertionError(f"Offline diffusers runner does not exist: {RUNNER_PATH}")
 
-    image_source = _resolve_image_source()
+    image_source = _resolve_image_source(env_var_name=IMAGE_SOURCE_ENV)
     _validate_image_source(image_source)
     online_path, offline_path, offline_metadata_path = _artifact_paths(image_source)
 
