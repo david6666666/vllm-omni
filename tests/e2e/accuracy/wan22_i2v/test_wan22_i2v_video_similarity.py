@@ -107,9 +107,8 @@ def test_build_diffusers_command_uses_python_runner_path(tmp_path: Path) -> None
 def test_resolve_image_source_prefers_existing_local_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     image_path = tmp_path / "rabbit.png"
     Image.new("RGB", (8, 8), color=(255, 128, 64)).save(image_path)
-    monkeypatch.setenv(IMAGE_SOURCE_ENV, str(image_path))
 
-    assert _resolve_image_source(env_var_name=IMAGE_SOURCE_ENV) == str(image_path.resolve())
+    assert _resolve_image_source(str(image_path)) == str(image_path.resolve())
 
 
 def test_build_online_image_reference_uses_data_url_for_local_path(tmp_path: Path) -> None:
@@ -166,10 +165,8 @@ def test_send_video_request_with_timeout_uses_requested_timeout(monkeypatch: pyt
     assert client.wait_args == ("video_123", 2, 1200)
 
 
-def test_online_timeout_defaults_to_1200(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(ONLINE_TIMEOUT_ENV, raising=False)
-
-    assert _online_timeout_seconds(env_var_name=ONLINE_TIMEOUT_ENV) == 1200
+def test_online_timeout_defaults_to_1200() -> None:
+    assert _online_timeout_seconds(None) == 1200
 
 
 def test_artifact_dir_is_under_repo_result_folder(tmp_path: Path) -> None:
@@ -221,9 +218,6 @@ RESULT_ROOT = Path(__file__).parent / "result"
 VIDEO_TIMEOUT_SECONDS = 60 * 60
 _SSIM_RE = re.compile(r"All:(?P<score>[0-9.]+)")
 _PSNR_RE = re.compile(r"average:(?P<score>[0-9.]+)")
-IMAGE_SOURCE_ENV = "VLLM_TEST_WAN22_I2V_IMAGE_SOURCE"
-ONLINE_TIMEOUT_ENV = "VLLM_TEST_WAN22_I2V_ONLINE_TIMEOUT_SECONDS"
-
 SERVER_CASES = [
     pytest.param(
         OmniServerParams(
@@ -339,8 +333,8 @@ def _runner_env() -> dict[str, str]:
     return env
 
 
-def _resolve_image_source(*, env_var_name: str) -> str:
-    configured = os.environ.get(env_var_name, RABBIT_IMAGE_URL)
+def _resolve_image_source(configured: str | None) -> str:
+    configured = configured or RABBIT_IMAGE_URL
     candidate = Path(configured)
     if candidate.exists():
         return str(candidate.resolve())
@@ -418,8 +412,8 @@ def _run_ffmpeg_similarity(filter_name: str, first: Path, second: Path) -> str:
     return result.stderr
 
 
-def _online_timeout_seconds(*, env_var_name: str) -> int:
-    return int(os.environ.get(env_var_name, "1200"))
+def _online_timeout_seconds(configured: int | None) -> int:
+    return int(configured) if configured is not None else 1200
 
 
 def _artifact_dir(image_source: str) -> Path:
@@ -497,6 +491,7 @@ def _generate_online_video(
     omni_server,
     openai_client,
     image_source: str,
+    online_timeout_seconds: int,
 ) -> Path:
     online_path, _, _ = _artifact_paths(image_source)
     request_config = {
@@ -518,7 +513,7 @@ def _generate_online_video(
     online_video_bytes = _send_video_request_with_timeout(
         openai_client,
         request_config,
-        timeout_seconds=_online_timeout_seconds(env_var_name=ONLINE_TIMEOUT_ENV),
+        timeout_seconds=_online_timeout_seconds(online_timeout_seconds),
     )
     online_path.write_bytes(online_video_bytes)
     return online_path
@@ -546,7 +541,9 @@ def _generate_offline_video(*, image_source: str) -> tuple[Path, Path]:
 @pytest.mark.benchmark
 @pytest.mark.diffusion
 @hardware_test(res={"cuda": "H100"}, num_cards=1)
-def test_wan22_i2v_diffusers_offline_generates_video() -> None:
+def test_wan22_i2v_diffusers_offline_generates_video(
+    wan22_i2v_image_source: str | None,
+) -> None:
     if not torch.cuda.is_available():
         pytest.skip("Wan2.2 I2V diffusers offline test requires CUDA.")
 
@@ -554,7 +551,7 @@ def test_wan22_i2v_diffusers_offline_generates_video() -> None:
     if not RUNNER_PATH.exists():
         raise AssertionError(f"Offline diffusers runner does not exist: {RUNNER_PATH}")
 
-    image_source = _resolve_image_source(env_var_name=IMAGE_SOURCE_ENV)
+    image_source = _resolve_image_source(wan22_i2v_image_source)
     _validate_image_source(image_source)
     offline_path, offline_metadata_path = _generate_offline_video(image_source=image_source)
     assert offline_path.exists(), f"Expected offline video artifact at {offline_path}"
@@ -574,17 +571,20 @@ def test_wan22_i2v_diffusers_offline_generates_video() -> None:
 def test_wan22_i2v_online_serving_generates_video(
     omni_server,
     openai_client,
+    wan22_i2v_image_source: str | None,
+    wan22_i2v_online_timeout_seconds: int,
 ) -> None:
     if not torch.cuda.is_available() or torch.cuda.device_count() < 2:
         pytest.skip("Wan2.2 I2V similarity e2e test requires >= 2 CUDA GPUs.")
 
     _probe_binary("ffprobe")
-    image_source = _resolve_image_source(env_var_name=IMAGE_SOURCE_ENV)
+    image_source = _resolve_image_source(wan22_i2v_image_source)
     _validate_image_source(image_source)
     online_path = _generate_online_video(
         omni_server=omni_server,
         openai_client=openai_client,
         image_source=image_source,
+        online_timeout_seconds=wan22_i2v_online_timeout_seconds,
     )
     assert online_path.exists(), f"Expected online video artifact at {online_path}"
     online_metadata = _probe_video(online_path)
@@ -598,7 +598,9 @@ def test_wan22_i2v_online_serving_generates_video(
 @pytest.mark.benchmark
 @pytest.mark.diffusion
 @hardware_test(res={"cuda": "H100"}, num_cards=2)
-def test_wan22_i2v_serving_matches_diffusers_video_similarity() -> None:
+def test_wan22_i2v_serving_matches_diffusers_video_similarity(
+    wan22_i2v_image_source: str | None,
+) -> None:
     if not torch.cuda.is_available() or torch.cuda.device_count() < 2:
         pytest.skip("Wan2.2 I2V similarity e2e test requires >= 2 CUDA GPUs.")
 
@@ -607,7 +609,7 @@ def test_wan22_i2v_serving_matches_diffusers_video_similarity() -> None:
     if not RUNNER_PATH.exists():
         raise AssertionError(f"Offline diffusers runner does not exist: {RUNNER_PATH}")
 
-    image_source = _resolve_image_source(env_var_name=IMAGE_SOURCE_ENV)
+    image_source = _resolve_image_source(wan22_i2v_image_source)
     _validate_image_source(image_source)
     online_path, offline_path, offline_metadata_path = _artifact_paths(image_source)
 
