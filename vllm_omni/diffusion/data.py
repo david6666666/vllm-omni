@@ -498,6 +498,9 @@ class OmniDiffusionConfig:
     # Step mode settings
     step_execution: bool = False
 
+    # Maximum number of sequences to generate in a batch
+    max_num_seqs: int = 1
+
     @property
     def is_moe(self) -> bool:
         num_experts = self.tf_model_config.get("num_experts", None)
@@ -664,6 +667,8 @@ class DiffusionOutput:
     trajectory_latents: torch.Tensor | None = None
     trajectory_decoded: list[torch.Tensor] | None = None
     error: str | None = None
+    aborted: bool = False
+    abort_message: str | None = None
 
     post_process_func: Callable[..., Any] | None = None
 
@@ -679,6 +684,10 @@ class DiffusionOutput:
 
     # memory usage info
     peak_memory_mb: float = 0.0
+
+
+class DiffusionRequestAbortedError(RuntimeError):
+    """Raised when a diffusion request ends via user-visible abort."""
 
 
 class AttentionBackendEnum(enum.Enum):
