@@ -121,7 +121,7 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
             enabled=enabled,
             warn_on_error=device_type != "npu",
         )
-        if device_type != "npu" or not isinstance(ctx, nullcontext):
+        if device_type != "npu" or type(ctx) is not nullcontext:
             return ctx
 
         if hasattr(torch.npu, "amp") and hasattr(torch.npu.amp, "autocast"):
