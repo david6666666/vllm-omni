@@ -96,9 +96,6 @@ class Attention(nn.Module):
         # FP8 attention quantization: resolved lazily in forward() because
         # forward_context is not available during model loading.
         self._fp8_attn_enabled: bool | None = None
-        # Cached scales for delayed scaling (reuse previous timestep's scales)
-        self._cached_qkv_scales: tuple | None = None
-        self._cached_jkv_scales: tuple | None = None
 
     def _get_active_parallel_strategy(self):
         """Get the parallel strategy based on current SP active state.
@@ -114,48 +111,6 @@ class Attention(nn.Module):
             if not ctx.sp_active:
                 return self._no_parallel_strategy
         return self.parallel_strategy
-
-    def _quantize_qkv_fp8(
-        self,
-        query: torch.Tensor,
-        key: torch.Tensor,
-        value: torch.Tensor,
-        attn_metadata: AttentionMetadata | None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, AttentionMetadata | None]:
-        """Quantize Q/K/V tensors to FP8 and store scales in attn_metadata.
-
-        Uses delayed scaling: first call computes dynamic scales (amax),
-        subsequent calls reuse the cached scales (static, no amax).
-        Scales are refreshed each timestep since the first layer in each
-        step always runs dynamic.
-        """
-        from vllm_omni.quantization.kv_quant import (
-            quantize_kv_fp8_fast,
-            quantize_qkv_fp8_fast,
-        )
-
-        fp8_q, fp8_k, fp8_v, q_scale, k_scale, v_scale = quantize_qkv_fp8_fast(
-            query, key, value
-        )
-
-        if attn_metadata is None:
-            attn_metadata = AttentionMetadata()
-        attn_metadata.q_scale = q_scale
-        attn_metadata.k_scale = k_scale
-        attn_metadata.v_scale = v_scale
-
-        # Quantize joint_key/joint_value with separate scales
-        if attn_metadata.joint_key is not None and attn_metadata.joint_value is not None:
-            jk, jv, jk_scale, jv_scale = quantize_kv_fp8_fast(
-                attn_metadata.joint_key, attn_metadata.joint_value,
-            )
-            attn_metadata.joint_key = jk
-            attn_metadata.joint_value = jv
-            attn_metadata.jk_scale = jk_scale
-            attn_metadata.jv_scale = jv_scale
-            self._cached_jkv_scales = (jk_scale, jv_scale)
-
-        return fp8_q, fp8_k, fp8_v, attn_metadata
 
     def _resolve_fp8_attn(self) -> bool:
         """Lazily resolve FP8 attention config from forward context."""
@@ -196,20 +151,14 @@ class Attention(nn.Module):
         # For Ring: Concat joint_q
         query, key, value, attn_metadata, ctx = strategy.pre_attention(query, key, value, attn_metadata)
 
-        # 1.5 FP8 Q/K/V quantization (after AllToAll stays BF16, before kernel)
+        # 1.5 Propagate FP8 Q/K/V intent. The selected backend decides whether
+        # its hardware/kernel path can consume FP8 before doing any conversion.
         if self._resolve_fp8_attn():
-            # Zero out padding positions before quantizing — FP8 path skips
-            # varlen to avoid FA3 varlen+descale bug, so padding must be
-            # handled by zeroing K (makes softmax weight ≈ 0 for those positions).
-            if attn_metadata is not None and attn_metadata.attn_mask is not None:
-                mask = attn_metadata.attn_mask  # (B, S) bool
-                if not torch.all(mask):
-                    m = mask.unsqueeze(-1).unsqueeze(-1)
-                    key = key * m
-                    value = value * m
-            query, key, value, attn_metadata = self._quantize_qkv_fp8(
-                query, key, value, attn_metadata
-            )
+            if attn_metadata is None:
+                attn_metadata = AttentionMetadata()
+            attn_metadata.kv_cache_dtype = "fp8"
+        elif attn_metadata is not None:
+            attn_metadata.kv_cache_dtype = None
 
         # 2. Kernel Execution (Computation)
         if self.use_ring and strategy is not self._no_parallel_strategy:

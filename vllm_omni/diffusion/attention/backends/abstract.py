@@ -65,7 +65,9 @@ class AttentionMetadata:
     joint_strategy: str = "front"
     # the strategy to joint the query, key, and value, can be "front" or "rear"
 
-    # FP8 attention quantization dequant scales (set by Attention._quantize_qkv_fp8)
+    # Attention backends can use this to decide whether to prepare Q/K/V in FP8.
+    kv_cache_dtype: str | None = None
+    # FP8 attention quantization dequant scales (set by attention backends)
     q_scale: torch.Tensor | None = None
     k_scale: torch.Tensor | None = None
     v_scale: torch.Tensor | None = None

@@ -98,6 +98,59 @@ class FlashAttentionImpl(AttentionImpl):
         out_unpad = self._unwrap_flash_output(out_unpad)
         return _pad_input(out_unpad, indices_q, query.size(0), query_length)
 
+    @staticmethod
+    def _fp8_requested(attn_metadata: AttentionMetadata | None) -> bool:
+        return attn_metadata is not None and attn_metadata.kv_cache_dtype == "fp8"
+
+    def _maybe_prepare_fp8_qkv(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        attn_metadata: AttentionMetadata | None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool]:
+        """Quantize Q/K/V only when this backend can consume FP8 natively."""
+        if not self._fp8_requested(attn_metadata):
+            return query, key, value, False
+
+        from vllm_omni.diffusion.attention.backends.ring.ring_globals import (
+            HAS_FA3,
+            fa3_attn_func,
+        )
+
+        if not HAS_FA3 or fa3_attn_func is None:
+            logger.warning_once(
+                "FP8 attention requested but FA3 is unavailable. "
+                "Using BF16 FlashAttention instead of quantize/dequant fallback."
+            )
+            return query, key, value, False
+
+        from vllm_omni.quantization.kv_quant import (
+            quantize_kv_fp8_fast,
+            quantize_qkv_fp8_fast,
+        )
+
+        fp8_q, fp8_k, fp8_v, q_scale, k_scale, v_scale = quantize_qkv_fp8_fast(
+            query, key, value
+        )
+
+        assert attn_metadata is not None
+        attn_metadata.q_scale = q_scale
+        attn_metadata.k_scale = k_scale
+        attn_metadata.v_scale = v_scale
+
+        if attn_metadata.joint_key is not None and attn_metadata.joint_value is not None:
+            jk, jv, jk_scale, jv_scale = quantize_kv_fp8_fast(
+                attn_metadata.joint_key,
+                attn_metadata.joint_value,
+            )
+            attn_metadata.joint_key = jk
+            attn_metadata.joint_value = jv
+            attn_metadata.jk_scale = jk_scale
+            attn_metadata.jv_scale = jv_scale
+
+        return fp8_q, fp8_k, fp8_v, True
+
     def forward_cuda(
         self,
         query: torch.Tensor,
@@ -106,9 +159,6 @@ class FlashAttentionImpl(AttentionImpl):
         attn_metadata: AttentionMetadata = None,
     ) -> torch.Tensor:
         """CUDA/ROCm flash attention implementation."""
-        # Dispatch to FP8 path if Q/K/V are quantized
-        if key.dtype == torch.float8_e4m3fn:
-            return self._forward_fp8(query, key, value, attn_metadata)
         from vllm_omni.diffusion.attention.backends.utils.fa import (
             HAS_FLASH_ATTN,
             flash_attn_func,
@@ -124,12 +174,23 @@ class FlashAttentionImpl(AttentionImpl):
         attention_mask = attn_metadata.attn_mask if attn_metadata is not None else None
 
         if attention_mask is not None and torch.any(~attention_mask):
+            if self._fp8_requested(attn_metadata):
+                logger.warning_once(
+                    "FP8 attention with padded mask is not enabled for the "
+                    "varlen FlashAttention path. Using BF16 FlashAttention."
+                )
             return self._forward_varlen_masked(
                 query,
                 key,
                 value,
                 attention_mask,
             )
+
+        query, key, value, use_fp8 = self._maybe_prepare_fp8_qkv(
+            query, key, value, attn_metadata
+        )
+        if use_fp8:
+            return self._forward_fp8(query, key, value, attn_metadata)
 
         out = flash_attn_func(
             query,
@@ -208,6 +269,13 @@ class FlashAttentionImpl(AttentionImpl):
                 "Please install MindIE-SD to enable NPU attention support. "
                 "For installation details, see https://gitcode.com/Ascend/MindIE-SD"
                 "Otherwise, use SDPA backend by setting DIFFUSION_ATTENTION_BACKEND=TORCH_SDPA"
+            )
+
+        if self._fp8_requested(attn_metadata):
+            logger.warning_once(
+                "FP8 attention requested for the NPU FlashAttention backend, "
+                "but NPU-specific FP8 Q/K/V preparation is not implemented. "
+                "Using the original compute dtype."
             )
 
         attention_mask = attn_metadata.attn_mask if attn_metadata else None
