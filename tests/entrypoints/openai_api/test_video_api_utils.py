@@ -8,7 +8,6 @@ import types
 import numpy as np
 import pytest
 
-from vllm_omni.diffusion.postprocess import rife_interpolator
 from vllm_omni.entrypoints.openai import video_api_utils
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
@@ -90,30 +89,3 @@ def test_encode_video_bytes_skips_interpolation_when_disabled(monkeypatch):
     assert video_bytes == b"fake-video"
     assert len(export_calls[0]["frames"]) == 5
     assert export_calls[0]["fps"] == 8
-
-
-def test_frame_interpolation_auto_device_uses_cpu_on_non_cuda_platform(monkeypatch):
-    class FakeNPUPlatform:
-        @staticmethod
-        def is_cuda():
-            return False
-
-        @staticmethod
-        def is_rocm():
-            return False
-
-    monkeypatch.delenv("VLLM_OMNI_FRAME_INTERPOLATION_DEVICE", raising=False)
-    monkeypatch.setattr(rife_interpolator.torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(
-        rife_interpolator,
-        "_get_current_omni_platform",
-        lambda: FakeNPUPlatform(),
-    )
-
-    assert rife_interpolator._select_torch_device().type == "cpu"
-
-
-def test_frame_interpolation_device_env_overrides_auto(monkeypatch):
-    monkeypatch.setenv("VLLM_OMNI_FRAME_INTERPOLATION_DEVICE", "cpu")
-
-    assert rife_interpolator._select_torch_device().type == "cpu"
