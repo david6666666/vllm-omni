@@ -124,7 +124,6 @@ class OmniPlatform(Platform):
         device_type: str,
         dtype: torch.dtype,
         enabled: bool = True,
-        warn_on_error: bool = True,
     ):
         if not enabled:
             return nullcontext()
@@ -132,8 +131,7 @@ class OmniPlatform(Platform):
         try:
             return torch.autocast(device_type=device_type, dtype=dtype, enabled=True)
         except (RuntimeError, TypeError, ValueError) as exc:
-            if warn_on_error:
-                logger.warning("autocast unavailable for device_type=%s dtype=%s: %s", device_type, dtype, exc)
+            logger.warning("autocast unavailable for device_type=%s dtype=%s: %s", device_type, dtype, exc)
             return nullcontext()
 
     @classmethod

@@ -108,25 +108,21 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
         return device_props.total_memory
 
     @classmethod
-    def create_autocast_context(
-        cls,
-        *,
-        device_type: str,
-        dtype: torch.dtype,
-        enabled: bool = True,
-    ):
-        ctx = super().create_autocast_context(
-            device_type=device_type,
-            dtype=dtype,
-            enabled=enabled,
-            warn_on_error=device_type != "npu",
-        )
-        if device_type != "npu" or type(ctx) is not nullcontext:
-            return ctx
+    def create_autocast_context(cls, *, device_type, dtype, enabled=True):
+        if device_type != "npu":
+            return super().create_autocast_context(
+                device_type=device_type,
+                dtype=dtype,
+                enabled=enabled,
+            )
+        if not enabled:
+            return nullcontext()
 
-        if hasattr(torch.npu, "amp") and hasattr(torch.npu.amp, "autocast"):
+        # NPU-specific fallback
+        try:
             return torch.npu.amp.autocast(dtype=dtype)
-
+        except (RuntimeError, TypeError, ValueError) as exc:
+            logger.warning("autocast unavailable for device_type=%s dtype=%s: %s", device_type, dtype, exc)
         return nullcontext()
 
     @classmethod
