@@ -25,7 +25,8 @@ from vllm.logger import init_logger
 logger = init_logger(__name__)
 
 _DEFAULT_RIFE_HF_REPO = "elfgum/RIFE-4.22.lite"
-_MODEL_CACHE: dict[str, Model] = {}
+_FRAME_INTERPOLATION_DEVICE_ENV = "VLLM_OMNI_FRAME_INTERPOLATION_DEVICE"
+_MODEL_CACHE: dict[tuple[str, str], Model] = {}
 _MODEL_CACHE_LOCK = threading.Lock()
 
 
@@ -316,11 +317,28 @@ def _resolve_rife_model_path(model_path: str | None) -> str:
     )
 
 
-def _select_torch_device() -> torch.device:
-    try:
-        from vllm_omni.platforms import current_omni_platform
+def _get_current_omni_platform():
+    from vllm_omni.platforms import current_omni_platform
 
-        return current_omni_platform.get_torch_device()
+    return current_omni_platform
+
+
+def _select_torch_device() -> torch.device:
+    requested_device = os.environ.get(_FRAME_INTERPOLATION_DEVICE_ENV, "auto").strip().lower()
+    if requested_device not in ("", "auto"):
+        return torch.device(requested_device)
+
+    try:
+        current_omni_platform = _get_current_omni_platform()
+        if (current_omni_platform.is_cuda() or current_omni_platform.is_rocm()) and torch.cuda.is_available():
+            return current_omni_platform.get_torch_device()
+
+        logger.info(
+            "Using CPU for RIFE frame interpolation on platform %s. Set %s to override.",
+            type(current_omni_platform).__name__,
+            _FRAME_INTERPOLATION_DEVICE_ENV,
+        )
+        return torch.device("cpu")
     except Exception as exc:
         logger.warning("Failed to resolve current vLLM-Omni torch device: %s", exc)
 
@@ -339,17 +357,18 @@ class FrameInterpolator:
     def _ensure_model_loaded(self) -> Model:
         resolved_path = _resolve_rife_model_path(self._model_path)
         self._resolved_path = resolved_path
+        device = _select_torch_device()
+        cache_key = (resolved_path, str(device))
 
         with _MODEL_CACHE_LOCK:
-            if resolved_path in _MODEL_CACHE:
-                return _MODEL_CACHE[resolved_path]
+            if cache_key in _MODEL_CACHE:
+                return _MODEL_CACHE[cache_key]
 
-            device = _select_torch_device()
             model = Model()
             model.load_model(resolved_path)
             model.eval()
             model.flownet = model.flownet.to(device)
-            _MODEL_CACHE[resolved_path] = model
+            _MODEL_CACHE[cache_key] = model
             logger.info("RIFE model loaded on device: %s", device)
             return model
 
