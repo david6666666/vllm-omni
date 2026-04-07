@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from vllm_omni.diffusion.distributed.autoencoders import autoencoder_kl_wan as wan_vae_module
