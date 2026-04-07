@@ -3,6 +3,8 @@ import torch
 from vllm_omni.diffusion.distributed.autoencoders import autoencoder_kl_wan as wan_vae_module
 from vllm_omni.diffusion.distributed.autoencoders.autoencoder_kl_wan import OmniAutoencoderKLWan
 
+pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
+
 
 class _DummyOmniAutoencoderKLWan(OmniAutoencoderKLWan):
     def __init__(self, *, dtype: torch.dtype):
