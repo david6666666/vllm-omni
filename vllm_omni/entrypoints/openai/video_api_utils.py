@@ -18,6 +18,7 @@ import numpy as np
 import torch
 from PIL import Image, UnidentifiedImageError
 
+from vllm_omni.diffusion.postprocess import interpolate_video_frames
 from vllm_omni.entrypoints.openai.errors import InvalidInputReferenceError
 from vllm_omni.entrypoints.openai.protocol.videos import (
     FileImageReference,
@@ -222,7 +223,51 @@ def _coerce_audio_to_waveform(audio: Any) -> torch.Tensor:
     return waveform.float().contiguous()
 
 
-def _encode_video_bytes(video: Any, fps: int, audio: Any | None = None, audio_sample_rate: int | None = None) -> bytes:
+def _frames_to_rife_uint8(frames: list[np.ndarray]) -> list[np.ndarray]:
+    rife_frames: list[np.ndarray] = []
+    for frame in frames:
+        if frame.ndim != 3:
+            raise ValueError(f"Expected HWC video frame for interpolation, got shape {frame.shape}")
+        if frame.shape[-1] == 4:
+            frame = frame[..., :3]
+        elif frame.shape[-1] != 3:
+            raise ValueError(f"Expected RGB/RGBA frame for interpolation, got shape {frame.shape}")
+        rife_frames.append((np.clip(frame, 0.0, 1.0) * 255.0).round().clip(0, 255).astype(np.uint8))
+    return rife_frames
+
+
+def _apply_frame_interpolation(
+    frames: list[np.ndarray],
+    fps: int,
+    *,
+    exp: int,
+    scale: float,
+    model_path: str | None,
+) -> tuple[list[np.ndarray], int]:
+    if len(frames) < 2:
+        return frames, fps
+
+    interpolated_frames, multiplier = interpolate_video_frames(
+        _frames_to_rife_uint8(frames),
+        exp=exp,
+        scale=scale,
+        model_path=model_path,
+    )
+    frames = [frame.astype(np.float32) / 255.0 for frame in interpolated_frames]
+    return frames, fps * multiplier
+
+
+def _encode_video_bytes(
+    video: Any,
+    fps: int,
+    audio: Any | None = None,
+    audio_sample_rate: int | None = None,
+    *,
+    enable_frame_interpolation: bool = False,
+    frame_interpolation_exp: int = 1,
+    frame_interpolation_scale: float = 1.0,
+    frame_interpolation_model_path: str | None = None,
+) -> bytes:
     """Encode a video payload into MP4 bytes, optionally muxing audio."""
     try:
         from diffusers.utils import export_to_video
@@ -232,6 +277,14 @@ def _encode_video_bytes(video: Any, fps: int, audio: Any | None = None, audio_sa
     frames = _coerce_video_to_frames(video)
     if not frames:
         raise ValueError("No frames found to encode.")
+    if enable_frame_interpolation:
+        frames, fps = _apply_frame_interpolation(
+            frames,
+            fps,
+            exp=frame_interpolation_exp,
+            scale=frame_interpolation_scale,
+            model_path=frame_interpolation_model_path,
+        )
 
     tmp_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
     tmp_file.close()
@@ -263,7 +316,26 @@ def _encode_video_bytes(video: Any, fps: int, audio: Any | None = None, audio_sa
             pass
 
 
-def encode_video_base64(video: Any, fps: int, audio: Any | None = None, audio_sample_rate: int | None = None) -> str:
+def encode_video_base64(
+    video: Any,
+    fps: int,
+    audio: Any | None = None,
+    audio_sample_rate: int | None = None,
+    *,
+    enable_frame_interpolation: bool = False,
+    frame_interpolation_exp: int = 1,
+    frame_interpolation_scale: float = 1.0,
+    frame_interpolation_model_path: str | None = None,
+) -> str:
     """Encode a video (frames/array/tensor) to base64 MP4."""
-    video_bytes = _encode_video_bytes(video, fps=fps, audio=audio, audio_sample_rate=audio_sample_rate)
+    video_bytes = _encode_video_bytes(
+        video,
+        fps=fps,
+        audio=audio,
+        audio_sample_rate=audio_sample_rate,
+        enable_frame_interpolation=enable_frame_interpolation,
+        frame_interpolation_exp=frame_interpolation_exp,
+        frame_interpolation_scale=frame_interpolation_scale,
+        frame_interpolation_model_path=frame_interpolation_model_path,
+    )
     return base64.b64encode(video_bytes).decode("utf-8")

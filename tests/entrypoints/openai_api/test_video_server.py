@@ -332,6 +332,42 @@ def test_sampling_params_pass_through(test_client, mocker: MockerFixture):
     assert captured.extra_args["flow_shift"] == 0.25
 
 
+def test_frame_interpolation_params_pass_to_async_encoder(test_client, mocker: MockerFixture):
+    """Frame interpolation form parameters should be forwarded to MP4 encoding."""
+    encode_calls = []
+
+    def _fake_encode(video, fps, **kwargs):
+        encode_calls.append({"video": video, "fps": fps, **kwargs})
+        return "Zg=="
+
+    mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video.encode_video_base64",
+        side_effect=_fake_encode,
+    )
+    response = test_client.post(
+        "/v1/videos",
+        data={
+            "prompt": "smooth motion",
+            "fps": "8",
+            "enable_frame_interpolation": "true",
+            "frame_interpolation_exp": "2",
+            "frame_interpolation_scale": "0.5",
+            "frame_interpolation_model_path": "local-rife",
+        },
+    )
+
+    assert response.status_code == 200
+    video_id = response.json()["id"]
+    _wait_for_status(test_client, video_id, VideoGenerationStatus.COMPLETED.value)
+
+    assert encode_calls
+    assert encode_calls[0]["fps"] == 8
+    assert encode_calls[0]["enable_frame_interpolation"] is True
+    assert encode_calls[0]["frame_interpolation_exp"] == 2
+    assert encode_calls[0]["frame_interpolation_scale"] == 0.5
+    assert encode_calls[0]["frame_interpolation_model_path"] == "local-rife"
+
+
 def test_audio_sample_rate_comes_from_model_config(test_client, mocker: MockerFixture):
     audio_sample_rates = []
 
@@ -498,6 +534,10 @@ def test_video_request_validation():
 
     with pytest.raises(ValueError):
         VideoGenerationRequest(prompt="test", image_reference={"file_id": "file-1", "image_url": "https://example.com"})
+    with pytest.raises(ValueError):
+        VideoGenerationRequest(prompt="test", frame_interpolation_exp=0)
+    with pytest.raises(ValueError):
+        VideoGenerationRequest(prompt="test", frame_interpolation_scale=0)
 
 
 def test_list_videos_supports_order_after_and_limit(test_client, mocker: MockerFixture):
@@ -888,3 +928,27 @@ def test_sync_sampling_params_pass_through(test_client, mocker: MockerFixture):
     assert captured.num_inference_steps == 30
     assert captured.guidance_scale == 6.5
     assert captured.seed == 42
+
+
+def test_sync_frame_interpolation_params_pass_to_bytes_encoder(test_client, mocker: MockerFixture):
+    """Frame interpolation form parameters should be forwarded on the sync path."""
+    encode_mock = _mock_encode_video_bytes(mocker)
+    response = test_client.post(
+        "/v1/videos/sync",
+        data={
+            "prompt": "smooth sync",
+            "fps": "8",
+            "enable_frame_interpolation": "true",
+            "frame_interpolation_exp": "2",
+            "frame_interpolation_scale": "0.5",
+            "frame_interpolation_model_path": "local-rife",
+        },
+    )
+
+    assert response.status_code == 200
+    _, kwargs = encode_mock.call_args
+    assert kwargs["fps"] == 8
+    assert kwargs["enable_frame_interpolation"] is True
+    assert kwargs["frame_interpolation_exp"] == 2
+    assert kwargs["frame_interpolation_scale"] == 0.5
+    assert kwargs["frame_interpolation_model_path"] == "local-rife"

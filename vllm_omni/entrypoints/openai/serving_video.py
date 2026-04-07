@@ -165,17 +165,19 @@ class OmniOpenAIServingVideo:
         videos, audios, audio_sample_rate, output_fps = await self._run_and_extract(
             request, reference_id, reference_image=reference_image
         )
+        frame_interpolation_kwargs = self._frame_interpolation_kwargs(request)
         _t_encode_start = time.perf_counter()
         video_data = [
             VideoData(
                 b64_json=(
-                    encode_video_base64(video, fps=output_fps)
+                    encode_video_base64(video, fps=output_fps, **frame_interpolation_kwargs)
                     if audios[idx] is None
                     else encode_video_base64(
                         video,
                         fps=output_fps,
                         audio=audios[idx],
                         audio_sample_rate=audio_sample_rate,
+                        **frame_interpolation_kwargs,
                     )
                 )
             )
@@ -201,15 +203,28 @@ class OmniOpenAIServingVideo:
                 "Video request %s generated %d outputs; returning only the first.", reference_id, len(videos)
             )
         audio = audios[0]
+        frame_interpolation_kwargs = self._frame_interpolation_kwargs(request)
         _t_encode_start = time.perf_counter()
         video_bytes = _encode_video_bytes(
             videos[0],
             fps=output_fps,
             **({"audio": audio, "audio_sample_rate": audio_sample_rate} if audio is not None else {}),
+            **frame_interpolation_kwargs,
         )
         _t_encode_ms = (time.perf_counter() - _t_encode_start) * 1000
         logger.info("Video response encoding (MP4 bytes): %.2f ms", _t_encode_ms)
         return video_bytes
+
+    @staticmethod
+    def _frame_interpolation_kwargs(request: VideoGenerationRequest) -> dict[str, Any]:
+        if not request.enable_frame_interpolation:
+            return {}
+        return {
+            "enable_frame_interpolation": True,
+            "frame_interpolation_exp": request.frame_interpolation_exp,
+            "frame_interpolation_scale": request.frame_interpolation_scale,
+            "frame_interpolation_model_path": request.frame_interpolation_model_path,
+        }
 
     @staticmethod
     def _apply_lora(lora_body: Any, gen_params: OmniDiffusionSamplingParams) -> None:
