@@ -115,16 +115,14 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
         dtype: torch.dtype,
         enabled: bool = True,
     ):
-        if device_type != "npu":
-            return super().create_autocast_context(device_type=device_type, dtype=dtype, enabled=enabled)
-
-        if not enabled:
-            return nullcontext()
-
-        try:
-            return torch.autocast(device_type=device_type, dtype=dtype, enabled=True)
-        except (RuntimeError, TypeError, ValueError):
-            pass
+        ctx = super().create_autocast_context(
+            device_type=device_type,
+            dtype=dtype,
+            enabled=enabled,
+            warn_on_error=device_type != "npu",
+        )
+        if device_type != "npu" or not isinstance(ctx, nullcontext):
+            return ctx
 
         if hasattr(torch.npu, "amp") and hasattr(torch.npu.amp, "autocast"):
             return torch.npu.amp.autocast(dtype=dtype)

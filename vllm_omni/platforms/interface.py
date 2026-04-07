@@ -6,7 +6,11 @@ from enum import Enum
 from typing import Any
 
 import torch
+from vllm.logger import init_logger
 from vllm.platforms import Platform
+
+
+logger = init_logger(__name__)
 
 
 class OmniPlatformEnum(Enum):
@@ -121,13 +125,16 @@ class OmniPlatform(Platform):
         device_type: str,
         dtype: torch.dtype,
         enabled: bool = True,
+        warn_on_error: bool = True,
     ):
         if not enabled:
             return nullcontext()
 
         try:
             return torch.autocast(device_type=device_type, dtype=dtype, enabled=True)
-        except (RuntimeError, TypeError, ValueError):
+        except (RuntimeError, TypeError, ValueError) as exc:
+            if warn_on_error:
+                logger.warning("autocast unavailable for device_type=%s dtype=%s: %s", device_type, dtype, exc)
             return nullcontext()
 
     @classmethod

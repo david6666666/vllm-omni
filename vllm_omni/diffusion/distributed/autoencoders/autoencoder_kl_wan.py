@@ -21,26 +21,22 @@ from vllm_omni.platforms import current_omni_platform
 logger = init_logger(__name__)
 
 
-def _make_autocast_context(model: torch.nn.Module):
-    try:
-        first_param = next(model.parameters())
-    except StopIteration:
-        return nullcontext()
-
-    dtype = first_param.dtype
-    if dtype not in (torch.float16, torch.bfloat16):
-        return nullcontext()
-
-    return current_omni_platform.create_autocast_context(
-        device_type=first_param.device.type,
-        dtype=dtype,
-        enabled=True,
-    )
-
-
 class OmniAutoencoderKLWan(AutoencoderKLWan):
     def _execution_context(self):
-        return _make_autocast_context(self)
+        try:
+            first_param = next(self.parameters())
+        except StopIteration:
+            return nullcontext()
+
+        dtype = first_param.dtype
+        if dtype not in (torch.float16, torch.bfloat16):
+            return nullcontext()
+
+        return current_omni_platform.create_autocast_context(
+            device_type=first_param.device.type,
+            dtype=dtype,
+            enabled=True,
+        )
 
     def encode(self, x: torch.Tensor, return_dict: bool = True):
         with self._execution_context():
