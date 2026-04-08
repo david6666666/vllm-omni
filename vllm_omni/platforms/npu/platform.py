@@ -118,9 +118,21 @@ class NPUOmniPlatform(OmniPlatform, NPUPlatform):
         if not enabled:
             return nullcontext()
 
-        # NPU-specific fallback
+        ctx = super().create_autocast_context(
+            device_type=device_type,
+            dtype=dtype,
+            enabled=True,
+        )
+        if not isinstance(ctx, nullcontext):
+            return ctx
+
+        npu_autocast = getattr(getattr(getattr(torch, "npu", None), "amp", None), "autocast", None)
+        if npu_autocast is None:
+            logger.warning("autocast unavailable for device_type=%s dtype=%s", device_type, dtype)
+            return nullcontext()
+
         try:
-            return torch.npu.amp.autocast(dtype=dtype)
+            return npu_autocast(dtype=dtype)
         except (RuntimeError, TypeError, ValueError) as exc:
             logger.warning("autocast unavailable for device_type=%s dtype=%s: %s", device_type, dtype, exc)
         return nullcontext()
