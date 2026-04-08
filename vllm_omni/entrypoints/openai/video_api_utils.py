@@ -10,6 +10,7 @@ import base64
 import binascii
 import os
 import tempfile
+import time
 from io import BytesIO
 from typing import Any
 
@@ -17,6 +18,7 @@ import httpx
 import numpy as np
 import torch
 from PIL import Image, UnidentifiedImageError
+from vllm.logger import init_logger
 
 from vllm_omni.diffusion.postprocess import interpolate_video_frames
 from vllm_omni.entrypoints.openai.errors import InvalidInputReferenceError
@@ -25,6 +27,8 @@ from vllm_omni.entrypoints.openai.protocol.videos import (
     ImageReference,
     UrlImageReference,
 )
+
+logger = init_logger(__name__)
 
 
 def _decode_image_bytes(image_bytes: bytes, *, source: str) -> Image.Image:
@@ -247,14 +251,33 @@ def _apply_frame_interpolation(
     if len(frames) < 2:
         return frames, fps
 
+    total_start = time.perf_counter()
+    input_frame_count = len(frames)
+    rife_frames = _frames_to_rife_uint8(frames)
+    rife_start = time.perf_counter()
     interpolated_frames, multiplier = interpolate_video_frames(
-        _frames_to_rife_uint8(frames),
+        rife_frames,
         exp=exp,
         scale=scale,
         model_path=model_path,
     )
+    rife_ms = (time.perf_counter() - rife_start) * 1000
     frames = [frame.astype(np.float32) / 255.0 for frame in interpolated_frames]
-    return frames, fps * multiplier
+    output_fps = fps * multiplier
+    total_ms = (time.perf_counter() - total_start) * 1000
+    logger.info(
+        "Video frame interpolation postprocess: frames=%d->%d fps=%s->%s exp=%s scale=%s "
+        "rife=%.2f ms total=%.2f ms",
+        input_frame_count,
+        len(frames),
+        fps,
+        output_fps,
+        exp,
+        scale,
+        rife_ms,
+        total_ms,
+    )
+    return frames, output_fps
 
 
 def _encode_video_bytes(
@@ -289,6 +312,7 @@ def _encode_video_bytes(
     tmp_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
     tmp_file.close()
     try:
+        export_start = time.perf_counter()
         if audio is not None:
             from diffusers.pipelines.ltx2.export_utils import encode_video as encode_ltx2_video
 
@@ -307,6 +331,14 @@ def _encode_video_bytes(
             )
         else:
             export_to_video(frames, tmp_file.name, fps=fps)
+        export_ms = (time.perf_counter() - export_start) * 1000
+        logger.info(
+            "Video MP4 export: frames=%d fps=%s audio=%s elapsed=%.2f ms",
+            len(frames),
+            fps,
+            audio is not None,
+            export_ms,
+        )
         with open(tmp_file.name, "rb") as f:
             return f.read()
     finally:
