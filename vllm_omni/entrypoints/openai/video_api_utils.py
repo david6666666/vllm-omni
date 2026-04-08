@@ -266,8 +266,7 @@ def _apply_frame_interpolation(
     output_fps = fps * multiplier
     total_ms = (time.perf_counter() - total_start) * 1000
     logger.info(
-        "Video frame interpolation postprocess: frames=%d->%d fps=%s->%s exp=%s scale=%s "
-        "rife=%.2f ms total=%.2f ms",
+        "Video frame interpolation postprocess: frames=%d->%d fps=%s->%s exp=%s scale=%s rife=%.2f ms total=%.2f ms",
         input_frame_count,
         len(frames),
         fps,
