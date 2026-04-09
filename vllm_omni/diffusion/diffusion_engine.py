@@ -161,9 +161,13 @@ class DiffusionEngine:
             outputs = output_data
         audio_payload = None
         custom_output = output.custom_output or {}
+        model_audio_sample_rate = None
+        model_fps = None
         if isinstance(outputs, dict):
             audio_payload = outputs.get("audio")
             custom_output.update(outputs.get("custom_output") or {})
+            model_audio_sample_rate = outputs.get("audio_sample_rate")
+            model_fps = outputs.get("fps")
             outputs = outputs.get("video", outputs)
         postprocess_time = time.perf_counter() - postprocess_start_time
         logger.info(f"Post-processing completed in {postprocess_time:.4f} seconds")
@@ -219,6 +223,10 @@ class DiffusionEngine:
                 mm_output = {}
                 if audio_payload is not None:
                     mm_output["audio"] = audio_payload
+                if model_audio_sample_rate is not None:
+                    mm_output["audio_sample_rate"] = model_audio_sample_rate
+                if model_fps is not None:
+                    mm_output["fps"] = model_fps
                 return [
                     OmniRequestOutput.from_diffusion(
                         request_id=request_id,
@@ -226,6 +234,10 @@ class DiffusionEngine:
                         prompt=prompt,
                         metrics=metrics,
                         latents=output.trajectory_latents,
+                        trajectory_latents=output.trajectory_latents,
+                        trajectory_timesteps=output.trajectory_timesteps,
+                        trajectory_log_probs=output.trajectory_log_probs,
+                        trajectory_decoded=output.trajectory_decoded,
                         custom_output=custom_output,
                         multimodal_output=mm_output,
                         stage_durations=output.stage_durations,
@@ -277,6 +289,10 @@ class DiffusionEngine:
                                 if num_outputs == 1:
                                     sliced_audio = sliced_audio[0]
                         mm_output["audio"] = sliced_audio
+                    if model_audio_sample_rate is not None:
+                        mm_output["audio_sample_rate"] = model_audio_sample_rate
+                    if model_fps is not None:
+                        mm_output["fps"] = model_fps
                     results.append(
                         OmniRequestOutput.from_diffusion(
                             request_id=request_id,
@@ -284,6 +300,10 @@ class DiffusionEngine:
                             prompt=prompt,
                             metrics=metrics,
                             latents=output.trajectory_latents,
+                            trajectory_latents=output.trajectory_latents,
+                            trajectory_timesteps=output.trajectory_timesteps,
+                            trajectory_log_probs=output.trajectory_log_probs,
+                            trajectory_decoded=output.trajectory_decoded,
                             custom_output=custom_output,
                             multimodal_output=mm_output,
                             stage_durations=output.stage_durations,
