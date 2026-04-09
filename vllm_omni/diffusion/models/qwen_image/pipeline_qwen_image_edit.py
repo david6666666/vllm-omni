@@ -35,11 +35,11 @@ from vllm_omni.diffusion.models.qwen_image.pipeline_qwen_image import calculate_
 from vllm_omni.diffusion.models.qwen_image.qwen_image_transformer import (
     QwenImageTransformer2DModel,
 )
-from vllm_omni.diffusion.models.qwen_image.size_utils import (
-    normalize_qwen_image_size,
-)
 from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import DiffusionPipelineProfilerMixin
 from vllm_omni.diffusion.request import OmniDiffusionRequest
+from vllm_omni.diffusion.utils.size_utils import (
+    normalize_min_aligned_size,
+)
 from vllm_omni.diffusion.utils.tf_utils import get_transformer_config_kwargs
 from vllm_omni.inputs.data import OmniTextPrompt
 from vllm_omni.model_executor.model_loader.weight_utils import (
@@ -100,7 +100,9 @@ def get_qwen_image_edit_pre_process_func(
             width = request.sampling_params.width or calculated_width
 
             # Ensure dimensions are multiples of vae_scale_factor * 2
-            height, width = normalize_qwen_image_size(height, width, vae_scale_factor)
+            height, width = normalize_min_aligned_size(
+                height, width, vae_scale_factor * 2
+            )
 
             # Store calculated dimensions in request
             prompt["additional_information"]["calculated_height"] = calculated_height
@@ -662,7 +664,9 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
             height = height or calculated_height
             width = width or calculated_width
 
-            height, width = normalize_qwen_image_size(height, width, self.vae_scale_factor)
+            height, width = normalize_min_aligned_size(
+                height, width, self.vae_scale_factor * 2
+            )
 
             if image is not None and not (isinstance(image, torch.Tensor) and image.size(1) == self.latent_channels):
                 image = self.image_processor.resize(image, calculated_height, calculated_width)
