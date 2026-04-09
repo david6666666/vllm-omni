@@ -44,28 +44,6 @@ def test_encode_video_bytes_exports_frames_without_interpolation(monkeypatch):
     assert export_calls[0]["fps"] == 8
 
 
-def test_encode_video_bytes_skips_interpolation_when_disabled(monkeypatch):
-    export_calls = []
-    _install_fake_diffusers_export(monkeypatch, export_calls)
-
-    def _unexpected_interpolation(*args, **kwargs):
-        raise AssertionError("interpolation should not run")
-
-    monkeypatch.setattr(
-        video_api_utils,
-        "interpolate_video_frames",
-        _unexpected_interpolation,
-        raising=False,
-    )
-
-    frames = [np.zeros((2, 2, 3), dtype=np.float32) for _ in range(5)]
-    video_bytes = video_api_utils._encode_video_bytes(frames, fps=8)
-
-    assert video_bytes == b"fake-video"
-    assert len(export_calls[0]["frames"]) == 5
-    assert export_calls[0]["fps"] == 8
-
-
 def test_rife_model_inference_runs_on_dummy_tensors():
     model = rife_interpolator.Model().eval()
     img0 = torch.rand(1, 3, 32, 32)

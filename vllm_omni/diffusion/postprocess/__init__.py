@@ -4,8 +4,7 @@
 
 from vllm_omni.diffusion.postprocess.rife_interpolator import (
     FrameInterpolator,
-    interpolate_video_frames,
     interpolate_video_tensor,
 )
 
-__all__ = ["FrameInterpolator", "interpolate_video_frames", "interpolate_video_tensor"]
+__all__ = ["FrameInterpolator", "interpolate_video_tensor"]

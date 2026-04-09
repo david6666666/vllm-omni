@@ -17,7 +17,6 @@ import os
 import threading
 from typing import Any
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -380,16 +379,6 @@ class FrameInterpolator:
             logger.info("RIFE model loaded on device: %s", device)
             return model
 
-    @staticmethod
-    def _frame_to_tensor(frame: np.ndarray, device: torch.device) -> torch.Tensor:
-        tensor = torch.from_numpy(np.ascontiguousarray(frame)).permute(2, 0, 1).unsqueeze(0).float() / 255.0
-        return tensor.to(device)
-
-    @staticmethod
-    def _tensor_to_frame(tensor: torch.Tensor) -> np.ndarray:
-        arr = tensor.squeeze(0).permute(1, 2, 0).clamp(0.0, 1.0).cpu().numpy()
-        return (arr * 255.0).round().clip(0, 255).astype(np.uint8)
-
     def _make_inference(
         self,
         model: Model,
@@ -406,34 +395,6 @@ class FrameInterpolator:
             + [mid]
             + self._make_inference(model, mid, img1, n // 2, scale)
         )
-
-    def interpolate(
-        self,
-        frames: list[np.ndarray],
-        exp: int = 1,
-        scale: float = 1.0,
-    ) -> tuple[list[np.ndarray], int]:
-        if exp < 1:
-            raise ValueError(f"frame interpolation exp must be >= 1, got {exp}")
-        if scale <= 0:
-            raise ValueError(f"frame interpolation scale must be > 0, got {scale}")
-        if len(frames) < 2:
-            logger.warning("Frame interpolation requires at least 2 frames; returning input unchanged.")
-            return frames, 1
-
-        model = self._ensure_model_loaded()
-        device = model.device()
-        intermediates_per_pair = 2**exp // 2
-
-        result: list[np.ndarray] = []
-        for idx in range(len(frames) - 1):
-            img0 = self._frame_to_tensor(frames[idx], device)
-            img1 = self._frame_to_tensor(frames[idx + 1], device)
-            result.append(frames[idx])
-            for tensor in self._make_inference(model, img0, img1, intermediates_per_pair, scale):
-                result.append(self._tensor_to_frame(tensor))
-        result.append(frames[-1])
-        return result, 2**exp
 
     def interpolate_tensor(
         self,
@@ -464,17 +425,6 @@ class FrameInterpolator:
         result_frames.append(video[:, :, -1, :, :])
         result = torch.stack(result_frames, dim=2)
         return restore_layout(restore_range(result)), 2**exp
-
-
-def interpolate_video_frames(
-    frames: list[np.ndarray],
-    exp: int = 1,
-    scale: float = 1.0,
-    model_path: str | None = None,
-) -> tuple[list[np.ndarray], int]:
-    """Interpolate a list of uint8 HWC frames and return the FPS multiplier."""
-    interpolator = FrameInterpolator(model_path=model_path)
-    return interpolator.interpolate(frames, exp=exp, scale=scale)
 
 
 def interpolate_video_tensor(
