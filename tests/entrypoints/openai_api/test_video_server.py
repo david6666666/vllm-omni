@@ -368,6 +368,31 @@ def test_frame_interpolation_params_pass_to_async_encoder(test_client, mocker: M
     assert encode_calls[0]["frame_interpolation_model_path"] == "local-rife"
 
 
+def test_async_video_encoding_uses_to_thread(test_client, mocker: MockerFixture):
+    to_thread_calls = []
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        to_thread_calls.append(func)
+        return func(*args, **kwargs)
+
+    mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video.asyncio.to_thread",
+        side_effect=_fake_to_thread,
+    )
+    mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video.encode_video_base64",
+        return_value="Zg==",
+    )
+
+    response = test_client.post("/v1/videos", data={"prompt": "threaded encode"})
+
+    assert response.status_code == 200
+    video_id = response.json()["id"]
+    _wait_for_status(test_client, video_id, VideoGenerationStatus.COMPLETED.value)
+    assert to_thread_calls
+    assert to_thread_calls[0] is not None
+
+
 def test_audio_sample_rate_comes_from_model_config(test_client, mocker: MockerFixture):
     audio_sample_rates = []
 
@@ -952,3 +977,24 @@ def test_sync_frame_interpolation_params_pass_to_bytes_encoder(test_client, mock
     assert kwargs["frame_interpolation_exp"] == 2
     assert kwargs["frame_interpolation_scale"] == 0.5
     assert kwargs["frame_interpolation_model_path"] == "local-rife"
+
+
+def test_sync_video_encoding_uses_to_thread(test_client, mocker: MockerFixture):
+    to_thread_calls = []
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        to_thread_calls.append(func)
+        return func(*args, **kwargs)
+
+    mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video.asyncio.to_thread",
+        side_effect=_fake_to_thread,
+    )
+    _mock_encode_video_bytes(mocker, b"threaded-bytes")
+
+    response = test_client.post("/v1/videos/sync", data={"prompt": "threaded sync"})
+
+    assert response.status_code == 200
+    assert response.content == b"threaded-bytes"
+    assert to_thread_calls
+    assert to_thread_calls[0] is not None

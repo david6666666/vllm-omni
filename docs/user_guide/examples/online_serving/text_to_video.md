@@ -192,6 +192,10 @@ without rerunning the diffusion model. If the generated video has `N` frames,
 the interpolated output frame count is `(N - 1) * 2**exp + 1`. The encoder FPS
 is multiplied by `2**exp` so the output duration remains close to the original.
 
+By default, frame interpolation runs on CPU to avoid creating a separate GPU
+context in the API server process. To force a specific device for this
+post-processing step, set `VLLM_OMNI_FRAME_INTERPOLATION_DEVICE`.
+
 Example: generate 5 frames and interpolate to 9 frames:
 
 ```bash

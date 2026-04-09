@@ -25,7 +25,8 @@ from vllm.logger import init_logger
 logger = init_logger(__name__)
 
 _DEFAULT_RIFE_HF_REPO = "elfgum/RIFE-4.22.lite"
-_MODEL_CACHE: dict[str, Model] = {}
+_FRAME_INTERPOLATION_DEVICE_ENV = "VLLM_OMNI_FRAME_INTERPOLATION_DEVICE"
+_MODEL_CACHE: dict[tuple[str, str], Model] = {}
 _MODEL_CACHE_LOCK = threading.Lock()
 
 
@@ -317,15 +318,12 @@ def _resolve_rife_model_path(model_path: str | None) -> str:
 
 
 def _select_torch_device() -> torch.device:
-    try:
-        from vllm_omni.platforms import current_omni_platform
+    requested_device = os.environ.get(_FRAME_INTERPOLATION_DEVICE_ENV, "").strip().lower()
+    if requested_device:
+        return torch.device(requested_device)
 
-        return current_omni_platform.get_torch_device()
-    except Exception as exc:
-        logger.warning("Failed to resolve current vLLM-Omni torch device: %s", exc)
-
-    if torch.cuda.is_available():
-        return torch.device("cuda")
+    # Keep API server lightweight by default. Users can override this with
+    # VLLM_OMNI_FRAME_INTERPOLATION_DEVICE when they explicitly want a device backend.
     return torch.device("cpu")
 
 
@@ -339,17 +337,18 @@ class FrameInterpolator:
     def _ensure_model_loaded(self) -> Model:
         resolved_path = _resolve_rife_model_path(self._model_path)
         self._resolved_path = resolved_path
+        device = _select_torch_device()
+        cache_key = (resolved_path, str(device))
 
         with _MODEL_CACHE_LOCK:
-            if resolved_path in _MODEL_CACHE:
-                return _MODEL_CACHE[resolved_path]
+            if cache_key in _MODEL_CACHE:
+                return _MODEL_CACHE[cache_key]
 
-            device = _select_torch_device()
             model = Model()
             model.load_model(resolved_path)
             model.eval()
             model.flownet = model.flownet.to(device)
-            _MODEL_CACHE[resolved_path] = model
+            _MODEL_CACHE[cache_key] = model
             logger.info("RIFE model loaded on device: %s", device)
             return model
 

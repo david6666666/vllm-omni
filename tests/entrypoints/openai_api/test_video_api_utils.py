@@ -7,7 +7,9 @@ import types
 
 import numpy as np
 import pytest
+import torch
 
+from vllm_omni.diffusion.postprocess import rife_interpolator
 from vllm_omni.entrypoints.openai import video_api_utils
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
@@ -89,3 +91,31 @@ def test_encode_video_bytes_skips_interpolation_when_disabled(monkeypatch):
     assert video_bytes == b"fake-video"
     assert len(export_calls[0]["frames"]) == 5
     assert export_calls[0]["fps"] == 8
+
+
+def test_rife_model_inference_runs_on_dummy_tensors():
+    model = rife_interpolator.Model().eval()
+    img0 = torch.rand(1, 3, 32, 32)
+    img1 = torch.rand(1, 3, 32, 32)
+
+    output = model.inference(img0, img1, scale=1.0)
+
+    assert output.shape == (1, 3, 32, 32)
+    assert torch.isfinite(output).all()
+
+
+def test_frame_interpolator_runs_actual_torch_path(monkeypatch):
+    model = rife_interpolator.Model().eval()
+    interpolator = rife_interpolator.FrameInterpolator()
+    monkeypatch.setattr(interpolator, "_ensure_model_loaded", lambda: model)
+
+    frames = [
+        np.zeros((32, 32, 3), dtype=np.uint8),
+        np.full((32, 32, 3), 255, dtype=np.uint8),
+    ]
+    output_frames, multiplier = interpolator.interpolate(frames, exp=1, scale=1.0)
+
+    assert multiplier == 2
+    assert len(output_frames) == 3
+    assert output_frames[1].shape == (32, 32, 3)
+    assert output_frames[1].dtype == np.uint8
