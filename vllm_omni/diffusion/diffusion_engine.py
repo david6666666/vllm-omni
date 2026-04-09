@@ -79,6 +79,10 @@ class DiffusionEngine:
 
         self.post_process_func = get_diffusion_post_process_func(od_config)
         self.pre_process_func = get_diffusion_pre_process_func(od_config)
+        self._post_process_accepts_sampling_params = bool(
+            self.post_process_func is not None
+            and "sampling_params" in inspect.signature(self.post_process_func).parameters
+        )
 
         executor_class = DiffusionExecutor.get_class(od_config)
         self.executor = executor_class(od_config)
@@ -145,8 +149,7 @@ class DiffusionEngine:
 
         postprocess_start_time = time.perf_counter()
         if self.post_process_func is not None:
-            post_process_params = inspect.signature(self.post_process_func).parameters
-            if "sampling_params" in post_process_params:
+            if self._post_process_accepts_sampling_params:
                 outputs = self.post_process_func(output_data, sampling_params=request.sampling_params)
             else:
                 outputs = self.post_process_func(output_data)
