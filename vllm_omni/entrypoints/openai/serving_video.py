@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -171,17 +170,21 @@ class OmniOpenAIServingVideo:
             request, reference_id, reference_image=reference_image
         )
         _t_encode_start = time.perf_counter()
-        video_data = await asyncio.gather(
-            *(
-                self._encode_video_data(
-                    video,
-                    fps=output_fps,
-                    audio=audios[idx],
-                    audio_sample_rate=audio_sample_rate,
+        video_data = [
+            VideoData(
+                b64_json=(
+                    encode_video_base64(video, fps=output_fps)
+                    if audios[idx] is None
+                    else encode_video_base64(
+                        video,
+                        fps=output_fps,
+                        audio=audios[idx],
+                        audio_sample_rate=audio_sample_rate,
+                    )
                 )
-                for idx, video in enumerate(videos)
             )
-        )
+            for idx, video in enumerate(videos)
+        ]
         _t_encode_ms = (time.perf_counter() - _t_encode_start) * 1000
         logger.info("Video response encoding (MP4+base64): %.2f ms", _t_encode_ms)
         return VideoGenerationResponse(created=int(time.time()), data=video_data)
@@ -203,8 +206,7 @@ class OmniOpenAIServingVideo:
             )
         audio = audios[0]
         _t_encode_start = time.perf_counter()
-        video_bytes = await asyncio.to_thread(
-            _encode_video_bytes,
+        video_bytes = _encode_video_bytes(
             videos[0],
             fps=output_fps,
             **({"audio": audio, "audio_sample_rate": audio_sample_rate} if audio is not None else {}),
@@ -212,30 +214,6 @@ class OmniOpenAIServingVideo:
         _t_encode_ms = (time.perf_counter() - _t_encode_start) * 1000
         logger.info("Video response encoding (MP4 bytes): %.2f ms", _t_encode_ms)
         return video_bytes
-
-    @staticmethod
-    async def _encode_video_data(
-        video: Any,
-        *,
-        fps: int,
-        audio: Any | None,
-        audio_sample_rate: int,
-    ) -> VideoData:
-        if audio is None:
-            b64_json = await asyncio.to_thread(
-                encode_video_base64,
-                video,
-                fps=fps,
-            )
-        else:
-            b64_json = await asyncio.to_thread(
-                encode_video_base64,
-                video,
-                fps=fps,
-                audio=audio,
-                audio_sample_rate=audio_sample_rate,
-            )
-        return VideoData(b64_json=b64_json)
 
     @staticmethod
     def _resolve_video_fps_multiplier(result: Any) -> int:

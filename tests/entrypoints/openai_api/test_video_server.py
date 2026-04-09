@@ -367,31 +367,6 @@ def test_frame_interpolation_params_pass_to_diffusion_sampling_params(test_clien
     assert captured.frame_interpolation_model_path == "local-rife"
 
 
-def test_async_video_encoding_uses_to_thread(test_client, mocker: MockerFixture):
-    to_thread_calls = []
-
-    async def _fake_to_thread(func, *args, **kwargs):
-        to_thread_calls.append(func)
-        return func(*args, **kwargs)
-
-    mocker.patch(
-        "vllm_omni.entrypoints.openai.serving_video.asyncio.to_thread",
-        side_effect=_fake_to_thread,
-    )
-    mocker.patch(
-        "vllm_omni.entrypoints.openai.serving_video.encode_video_base64",
-        return_value="Zg==",
-    )
-
-    response = test_client.post("/v1/videos", data={"prompt": "threaded encode"})
-
-    assert response.status_code == 200
-    video_id = response.json()["id"]
-    _wait_for_status(test_client, video_id, VideoGenerationStatus.COMPLETED.value)
-    assert to_thread_calls
-    assert to_thread_calls[0] is not None
-
-
 def test_worker_fps_multiplier_is_applied_to_async_encoding(test_client, mocker: MockerFixture):
     fps_values = []
     engine = test_client.app.state.openai_serving_video._engine_client
@@ -1007,27 +982,6 @@ def test_sync_frame_interpolation_params_pass_to_sampling_params(test_client, mo
     assert captured.frame_interpolation_model_path == "local-rife"
     _, kwargs = encode_mock.call_args
     assert kwargs["fps"] == 8
-
-
-def test_sync_video_encoding_uses_to_thread(test_client, mocker: MockerFixture):
-    to_thread_calls = []
-
-    async def _fake_to_thread(func, *args, **kwargs):
-        to_thread_calls.append(func)
-        return func(*args, **kwargs)
-
-    mocker.patch(
-        "vllm_omni.entrypoints.openai.serving_video.asyncio.to_thread",
-        side_effect=_fake_to_thread,
-    )
-    _mock_encode_video_bytes(mocker, b"threaded-bytes")
-
-    response = test_client.post("/v1/videos/sync", data={"prompt": "threaded sync"})
-
-    assert response.status_code == 200
-    assert response.content == b"threaded-bytes"
-    assert to_thread_calls
-    assert to_thread_calls[0] is not None
 
 
 def test_worker_fps_multiplier_is_applied_to_sync_encoding(test_client, mocker: MockerFixture):
