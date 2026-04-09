@@ -102,9 +102,7 @@ def get_qwen_image_edit_plus_pre_process_func(
             width = request.sampling_params.width or calculated_width
 
             # Ensure dimensions are multiples of vae_scale_factor * 2
-            height, width = normalize_min_aligned_size(
-                height, width, vae_scale_factor * 2
-            )
+            height, width = normalize_min_aligned_size(height, width, vae_scale_factor * 2)
 
             # Store calculated dimensions in request
             prompt["additional_information"]["calculated_height"] = calculated_height
@@ -607,9 +605,7 @@ class QwenImageEditPlusPipeline(
             height = height or calculated_height
             width = width or calculated_width
 
-            height, width = normalize_min_aligned_size(
-                height, width, self.vae_scale_factor * 2
-            )
+            height, width = normalize_min_aligned_size(height, width, self.vae_scale_factor * 2)
 
             condition_images = []
             vae_images = []

@@ -941,9 +941,7 @@ class QwenImagePipeline(nn.Module, QwenImageCFGParallelMixin, DiffusionPipelineP
 
         height = req.sampling_params.height or self.default_sample_size * self.vae_scale_factor
         width = req.sampling_params.width or self.default_sample_size * self.vae_scale_factor
-        height, width = normalize_min_aligned_size(
-            height, width, self.vae_scale_factor * 2
-        )
+        height, width = normalize_min_aligned_size(height, width, self.vae_scale_factor * 2)
         num_inference_steps = req.sampling_params.num_inference_steps or num_inference_steps
         sigmas = req.sampling_params.sigmas or sigmas
         max_sequence_length = req.sampling_params.max_sequence_length or max_sequence_length
