@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import threading
+from typing import Any
 
 import numpy as np
 import torch
@@ -25,7 +26,6 @@ from vllm.logger import init_logger
 logger = init_logger(__name__)
 
 _DEFAULT_RIFE_HF_REPO = "elfgum/RIFE-4.22.lite"
-_FRAME_INTERPOLATION_DEVICE_ENV = "VLLM_OMNI_FRAME_INTERPOLATION_DEVICE"
 _MODEL_CACHE: dict[tuple[str, str], Model] = {}
 _MODEL_CACHE_LOCK = threading.Lock()
 
@@ -318,13 +318,41 @@ def _resolve_rife_model_path(model_path: str | None) -> str:
 
 
 def _select_torch_device() -> torch.device:
-    requested_device = os.environ.get(_FRAME_INTERPOLATION_DEVICE_ENV, "").strip().lower()
-    if requested_device:
-        return torch.device(requested_device)
+    try:
+        from vllm_omni.platforms import current_omni_platform
 
-    # Keep API server lightweight by default. Users can override this with
-    # VLLM_OMNI_FRAME_INTERPOLATION_DEVICE when they explicitly want a device backend.
+        return current_omni_platform.get_torch_device()
+    except Exception as exc:
+        logger.warning("Failed to resolve current vLLM-Omni torch device: %s", exc)
+
+    if torch.cuda.is_available():
+        return torch.device("cuda")
     return torch.device("cpu")
+
+
+def _normalize_video_tensor_layout(video: torch.Tensor) -> tuple[torch.Tensor, Any]:
+    if video.ndim == 5:
+        if video.shape[1] in (3, 4):
+            return video, lambda out: out
+        if video.shape[2] in (3, 4):
+            return video.permute(0, 2, 1, 3, 4), lambda out: out.permute(0, 2, 1, 3, 4)
+    elif video.ndim == 4:
+        if video.shape[0] in (3, 4):
+            return video.unsqueeze(0), lambda out: out.squeeze(0)
+        if video.shape[1] in (3, 4):
+            return video.permute(1, 0, 2, 3).unsqueeze(0), lambda out: out.squeeze(0).permute(1, 0, 2, 3)
+    raise ValueError(f"Unsupported video tensor shape for interpolation: {tuple(video.shape)}")
+
+
+def _normalize_video_tensor_range(video: torch.Tensor) -> tuple[torch.Tensor, Any]:
+    original_dtype = video.dtype
+    video = video.detach()
+    if video.is_floating_point():
+        video = video.to(torch.float32)
+        if torch.amin(video) < 0.0 or torch.amax(video) > 1.0:
+            return video.clamp(-1.0, 1.0) * 0.5 + 0.5, lambda out: (out * 2.0 - 1.0).to(original_dtype)
+        return video.clamp(0.0, 1.0), lambda out: out.to(original_dtype)
+    return video.to(torch.float32) / 255.0, lambda out: (out * 255.0).round().clamp(0, 255).to(original_dtype)
 
 
 class FrameInterpolator:
@@ -407,6 +435,36 @@ class FrameInterpolator:
         result.append(frames[-1])
         return result, 2**exp
 
+    def interpolate_tensor(
+        self,
+        video: torch.Tensor,
+        exp: int = 1,
+        scale: float = 1.0,
+    ) -> tuple[torch.Tensor, int]:
+        if exp < 1:
+            raise ValueError(f"frame interpolation exp must be >= 1, got {exp}")
+        if scale <= 0:
+            raise ValueError(f"frame interpolation scale must be > 0, got {scale}")
+
+        video, restore_layout = _normalize_video_tensor_layout(video)
+        if video.shape[2] < 2:
+            return restore_layout(video), 1
+
+        video, restore_range = _normalize_video_tensor_range(video)
+        model = self._ensure_model_loaded()
+        video = video.to(model.device())
+        intermediates_per_pair = 2**exp // 2
+
+        result_frames: list[torch.Tensor] = []
+        for idx in range(video.shape[2] - 1):
+            img0 = video[:, :, idx, :, :]
+            img1 = video[:, :, idx + 1, :, :]
+            result_frames.append(img0)
+            result_frames.extend(self._make_inference(model, img0, img1, intermediates_per_pair, scale))
+        result_frames.append(video[:, :, -1, :, :])
+        result = torch.stack(result_frames, dim=2)
+        return restore_layout(restore_range(result)), 2**exp
+
 
 def interpolate_video_frames(
     frames: list[np.ndarray],
@@ -417,3 +475,14 @@ def interpolate_video_frames(
     """Interpolate a list of uint8 HWC frames and return the FPS multiplier."""
     interpolator = FrameInterpolator(model_path=model_path)
     return interpolator.interpolate(frames, exp=exp, scale=scale)
+
+
+def interpolate_video_tensor(
+    video: torch.Tensor,
+    exp: int = 1,
+    scale: float = 1.0,
+    model_path: str | None = None,
+) -> tuple[torch.Tensor, int]:
+    """Interpolate a video tensor and return the FPS multiplier."""
+    interpolator = FrameInterpolator(model_path=model_path)
+    return interpolator.interpolate_tensor(video, exp=exp, scale=scale)

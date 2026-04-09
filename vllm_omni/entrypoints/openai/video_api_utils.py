@@ -10,7 +10,6 @@ import base64
 import binascii
 import os
 import tempfile
-import time
 from io import BytesIO
 from typing import Any
 
@@ -18,17 +17,13 @@ import httpx
 import numpy as np
 import torch
 from PIL import Image, UnidentifiedImageError
-from vllm.logger import init_logger
 
-from vllm_omni.diffusion.postprocess import interpolate_video_frames
 from vllm_omni.entrypoints.openai.errors import InvalidInputReferenceError
 from vllm_omni.entrypoints.openai.protocol.videos import (
     FileImageReference,
     ImageReference,
     UrlImageReference,
 )
-
-logger = init_logger(__name__)
 
 
 def _decode_image_bytes(image_bytes: bytes, *, source: str) -> Image.Image:
@@ -227,68 +222,11 @@ def _coerce_audio_to_waveform(audio: Any) -> torch.Tensor:
     return waveform.float().contiguous()
 
 
-def _frames_to_rife_uint8(frames: list[np.ndarray]) -> list[np.ndarray]:
-    rife_frames: list[np.ndarray] = []
-    for frame in frames:
-        if frame.ndim != 3:
-            raise ValueError(f"Expected HWC video frame for interpolation, got shape {frame.shape}")
-        if frame.shape[-1] == 4:
-            frame = frame[..., :3]
-        elif frame.shape[-1] != 3:
-            raise ValueError(f"Expected RGB/RGBA frame for interpolation, got shape {frame.shape}")
-        rife_frames.append((np.clip(frame, 0.0, 1.0) * 255.0).round().clip(0, 255).astype(np.uint8))
-    return rife_frames
-
-
-def _apply_frame_interpolation(
-    frames: list[np.ndarray],
-    fps: int,
-    *,
-    exp: int,
-    scale: float,
-    model_path: str | None,
-) -> tuple[list[np.ndarray], int]:
-    if len(frames) < 2:
-        return frames, fps
-
-    total_start = time.perf_counter()
-    input_frame_count = len(frames)
-    rife_frames = _frames_to_rife_uint8(frames)
-    rife_start = time.perf_counter()
-    interpolated_frames, multiplier = interpolate_video_frames(
-        rife_frames,
-        exp=exp,
-        scale=scale,
-        model_path=model_path,
-    )
-    rife_ms = (time.perf_counter() - rife_start) * 1000
-    frames = [frame.astype(np.float32) / 255.0 for frame in interpolated_frames]
-    output_fps = fps * multiplier
-    total_ms = (time.perf_counter() - total_start) * 1000
-    logger.info(
-        "Video frame interpolation postprocess: frames=%d->%d fps=%s->%s exp=%s scale=%s rife=%.2f ms total=%.2f ms",
-        input_frame_count,
-        len(frames),
-        fps,
-        output_fps,
-        exp,
-        scale,
-        rife_ms,
-        total_ms,
-    )
-    return frames, output_fps
-
-
 def _encode_video_bytes(
     video: Any,
     fps: int,
     audio: Any | None = None,
     audio_sample_rate: int | None = None,
-    *,
-    enable_frame_interpolation: bool = False,
-    frame_interpolation_exp: int = 1,
-    frame_interpolation_scale: float = 1.0,
-    frame_interpolation_model_path: str | None = None,
 ) -> bytes:
     """Encode a video payload into MP4 bytes, optionally muxing audio."""
     try:
@@ -299,19 +237,10 @@ def _encode_video_bytes(
     frames = _coerce_video_to_frames(video)
     if not frames:
         raise ValueError("No frames found to encode.")
-    if enable_frame_interpolation:
-        frames, fps = _apply_frame_interpolation(
-            frames,
-            fps,
-            exp=frame_interpolation_exp,
-            scale=frame_interpolation_scale,
-            model_path=frame_interpolation_model_path,
-        )
 
     tmp_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
     tmp_file.close()
     try:
-        export_start = time.perf_counter()
         if audio is not None:
             from diffusers.pipelines.ltx2.export_utils import encode_video as encode_ltx2_video
 
@@ -330,14 +259,6 @@ def _encode_video_bytes(
             )
         else:
             export_to_video(frames, tmp_file.name, fps=fps)
-        export_ms = (time.perf_counter() - export_start) * 1000
-        logger.info(
-            "Video MP4 export: frames=%d fps=%s audio=%s elapsed=%.2f ms",
-            len(frames),
-            fps,
-            audio is not None,
-            export_ms,
-        )
         with open(tmp_file.name, "rb") as f:
             return f.read()
     finally:
@@ -352,11 +273,6 @@ def encode_video_base64(
     fps: int,
     audio: Any | None = None,
     audio_sample_rate: int | None = None,
-    *,
-    enable_frame_interpolation: bool = False,
-    frame_interpolation_exp: int = 1,
-    frame_interpolation_scale: float = 1.0,
-    frame_interpolation_model_path: str | None = None,
 ) -> str:
     """Encode a video (frames/array/tensor) to base64 MP4."""
     video_bytes = _encode_video_bytes(
@@ -364,9 +280,5 @@ def encode_video_base64(
         fps=fps,
         audio=audio,
         audio_sample_rate=audio_sample_rate,
-        enable_frame_interpolation=enable_frame_interpolation,
-        frame_interpolation_exp=frame_interpolation_exp,
-        frame_interpolation_scale=frame_interpolation_scale,
-        frame_interpolation_model_path=frame_interpolation_model_path,
     )
     return base64.b64encode(video_bytes).decode("utf-8")

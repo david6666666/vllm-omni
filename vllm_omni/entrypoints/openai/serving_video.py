@@ -106,6 +106,10 @@ class OmniOpenAIServingVideo:
         if vp.fps is not None:
             gen_params.fps = vp.fps
             gen_params.frame_rate = float(vp.fps)
+        gen_params.enable_frame_interpolation = request.enable_frame_interpolation
+        gen_params.frame_interpolation_exp = request.frame_interpolation_exp
+        gen_params.frame_interpolation_scale = request.frame_interpolation_scale
+        gen_params.frame_interpolation_model_path = request.frame_interpolation_model_path
 
         if request.num_inference_steps is not None:
             gen_params.num_inference_steps = request.num_inference_steps
@@ -153,7 +157,7 @@ class OmniOpenAIServingVideo:
         videos = self._extract_video_outputs(result)
         audios = self._extract_audio_outputs(result, expected_count=len(videos))
         audio_sample_rate = self._resolve_audio_sample_rate(result)
-        output_fps = vp.fps or 24
+        output_fps = (vp.fps or 24) * self._resolve_video_fps_multiplier(result)
         return videos, audios, audio_sample_rate, output_fps
 
     async def generate_videos(
@@ -166,7 +170,6 @@ class OmniOpenAIServingVideo:
         videos, audios, audio_sample_rate, output_fps = await self._run_and_extract(
             request, reference_id, reference_image=reference_image
         )
-        frame_interpolation_kwargs = self._frame_interpolation_kwargs(request)
         _t_encode_start = time.perf_counter()
         video_data = await asyncio.gather(
             *(
@@ -175,7 +178,6 @@ class OmniOpenAIServingVideo:
                     fps=output_fps,
                     audio=audios[idx],
                     audio_sample_rate=audio_sample_rate,
-                    frame_interpolation_kwargs=frame_interpolation_kwargs,
                 )
                 for idx, video in enumerate(videos)
             )
@@ -200,14 +202,12 @@ class OmniOpenAIServingVideo:
                 "Video request %s generated %d outputs; returning only the first.", reference_id, len(videos)
             )
         audio = audios[0]
-        frame_interpolation_kwargs = self._frame_interpolation_kwargs(request)
         _t_encode_start = time.perf_counter()
         video_bytes = await asyncio.to_thread(
             _encode_video_bytes,
             videos[0],
             fps=output_fps,
             **({"audio": audio, "audio_sample_rate": audio_sample_rate} if audio is not None else {}),
-            **frame_interpolation_kwargs,
         )
         _t_encode_ms = (time.perf_counter() - _t_encode_start) * 1000
         logger.info("Video response encoding (MP4 bytes): %.2f ms", _t_encode_ms)
@@ -220,14 +220,12 @@ class OmniOpenAIServingVideo:
         fps: int,
         audio: Any | None,
         audio_sample_rate: int,
-        frame_interpolation_kwargs: dict[str, Any],
     ) -> VideoData:
         if audio is None:
             b64_json = await asyncio.to_thread(
                 encode_video_base64,
                 video,
                 fps=fps,
-                **frame_interpolation_kwargs,
             )
         else:
             b64_json = await asyncio.to_thread(
@@ -236,20 +234,24 @@ class OmniOpenAIServingVideo:
                 fps=fps,
                 audio=audio,
                 audio_sample_rate=audio_sample_rate,
-                **frame_interpolation_kwargs,
             )
         return VideoData(b64_json=b64_json)
 
     @staticmethod
-    def _frame_interpolation_kwargs(request: VideoGenerationRequest) -> dict[str, Any]:
-        if not request.enable_frame_interpolation:
-            return {}
-        return {
-            "enable_frame_interpolation": True,
-            "frame_interpolation_exp": request.frame_interpolation_exp,
-            "frame_interpolation_scale": request.frame_interpolation_scale,
-            "frame_interpolation_model_path": request.frame_interpolation_model_path,
-        }
+    def _resolve_video_fps_multiplier(result: Any) -> int:
+        custom_output = getattr(result, "custom_output", None)
+        if isinstance(custom_output, dict):
+            multiplier = custom_output.get("video_fps_multiplier")
+            if multiplier is not None:
+                return int(multiplier)
+        request_output = getattr(result, "request_output", None)
+        if request_output is not None:
+            custom_output = getattr(request_output, "custom_output", None)
+            if isinstance(custom_output, dict):
+                multiplier = custom_output.get("video_fps_multiplier")
+                if multiplier is not None:
+                    return int(multiplier)
+        return 1
 
     @staticmethod
     def _apply_lora(lora_body: Any, gen_params: OmniDiffusionSamplingParams) -> None:
