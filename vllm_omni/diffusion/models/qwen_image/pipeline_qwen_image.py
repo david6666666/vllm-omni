@@ -29,11 +29,11 @@ from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineL
 from vllm_omni.diffusion.models.qwen_image.cfg_parallel import (
     QwenImageCFGParallelMixin,
 )
-from vllm_omni.diffusion.models.qwen_image.size_utils import (
-    normalize_qwen_image_size,
-)
 from vllm_omni.diffusion.models.qwen_image.qwen_image_transformer import (
     QwenImageTransformer2DModel,
+)
+from vllm_omni.diffusion.models.qwen_image.size_utils import (
+    normalize_qwen_image_size,
 )
 from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import DiffusionPipelineProfilerMixin
 from vllm_omni.diffusion.request import OmniDiffusionRequest

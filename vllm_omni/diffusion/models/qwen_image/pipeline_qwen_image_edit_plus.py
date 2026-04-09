@@ -35,11 +35,11 @@ from vllm_omni.diffusion.models.qwen_image.pipeline_qwen_image_edit import (
     retrieve_latents,
     retrieve_timesteps,
 )
-from vllm_omni.diffusion.models.qwen_image.size_utils import (
-    normalize_qwen_image_size,
-)
 from vllm_omni.diffusion.models.qwen_image.qwen_image_transformer import (
     QwenImageTransformer2DModel,
+)
+from vllm_omni.diffusion.models.qwen_image.size_utils import (
+    normalize_qwen_image_size,
 )
 from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import DiffusionPipelineProfilerMixin
 from vllm_omni.diffusion.request import OmniDiffusionRequest
