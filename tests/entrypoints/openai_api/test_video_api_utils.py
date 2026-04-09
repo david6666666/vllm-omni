@@ -2,9 +2,6 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Unit tests for OpenAI-compatible video API encoding helpers."""
 
-import sys
-import types
-
 import numpy as np
 import pytest
 import torch
@@ -15,23 +12,27 @@ from vllm_omni.entrypoints.openai import video_api_utils
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 
-def _install_fake_diffusers_export(monkeypatch, export_calls):
-    diffusers_module = types.ModuleType("diffusers")
-    utils_module = types.ModuleType("diffusers.utils")
+def _install_fake_video_mux(monkeypatch, mux_calls):
+    def _fake_mux_video_audio_bytes(frames, audio, fps, audio_sample_rate):
+        mux_calls.append(
+            {
+                "frames": frames,
+                "audio": audio,
+                "fps": fps,
+                "audio_sample_rate": audio_sample_rate,
+            }
+        )
+        return b"fake-video"
 
-    def _fake_export_to_video(frames, output_path, fps):
-        export_calls.append({"frames": frames, "fps": fps})
-        with open(output_path, "wb") as f:
-            f.write(b"fake-video")
-
-    utils_module.export_to_video = _fake_export_to_video
-    monkeypatch.setitem(sys.modules, "diffusers", diffusers_module)
-    monkeypatch.setitem(sys.modules, "diffusers.utils", utils_module)
+    monkeypatch.setattr(
+        "vllm_omni.diffusion.utils.media_utils.mux_video_audio_bytes",
+        _fake_mux_video_audio_bytes,
+    )
 
 
 def test_encode_video_bytes_exports_frames_without_interpolation(monkeypatch):
-    export_calls = []
-    _install_fake_diffusers_export(monkeypatch, export_calls)
+    mux_calls = []
+    _install_fake_video_mux(monkeypatch, mux_calls)
 
     frames = [np.full((2, 2, 3), fill_value=i / 5, dtype=np.float32) for i in range(5)]
     video_bytes = video_api_utils._encode_video_bytes(
@@ -40,8 +41,10 @@ def test_encode_video_bytes_exports_frames_without_interpolation(monkeypatch):
     )
 
     assert video_bytes == b"fake-video"
-    assert len(export_calls[0]["frames"]) == 5
-    assert export_calls[0]["fps"] == 8
+    assert mux_calls[0]["frames"].shape == (5, 2, 2, 3)
+    assert mux_calls[0]["frames"].dtype == np.uint8
+    assert mux_calls[0]["fps"] == 8.0
+    assert mux_calls[0]["audio"] is None
 
 
 def test_rife_model_inference_runs_on_dummy_tensors():
