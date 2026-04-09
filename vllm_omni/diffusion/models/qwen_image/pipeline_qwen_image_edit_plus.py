@@ -35,6 +35,9 @@ from vllm_omni.diffusion.models.qwen_image.pipeline_qwen_image_edit import (
     retrieve_latents,
     retrieve_timesteps,
 )
+from vllm_omni.diffusion.models.qwen_image.size_utils import (
+    normalize_qwen_image_size,
+)
 from vllm_omni.diffusion.models.qwen_image.qwen_image_transformer import (
     QwenImageTransformer2DModel,
 )
@@ -99,9 +102,7 @@ def get_qwen_image_edit_plus_pre_process_func(
             width = request.sampling_params.width or calculated_width
 
             # Ensure dimensions are multiples of vae_scale_factor * 2
-            multiple_of = vae_scale_factor * 2
-            height = height // multiple_of * multiple_of
-            width = width // multiple_of * multiple_of
+            height, width = normalize_qwen_image_size(height, width, vae_scale_factor)
 
             # Store calculated dimensions in request
             prompt["additional_information"]["calculated_height"] = calculated_height
@@ -604,9 +605,7 @@ class QwenImageEditPlusPipeline(
             height = height or calculated_height
             width = width or calculated_width
 
-            multiple_of = self.vae_scale_factor * 2
-            width = width // multiple_of * multiple_of
-            height = height // multiple_of * multiple_of
+            height, width = normalize_qwen_image_size(height, width, self.vae_scale_factor)
 
             condition_images = []
             vae_images = []
