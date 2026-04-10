@@ -58,6 +58,7 @@ class StageDiffusionClient:
         self.default_sampling_params = metadata.default_sampling_params
         self.custom_process_input_func = metadata.custom_process_input_func
         self.engine_input_source = metadata.engine_input_source
+        self.od_config = od_config
 
         # Spawn StageDiffusionProc subprocess and wait for READY.
         proc, handshake_address, request_address, response_address = spawn_diffusion_proc(model, od_config)
