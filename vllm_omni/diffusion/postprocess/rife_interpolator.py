@@ -361,10 +361,10 @@ class FrameInterpolator:
         self._model_path = model_path
         self._resolved_path: str | None = None
 
-    def _ensure_model_loaded(self) -> Model:
+    def _ensure_model_loaded(self, preferred_device: torch.device | None = None) -> Model:
         resolved_path = _resolve_rife_model_path(self._model_path)
         self._resolved_path = resolved_path
-        device = _select_torch_device()
+        device = preferred_device or _select_torch_device()
         cache_key = (resolved_path, str(device))
 
         with _MODEL_CACHE_LOCK:
@@ -412,7 +412,7 @@ class FrameInterpolator:
             return restore_layout(video), 1
 
         video, restore_range = _normalize_video_tensor_range(video)
-        model = self._ensure_model_loaded()
+        model = self._ensure_model_loaded(preferred_device=video.device)
         video = video.to(model.device())
         intermediates_per_pair = 2**exp // 2
 
