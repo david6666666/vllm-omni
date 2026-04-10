@@ -26,6 +26,19 @@ python image_edit.py \
   --cfg-scale 4.0
 ```
 
+### Single Image Editing with FP8
+
+```bash
+python image_edit.py \
+  --image qwen-bear.png \
+  --prompt "Let this mascot dance under the moon" \
+  --output output_image_edit_fp8.png \
+  --num-inference-steps 50 \
+  --cfg-scale 4.0 \
+  --quantization fp8 \
+  --ignored-layers img_mlp
+```
+
 ### Multiple Image Editing (Qwen-Image-Edit-2509)
 
 For multiple image inputs, use `Qwen/Qwen-Image-Edit-2509` or  `Qwen/Qwen-Image-Edit-2511`:
@@ -49,6 +62,8 @@ Key arguments:
 - `--cfg-scale`: true classifier-free guidance scale (default: 4.0). Classifier-free guidance is enabled by setting cfg_scale > 1 and providing a negative_prompt. Higher guidance scale encourages images closely linked to the text prompt, usually at the expense of lower image quality.
 - `--guidance-scale`: guidance scale for guidance-distilled models (default: 1.0, disabled). Unlike classifier-free guidance (--cfg-scale), guidance-distilled models take the guidance scale directly as an input parameter. Enabled when guidance_scale > 1. Ignored when not using guidance-distilled models.
 - `--num-inference-steps`: diffusion sampling steps (more steps = higher quality, slower).
+- `--quantization`: quantization method for the transformer. Use `fp8` for FP8 quantization.
+- `--ignored-layers`: comma-separated layer patterns to keep in BF16 when quantized. Recommended for the Qwen-Image edit family: `img_mlp`.
 - `--output`: path to save the generated PNG.
 - `--vae-use-slicing`: enable VAE slicing for memory optimization.
 - `--vae-use-tiling`: enable VAE tiling for memory optimization.

@@ -12,6 +12,14 @@ For **multi-image** input editing, use **Qwen-Image-Edit-2509** (QwenImageEditPl
 vllm serve Qwen/Qwen-Image-Edit --omni --port 8092
 ```
 
+### FP8 Start
+
+```bash
+vllm serve Qwen/Qwen-Image-Edit --omni --port 8092 \
+  --quantization fp8 \
+  --ignored-layers img_mlp
+```
+
 !!! note
     If you encounter Out-of-Memory (OOM) issues or have limited GPU memory, you can enable VAE slicing and tiling to reduce memory usage, --vae-use-slicing --vae-use-tiling
 
@@ -34,6 +42,13 @@ To serve Qwen-Image-Edit-2509 with the script:
 
 ```bash
 MODEL=Qwen/Qwen-Image-Edit-2509 bash run_server.sh
+```
+
+To serve the edit family with FP8 through the script:
+
+```bash
+QUANTIZATION=fp8 IGNORED_LAYERS=img_mlp bash run_server.sh
+MODEL=Qwen/Qwen-Image-Edit-2509 QUANTIZATION=fp8 IGNORED_LAYERS=img_mlp bash run_server.sh
 ```
 
 ## API Calls

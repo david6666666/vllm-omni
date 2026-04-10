@@ -74,6 +74,13 @@ Usage (with CFG Parallel):
         --num-inference-steps 50 \
         --cfg-scale 4.0
 
+Usage (with FP8):
+    python image_edit.py \
+        --image input.png \
+        --prompt "Edit description" \
+        --quantization fp8 \
+        --ignored-layers img_mlp
+
 Usage (disable torch.compile):
     python image_edit.py \
         --image input.png \
@@ -330,6 +337,19 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable diffusion pipeline profiler to display stage durations.",
     )
+    parser.add_argument(
+        "--quantization",
+        type=str,
+        default=None,
+        choices=["fp8", "int8"],
+        help="Quantization method for the Qwen-Image transformer. Default: None (BF16).",
+    )
+    parser.add_argument(
+        "--ignored-layers",
+        type=str,
+        default=None,
+        help="Comma-separated layer name patterns to keep in BF16 when quantization is enabled. Example: img_mlp",
+    )
     return parser.parse_args()
 
 
@@ -383,8 +403,9 @@ def main():
             # Note: coefficients will use model-specific defaults based on model_type
         }
 
-    # Initialize Omni with appropriate pipeline
-    omni = Omni(
+    ignored_layers = [s.strip() for s in args.ignored_layers.split(",") if s.strip()] if args.ignored_layers else None
+
+    omni_kwargs = dict(
         model=args.model,
         enable_layerwise_offload=args.enable_layerwise_offload,
         vae_use_slicing=args.vae_use_slicing,
@@ -396,6 +417,16 @@ def main():
         enable_cpu_offload=args.enable_cpu_offload,
         enable_diffusion_pipeline_profiler=args.enable_diffusion_pipeline_profiler,
     )
+    if args.quantization and ignored_layers:
+        omni_kwargs["quantization_config"] = {
+            "method": args.quantization,
+            "ignored_layers": ignored_layers,
+        }
+    elif args.quantization:
+        omni_kwargs["quantization"] = args.quantization
+
+    # Initialize Omni with appropriate pipeline
+    omni = Omni(**omni_kwargs)
     print("Pipeline loaded")
 
     # Check if profiling is requested via environment variable
@@ -407,6 +438,9 @@ def main():
     print(f"  Model: {args.model}")
     print(f"  Inference steps: {args.num_inference_steps}")
     print(f"  Cache backend: {args.cache_backend if args.cache_backend else 'None (no acceleration)'}")
+    print(f"  Quantization: {args.quantization or 'None (BF16)'}")
+    if ignored_layers:
+        print(f"  Ignored layers: {ignored_layers}")
     if isinstance(input_image, list):
         print(f"  Number of input images: {len(input_image)}")
         for idx, img in enumerate(input_image):

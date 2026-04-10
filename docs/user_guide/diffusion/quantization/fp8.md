@@ -61,7 +61,7 @@ The available `ignored_layers` names depend on the model architecture (e.g., `to
 | Model | HF Models | Recommendation | `ignored_layers` |
 |-------|-----------|---------------|------------------|
 | Z-Image | `Tongyi-MAI/Z-Image-Turbo` | All layers | None |
-| Qwen-Image | `Qwen/Qwen-Image`, `Qwen/Qwen-Image-2512` | Skip sensitive layers | `img_mlp` |
+| Qwen-Image family | `Qwen/Qwen-Image`, `Qwen/Qwen-Image-2512`, `Qwen/Qwen-Image-Edit`, `Qwen/Qwen-Image-Edit-2509`, `Qwen/Qwen-Image-Edit-2511`, `Qwen/Qwen-Image-Layered` | Skip sensitive layers | `img_mlp` |
 | Flux | `black-forest-labs/FLUX.1-dev` | All layers | None |
 | HunyuanImage-3 | `tencent/HunyuanImage3` | All layers | None |
 | HunyuanVideo-1.5 | `hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v`, `720p_t2v`, `480p_i2v` | All layers | None |
