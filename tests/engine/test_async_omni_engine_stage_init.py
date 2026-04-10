@@ -128,3 +128,51 @@ def test_attach_llm_stage_uses_omni_input_preprocessor(monkeypatch):
     assert input_processor is not None
     assert isinstance(input_processor.input_preprocessor, DummyOmniInputPreprocessor)
     assert input_processor.input_preprocessor.renderer is input_processor.renderer
+
+
+def test_initialize_diffusion_stage_populates_multimodal_limits(monkeypatch):
+    """Diffusion serving should expose enriched image-count limits to the API layer."""
+    import vllm_omni.engine.stage_init_utils as init_mod
+    from vllm_omni.engine.stage_init_utils import StageMetadata, initialize_diffusion_stage
+
+    captured = {}
+
+    class DummyStageDiffusionClient:
+        def __init__(self, model, od_config, metadata, batch_size=1):
+            captured["model"] = model
+            captured["od_config"] = od_config
+            captured["metadata"] = metadata
+            captured["batch_size"] = batch_size
+
+    monkeypatch.setattr(
+        "vllm_omni.diffusion.stage_diffusion_client.StageDiffusionClient",
+        DummyStageDiffusionClient,
+    )
+    monkeypatch.setattr(
+        init_mod,
+        "get_hf_file_to_dict",
+        lambda filename, _model: {"_class_name": "QwenImageEditPlusPipeline"} if filename == "model_index.json" else None,
+    )
+
+    metadata = StageMetadata(
+        stage_id=0,
+        stage_type="diffusion",
+        engine_output_type="image",
+        is_comprehension=False,
+        requires_multimodal_data=False,
+        engine_input_source=[],
+        final_output=True,
+        final_output_type="image",
+        default_sampling_params=types.SimpleNamespace(),
+        custom_process_input_func=None,
+        model_stage=None,
+        runtime_cfg=None,
+    )
+    stage_cfg = types.SimpleNamespace(engine_args={})
+
+    initialize_diffusion_stage("Qwen/Qwen-Image-Edit-2511", stage_cfg, metadata, batch_size=1)
+
+    assert captured["model"] == "Qwen/Qwen-Image-Edit-2511"
+    assert captured["od_config"].model_class_name == "QwenImageEditPlusPipeline"
+    assert captured["od_config"].supports_multimodal_inputs is True
+    assert captured["od_config"].max_input_images == 3

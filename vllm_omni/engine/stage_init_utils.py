@@ -19,6 +19,7 @@ from typing import Any, Literal
 
 from vllm.logger import init_logger
 from vllm.sampling_params import SamplingParams
+from vllm.transformers_utils.config import get_hf_file_to_dict
 from vllm.usage.usage_lib import UsageContext
 from vllm.v1.engine.input_processor import InputProcessor
 from vllm.v1.executor import Executor
@@ -30,6 +31,20 @@ from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniSamplingParam
 from vllm_omni.platforms import current_omni_platform
 
 logger = init_logger(__name__)
+
+
+def _populate_diffusion_multimodal_support(od_config: Any) -> None:
+    """Populate model_class_name and input-image limits for serving-time validation."""
+    if od_config.model_class_name is None:
+        try:
+            config_dict = get_hf_file_to_dict("model_index.json", od_config.model)
+        except Exception:
+            config_dict = None
+
+        if config_dict is not None:
+            od_config.model_class_name = config_dict.get("_class_name", None)
+
+    od_config.update_multimodal_support()
 
 
 def _resolve_model_to_local_path(model: str) -> str:
@@ -468,6 +483,7 @@ def initialize_diffusion_stage(
         model=model,
         **_to_dict(stage_cfg.engine_args),
     )
+    _populate_diffusion_multimodal_support(od_config)
     num_devices_per_stage = od_config.parallel_config.world_size
     device_control_env = current_omni_platform.device_control_env_var
     visible_devices_str = os.environ.get(device_control_env)
