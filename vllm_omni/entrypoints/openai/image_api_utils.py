@@ -10,6 +10,7 @@ FastAPI HTTP layer.
 
 import base64
 import io
+from typing import Any
 
 import PIL.Image
 
@@ -66,6 +67,35 @@ def encode_image_base64(image: PIL.Image.Image) -> str:
     image.save(buffer, format="PNG")
     buffer.seek(0)
     return base64.b64encode(buffer.read()).decode("utf-8")
+
+
+def resolve_max_input_images(od_config: Any | None) -> int | None:
+    """Resolve the maximum number of input images supported by a model."""
+    if od_config is None:
+        return None
+
+    max_input_images = getattr(od_config, "max_input_images", None)
+    if max_input_images is not None:
+        return int(max_input_images)
+
+    if not bool(getattr(od_config, "supports_multimodal_inputs", False)):
+        return 1
+
+    return None
+
+
+def get_input_image_limit_error(input_image_count: int, max_input_images: int | None) -> str | None:
+    """Return a user-facing validation error when the model limit is exceeded."""
+    if max_input_images is None or input_image_count <= max_input_images:
+        return None
+
+    if max_input_images == 1:
+        return "Received multiple input images. Only a single image is supported by this model."
+
+    return (
+        f"Received {input_image_count} input images. "
+        f"This model supports at most {max_input_images} input images."
+    )
 
 
 def validate_layered_layers(layers: int | None) -> int | None:

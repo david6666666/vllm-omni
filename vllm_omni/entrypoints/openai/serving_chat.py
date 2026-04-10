@@ -82,7 +82,11 @@ from vllm.tool_parsers.mistral_tool_parser import MistralToolCall
 from vllm.utils.collection_utils import as_list
 
 from vllm_omni.entrypoints.openai.audio_utils_mixin import AudioMixin
-from vllm_omni.entrypoints.openai.image_api_utils import validate_layered_layers
+from vllm_omni.entrypoints.openai.image_api_utils import (
+    get_input_image_limit_error,
+    resolve_max_input_images,
+    validate_layered_layers,
+)
 from vllm_omni.entrypoints.openai.protocol import OmniChatCompletionStreamResponse
 from vllm_omni.entrypoints.openai.protocol.audio import AudioResponse, CreateAudio
 from vllm_omni.entrypoints.openai.utils import parse_lora_request
@@ -2168,20 +2172,17 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                     gen_prompt["multi_modal_data"]["image"] = pil_images[0]
                 else:
                     od_config = getattr(self._diffusion_engine, "od_config", None)
-                    supports_multimodal_inputs = getattr(od_config, "supports_multimodal_inputs", False)
                     if od_config is None:
                         # TODO: entry is asyncOmni. We hack the od config here.
-                        supports_multimodal_inputs = True
-                    if supports_multimodal_inputs:
+                        max_input_images = None
+                    else:
+                        max_input_images = resolve_max_input_images(od_config)
+                    limit_error = get_input_image_limit_error(len(pil_images), max_input_images)
+                    if limit_error is None:
                         gen_prompt["multi_modal_data"] = {}
                         gen_prompt["multi_modal_data"]["image"] = pil_images
                     else:
-                        return self._create_error_response(
-                            "Multiple input images are not supported by the current diffusion model. "
-                            "For multi-image editing, start the server with Qwen-Image-Edit-2509 "
-                            "and send multiple images in the user message content.",
-                            status_code=400,
-                        )
+                        return self._create_error_response(limit_error, status_code=400)
 
             # Generate image
             diffusion_engine = cast(AsyncOmni, self._diffusion_engine)

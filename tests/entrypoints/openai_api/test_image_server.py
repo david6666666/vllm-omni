@@ -782,6 +782,54 @@ def test_image_edit_rejects_multiple_images_when_model_does_not_support_them(asy
     assert engine.captured_prompt is None
 
 
+def test_image_edit_allows_up_to_model_max_input_images(async_omni_test_client):
+    img_bytes_1 = make_test_image_bytes((16, 16))
+    img_bytes_2 = make_test_image_bytes((32, 32))
+    img_bytes_3 = make_test_image_bytes((48, 48))
+
+    engine = async_omni_test_client.app.state.engine_client
+    engine.get_diffusion_od_config = lambda: SimpleNamespace(supports_multimodal_inputs=True, max_input_images=3)
+
+    response = async_omni_test_client.post(
+        "/v1/images/edits",
+        files=[
+            ("image", img_bytes_1),
+            ("image", img_bytes_2),
+            ("image", img_bytes_3),
+        ],
+        data={"prompt": "hello world."},
+    )
+
+    assert response.status_code == 200
+    processed_images = engine.captured_prompt["multi_modal_data"]["image"]
+    assert len(processed_images) == 3
+
+
+def test_image_edit_rejects_input_images_above_model_max(async_omni_test_client):
+    img_bytes_1 = make_test_image_bytes((16, 16))
+    img_bytes_2 = make_test_image_bytes((32, 32))
+    img_bytes_3 = make_test_image_bytes((48, 48))
+    img_bytes_4 = make_test_image_bytes((64, 64))
+
+    engine = async_omni_test_client.app.state.engine_client
+    engine.get_diffusion_od_config = lambda: SimpleNamespace(supports_multimodal_inputs=True, max_input_images=3)
+
+    response = async_omni_test_client.post(
+        "/v1/images/edits",
+        files=[
+            ("image", img_bytes_1),
+            ("image", img_bytes_2),
+            ("image", img_bytes_3),
+            ("image", img_bytes_4),
+        ],
+        data={"prompt": "hello world."},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Received 4 input images. This model supports at most 3 input images."
+    assert engine.captured_prompt is None
+
+
 def test_image_edit_parameter_pass(async_omni_test_client):
     img_bytes_1 = make_test_image_bytes((16, 16))
 

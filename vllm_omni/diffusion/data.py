@@ -483,6 +483,7 @@ class OmniDiffusionConfig:
 
     # support multi images input
     supports_multimodal_inputs: bool = False
+    max_input_images: int | None = 1
 
     log_level: str = "info"
 
@@ -664,7 +665,11 @@ class OmniDiffusionConfig:
             )
 
     def update_multimodal_support(self) -> None:
-        self.supports_multimodal_inputs = self.model_class_name in {"QwenImageEditPlusPipeline"}
+        multimodal_input_limits = {
+            "QwenImageEditPlusPipeline": 3,
+        }
+        self.max_input_images = multimodal_input_limits.get(self.model_class_name, 1)
+        self.supports_multimodal_inputs = self.max_input_images > 1
 
     @classmethod
     def from_kwargs(cls, **kwargs: Any) -> "OmniDiffusionConfig":

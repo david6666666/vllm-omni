@@ -88,7 +88,9 @@ from vllm_omni.entrypoints.openai.errors import InvalidInputReferenceError
 from vllm_omni.entrypoints.openai.image_api_utils import (
     SUPPORTED_LAYERED_RESOLUTIONS,
     encode_image_base64,
+    get_input_image_limit_error,
     parse_size,
+    resolve_max_input_images,
     validate_layered_layers,
 )
 from vllm_omni.entrypoints.openai.protocol.audio import BatchSpeechRequest, OpenAICreateSpeechRequest
@@ -1469,10 +1471,12 @@ async def edit_images(
         if not input_images_list:
             raise HTTPException(status_code=422, detail="Field 'image' or 'url' is required")
         pil_images = await _load_input_images(input_images_list)
-        if len(pil_images) > 1 and not _supports_multimodal_image_inputs(raw_request, engine_client):
+        max_input_images = _get_max_input_images(raw_request, engine_client)
+        limit_error = get_input_image_limit_error(len(pil_images), max_input_images)
+        if limit_error is not None:
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST.value,
-                detail="Received multiple input images. Only a single image is supported by this model.",
+                detail=limit_error,
             )
         prompt["multi_modal_data"] = {}
         prompt["multi_modal_data"]["image"] = pil_images
@@ -1638,7 +1642,7 @@ def _get_engine_and_model(raw_request: Request):
     return engine_client, model_name, normalized_stage_configs
 
 
-def _supports_multimodal_image_inputs(raw_request: Request, engine_client: Any) -> bool:
+def _get_max_input_images(raw_request: Request, engine_client: Any) -> int | None:
     diffusion_engine = getattr(raw_request.app.state, "diffusion_engine", None) or engine_client
     get_diffusion_od_config = getattr(diffusion_engine, "get_diffusion_od_config", None)
     od_config = (
@@ -1648,8 +1652,8 @@ def _supports_multimodal_image_inputs(raw_request: Request, engine_client: Any) 
     if od_config is None:
         # Preserve the existing compatibility behavior when the diffusion
         # config is not exposed on the serving surface.
-        return True
-    return bool(getattr(od_config, "supports_multimodal_inputs", False))
+        return None
+    return resolve_max_input_images(od_config)
 
 
 def _get_lora_from_json_str(lora_body):
