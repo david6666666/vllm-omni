@@ -20,7 +20,7 @@ from typing import Annotated, Any, Literal, cast
 import httpx
 import vllm.envs as envs
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, WebSocket
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from PIL import Image
 from pydantic import BaseModel, Field
 from starlette.datastructures import State
@@ -1971,6 +1971,8 @@ async def _run_video_generation_job(
                 "file_name": file_name,
                 "completed_at": int(time.time()),
                 "inference_time_s": time.perf_counter() - started_at,
+                "stage_durations": response.stage_durations,
+                "peak_memory_mb": response.peak_memory_mb,
             },
         )
     except Exception as exc:
@@ -2136,6 +2138,63 @@ async def create_video(
     task = asyncio.create_task(_run_video_generation_job(handler, request, ref.id, reference_image))
     await VIDEO_TASKS.upsert(ref.id, task)
     return ref
+
+
+@router.post(
+    "/v1/videos/sync",
+    responses={
+        HTTPStatus.OK.value: {"content": {"video/mp4": {}}},
+        HTTPStatus.BAD_REQUEST.value: {"model": ErrorResponse},
+        HTTPStatus.SERVICE_UNAVAILABLE.value: {"model": ErrorResponse},
+        HTTPStatus.INTERNAL_SERVER_ERROR.value: {"model": ErrorResponse},
+    },
+)
+async def create_video_sync(
+    ctx: tuple[VideoGenerationRequest, OmniOpenAIServingVideo, str, ReferenceImage | None] = Depends(_parse_video_form),
+) -> Response:
+    """Synchronous video generation endpoint.
+
+    Accepts the same form parameters as ``POST /v1/videos`` but blocks until
+    generation completes and returns raw video bytes (``video/mp4``) directly.
+    Designed for benchmark and testing scenarios.
+
+    Metadata is returned via response headers ``X-Request-Id``,
+    ``X-Model``, and ``X-Inference-Time-S``.
+    """
+    request, handler, effective_model_name, reference_image = ctx
+    request_id = f"video_sync-{random_uuid()}"
+    started_at = time.perf_counter()
+    try:
+        video_bytes, stage_durations, peak_memory_mb = await asyncio.wait_for(
+            handler.generate_video_bytes(request, request_id, reference_image=reference_image),
+            timeout=VIDEO_SYNC_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=HTTPStatus.GATEWAY_TIMEOUT.value,
+            detail=f"Video generation timed out after {VIDEO_SYNC_TIMEOUT_S}s.",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Sync video generation failed for request_id=%s", request_id)
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR.value,
+            detail=f"Video generation failed: {str(exc)}",
+        ) from exc
+    inference_time_s = time.perf_counter() - started_at
+
+    return Response(
+        content=video_bytes,
+        media_type="video/mp4",
+        headers={
+            "X-Request-Id": request_id,
+            "X-Model": effective_model_name,
+            "X-Inference-Time-S": f"{inference_time_s:.3f}",
+            "X-Stage-Durations": json.dumps(stage_durations, separators=(",", ":")),
+            "X-Peak-Memory-MB": f"{peak_memory_mb:.3f}",
+        },
+    )
 
 
 @router.get("/v1/videos", response_model=VideoListResponse)
