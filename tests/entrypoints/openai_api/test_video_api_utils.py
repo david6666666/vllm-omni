@@ -61,7 +61,7 @@ def test_rife_model_inference_runs_on_dummy_tensors():
 def test_frame_interpolator_runs_actual_torch_tensor_path(monkeypatch):
     model = rife_interpolator.Model().eval()
     interpolator = rife_interpolator.FrameInterpolator()
-    monkeypatch.setattr(interpolator, "_ensure_model_loaded", lambda: model)
+    monkeypatch.setattr(interpolator, "_ensure_model_loaded", lambda preferred_device=None: model)
 
     video = torch.zeros(1, 3, 2, 32, 32)
     output_video, multiplier = interpolator.interpolate_tensor(video, exp=1, scale=1.0)
