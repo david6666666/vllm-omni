@@ -234,6 +234,48 @@ steps:
                       path: /mnt/hf-cache
                       type: DirectoryOrCreate
 
+      - label: ":full_moon: Diffusion Qwen-Image-2512 Pixel Accuracy Test"
+        key: nightly-qwen-image-2512-pixel-accuracy
+        timeout_in_minutes: 240
+        if: *nightly_or_pr_label
+        commands:
+          - pytest -s -v tests/e2e/accuracy/qwen_image_2512/test_qwen_image_2512_pixel_similarity.py --run-level advanced_model
+          - buildkite-agent artifact upload "tests/e2e/accuracy/qwen_image_2512/result/*.json"
+          - buildkite-agent artifact upload "tests/e2e/accuracy/qwen_image_2512/result/*.png"
+        agents:
+          queue: "mithril-h100-pool"
+        plugins:
+          - kubernetes:
+              podSpec:
+                containers:
+                  - image: 936637512419.dkr.ecr.us-west-2.amazonaws.com/vllm-ci-pull-through-cache/q9t5s3a7/vllm-ci-test-repo:$BUILDKITE_COMMIT
+                    resources:
+                      limits:
+                        nvidia.com/gpu: 1
+                    volumeMounts:
+                      - name: devshm
+                        mountPath: /dev/shm
+                      - name: hf-cache
+                        mountPath: /root/.cache/huggingface
+                    env:
+                      - name: HF_HOME
+                        value: /root/.cache/huggingface
+                      - name: HF_TOKEN
+                        valueFrom:
+                          secretKeyRef:
+                            name: hf-token-secret
+                            key: token
+                nodeSelector:
+                  node.kubernetes.io/instance-type: gpu-h100-sxm
+                volumes:
+                  - name: devshm
+                    emptyDir:
+                      medium: Memory
+                  - name: hf-cache
+                    hostPath:
+                      path: /mnt/hf-cache
+                      type: DirectoryOrCreate
+
       - label: ":full_moon: Diffusion · Qwen-Image · GEBench Accuracy Test"
         key: nightly-gebench-accuracy
         timeout_in_minutes: 60

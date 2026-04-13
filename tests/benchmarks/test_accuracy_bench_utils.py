@@ -275,6 +275,41 @@ def test_text_to_image_client_forwards_output_compression(monkeypatch):
     assert captured["json"]["output_compression"] == 98
 
 
+def test_text_to_image_client_accepts_file_url_response(monkeypatch, tmp_path: Path):
+    image_path = tmp_path / "served.png"
+    Image.new("RGB", (3, 2), color="white").save(image_path)
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "data": [
+                    {
+                        "url": image_path.as_uri(),
+                    }
+                ]
+            }
+
+    def fake_post(url, json=None, headers=None, timeout=None, **kwargs):
+        return FakeResponse()
+
+    monkeypatch.setattr("benchmarks.accuracy.common.requests.post", fake_post)
+
+    client = VllmOmniImageClient(base_url="http://127.0.0.1:8093", api_key="EMPTY")
+    output = client.generate_text_to_image(
+        model="Qwen/Qwen-Image",
+        prompt="generate a gui",
+        width=768,
+        height=576,
+    )
+
+    assert output.size == (3, 2)
+
+
 def test_parse_score_payload_handles_raw_json_and_delimited_json():
     raw = '{"score": [7, 8], "reasoning": "ok"}'
     wrapped = 'prefix ||V^=^V|| {"score": [6], "reasoning": "fine"} ||V^=^V|| suffix'

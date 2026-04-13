@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, unquote_to_bytes, urlparse
 
 import requests
 from PIL import Image
@@ -87,6 +88,59 @@ def pil_to_png_bytes(image: Image.Image) -> bytes:
     return buffer.getvalue()
 
 
+def decode_image_bytes(image_bytes: bytes) -> Image.Image:
+    image = Image.open(io.BytesIO(image_bytes))
+    image.load()
+    return image.convert("RGB")
+
+
+def load_image_file(path: str | Path) -> Image.Image:
+    image = Image.open(Path(path))
+    image.load()
+    return image.convert("RGB")
+
+
+def _decode_data_url_image(url: str) -> Image.Image:
+    header, separator, payload = url.partition(",")
+    if not separator:
+        raise ValueError("Malformed data URL image payload.")
+    if ";base64" in header.lower():
+        return decode_base64_image(payload)
+    return decode_image_bytes(unquote_to_bytes(payload))
+
+
+def _decode_url_image(url: str, *, timeout: int) -> Image.Image:
+    parsed = urlparse(url)
+    if parsed.scheme == "data":
+        return _decode_data_url_image(url)
+    if parsed.scheme in {"http", "https"}:
+        response = requests.get(url, timeout=timeout)
+        response.raise_for_status()
+        return decode_image_bytes(response.content)
+    if parsed.scheme == "file":
+        path_text = unquote(parsed.path or "")
+        if parsed.netloc:
+            path_text = f"//{parsed.netloc}{path_text}"
+        if len(path_text) >= 3 and path_text[0] == "/" and path_text[1].isalpha() and path_text[2] == ":":
+            path_text = path_text[1:]
+        return load_image_file(path_text)
+    if not parsed.scheme:
+        return load_image_file(url)
+    raise ValueError(f"Unsupported image URL scheme: {parsed.scheme}")
+
+
+def decode_openai_image_response_item(item: dict[str, Any], *, timeout: int = 600) -> Image.Image:
+    encoded = item.get("b64_json")
+    if isinstance(encoded, str) and encoded:
+        return decode_base64_image(encoded)
+
+    url = item.get("url")
+    if isinstance(url, str) and url:
+        return _decode_url_image(url, timeout=timeout)
+
+    raise ValueError(f"Image response item must contain b64_json or url: {item}")
+
+
 class VllmOmniImageClient:
     """Thin OpenAI-compatible image client for vLLM-Omni serving."""
 
@@ -136,7 +190,7 @@ class VllmOmniImageClient:
             timeout=self.timeout,
         )
         response.raise_for_status()
-        return decode_base64_image(response.json()["data"][0]["b64_json"])
+        return decode_openai_image_response_item(response.json()["data"][0], timeout=self.timeout)
 
     def generate_image_edit(
         self,
@@ -192,7 +246,7 @@ class VllmOmniImageClient:
             last_response = response
             if response.status_code != 404:
                 response.raise_for_status()
-                return decode_base64_image(response.json()["data"][0]["b64_json"])
+                return decode_openai_image_response_item(response.json()["data"][0], timeout=self.timeout)
 
         assert last_response is not None
         last_response.raise_for_status()
