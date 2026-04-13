@@ -60,6 +60,12 @@ def pytest_addoption(parser):
         default=1200,
         help="Online serving timeout in seconds for Wan2.2 I2V accuracy tests.",
     )
+    group.addoption(
+        "--qwen-image-edit-2511-image-source",
+        action="append",
+        default=None,
+        help="Image source for Qwen-Image-Edit-2511 accuracy tests. Repeat for multiple inputs.",
+    )
 
 
 def _hf_cache_root() -> Path:
@@ -164,6 +170,12 @@ def wan22_i2v_image_source(request: pytest.FixtureRequest) -> str | None:
 @pytest.fixture(scope="session")
 def wan22_i2v_online_timeout_seconds(request: pytest.FixtureRequest) -> int:
     return int(request.config.getoption("wan22_i2v_online_timeout_seconds"))
+
+
+@pytest.fixture(scope="session")
+def qwen_image_edit_2511_image_sources(request: pytest.FixtureRequest) -> list[str] | None:
+    value = request.config.getoption("qwen_image_edit_2511_image_source")
+    return [str(item) for item in value] if value else None
 
 
 @pytest.fixture(scope="session")
