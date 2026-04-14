@@ -21,7 +21,7 @@ from vllm_omni.entrypoints.openai.protocol.videos import (
     VideoGenerationResponse,
 )
 from vllm_omni.entrypoints.openai.utils import get_stage_type, parse_lora_request
-from vllm_omni.entrypoints.openai.video_api_utils import encode_video_base64
+from vllm_omni.entrypoints.openai.video_api_utils import _encode_video_bytes, encode_video_base64
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniSamplingParams, OmniTextPrompt
 
 logger = init_logger(__name__)
@@ -150,17 +150,19 @@ class OmniOpenAIServingVideo:
         audios = self._extract_audio_outputs(result, expected_count=len(videos))
         audio_sample_rate = self._resolve_audio_sample_rate(result)
         output_fps = vp.fps or 24
+        video_codec_options = self._resolve_video_codec_options(request)
 
         video_data = [
             VideoData(
                 b64_json=(
-                    encode_video_base64(video, fps=output_fps)
+                    encode_video_base64(video, fps=output_fps, video_codec_options=video_codec_options)
                     if audios[idx] is None
                     else encode_video_base64(
                         video,
                         fps=output_fps,
                         audio=audios[idx],
                         audio_sample_rate=audio_sample_rate,
+                        video_codec_options=video_codec_options,
                     )
                 )
             )
@@ -169,6 +171,89 @@ class OmniOpenAIServingVideo:
         _t_encode_ms = (time.perf_counter() - _t_encode_start) * 1000
         logger.info("Video response encoding (MP4+base64): %.2f ms", _t_encode_ms)
         return VideoGenerationResponse(created=int(time.time()), data=video_data)
+
+    async def generate_video_bytes(
+        self,
+        request: VideoGenerationRequest,
+        reference_id: str,
+        *,
+        reference_image: ReferenceImage | None = None,
+    ) -> tuple[bytes, dict[str, float], float]:
+        prompt: OmniTextPrompt = OmniTextPrompt(prompt=request.prompt)
+        if request.negative_prompt is not None:
+            prompt["negative_prompt"] = request.negative_prompt
+
+        gen_params = OmniDiffusionSamplingParams()
+
+        input_image = None if reference_image is None else reference_image.data
+        vp = request.resolve_video_params()
+        if input_image is not None and vp.width is not None and vp.height is not None:
+            target_size = (vp.width, vp.height)
+            if input_image.size != target_size:
+                input_image = input_image.resize(target_size, Image.Resampling.LANCZOS)
+        if input_image is not None:
+            prompt["multi_modal_data"] = {"image": input_image}
+        if vp.width is not None and vp.height is not None:
+            gen_params.width = vp.width
+            gen_params.height = vp.height
+        if vp.num_frames is not None:
+            gen_params.num_frames = vp.num_frames
+        if vp.fps is not None:
+            gen_params.fps = vp.fps
+            gen_params.frame_rate = float(vp.fps)
+
+        if request.num_inference_steps is not None:
+            gen_params.num_inference_steps = request.num_inference_steps
+        if request.guidance_scale is not None:
+            gen_params.guidance_scale = request.guidance_scale
+        if request.guidance_scale_2 is not None:
+            gen_params.guidance_scale_2 = request.guidance_scale_2
+        if request.true_cfg_scale is not None:
+            gen_params.true_cfg_scale = request.true_cfg_scale
+        if request.seed is not None:
+            gen_params.seed = request.seed
+        if request.boundary_ratio is not None:
+            gen_params.boundary_ratio = request.boundary_ratio
+        if request.flow_shift is not None:
+            gen_params.extra_args["flow_shift"] = request.flow_shift
+
+        if request.extra_params is not None:
+            if not isinstance(request.extra_params, dict):
+                raise HTTPException(
+                    status_code=HTTPStatus.BAD_REQUEST.value,
+                    detail="extra_params must be a JSON object/dict.",
+                )
+            gen_params.extra_args.update(request.extra_params)
+
+        self._apply_lora(request.lora, gen_params)
+
+        result = await self._run_generation(prompt, gen_params, reference_id)
+        videos = self._extract_video_outputs(result)
+        if len(videos) > 1:
+            logger.warning("Video request %s generated %d outputs; returning only the first.", reference_id, len(videos))
+        audios = self._extract_audio_outputs(result, expected_count=len(videos))
+        audio_sample_rate = self._resolve_audio_sample_rate(result)
+        output_fps = vp.fps or 24
+
+        _t_encode_start = time.perf_counter()
+        video_bytes = _encode_video_bytes(
+            videos[0],
+            fps=output_fps,
+            **({"audio": audios[0], "audio_sample_rate": audio_sample_rate} if audios[0] is not None else {}),
+            video_codec_options=self._resolve_video_codec_options(request),
+        )
+        _t_encode_ms = (time.perf_counter() - _t_encode_start) * 1000
+        logger.info("Video response encoding (MP4 bytes): %.2f ms", _t_encode_ms)
+        return video_bytes, getattr(result, "stage_durations", {}) or {}, float(getattr(result, "peak_memory_mb", 0.0))
+
+    @staticmethod
+    def _resolve_video_codec_options(request: VideoGenerationRequest) -> dict[str, str]:
+        video_codec_options = {"preset": "ultrafast", "threads": "0"}
+        if request.extra_params is not None and isinstance(request.extra_params, dict):
+            extra_codec_options = request.extra_params.get("video_codec_options")
+            if isinstance(extra_codec_options, dict):
+                video_codec_options = {str(k): str(v) for k, v in extra_codec_options.items()}
+        return video_codec_options
 
     @staticmethod
     def _apply_lora(lora_body: Any, gen_params: OmniDiffusionSamplingParams) -> None:
