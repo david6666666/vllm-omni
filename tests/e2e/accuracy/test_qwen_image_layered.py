@@ -10,7 +10,7 @@ import pytest
 import requests
 import torch
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from tests.conftest import (
     OmniServer,
@@ -27,7 +27,7 @@ NEGATIVE_PROMPT = " "
 NUM_INFERENCE_STEPS = 20
 TRUE_CFG_SCALE = 4.0
 SEED = 777
-LAYERS = 4
+LAYERS = 3
 RESOLUTION = 640
 SSIM_THRESHOLD = 0.97
 PSNR_THRESHOLD = 30.0
@@ -39,16 +39,6 @@ def _model_name() -> str:
 
 def _local_files_only(model: str) -> bool:
     return Path(model).exists()
-
-
-def _build_input_image() -> Image.Image:
-    image = Image.new("RGBA", (640, 640), (255, 255, 255, 255))
-    draw = ImageDraw.Draw(image, "RGBA")
-    draw.rectangle((40, 40, 280, 280), fill=(230, 80, 70, 220))
-    draw.ellipse((320, 80, 580, 340), fill=(70, 130, 230, 220))
-    draw.polygon(((120, 520), (320, 300), (520, 520)), fill=(80, 180, 110, 220))
-    draw.rectangle((250, 380, 390, 600), fill=(245, 195, 70, 200))
-    return image
 
 
 def _normalize_layered_images(images: object) -> list[Image.Image]:
@@ -63,8 +53,7 @@ def _normalize_layered_images(images: object) -> list[Image.Image]:
     raise AssertionError(f"Unexpected layered image element type: {type(first_item).__name__}")
 
 
-def _run_vllm_omni_qwen_image_layered(*, model: str, output_dir: Path) -> list[Image.Image]:
-    input_image = _build_input_image()
+def _run_vllm_omni_qwen_image_layered(*, model: str, input_image: Image.Image, output_dir: Path) -> list[Image.Image]:
     input_image.save(output_dir / "input.png")
     server_args = ["--num-gpus", "1", "--stage-init-timeout", "300", "--init-timeout", "900"]
     with OmniServer(model, server_args, use_omni=True) as omni_server:
@@ -103,11 +92,10 @@ def _run_vllm_omni_qwen_image_layered(*, model: str, output_dir: Path) -> list[I
         return output_images
 
 
-def _run_diffusers_qwen_image_layered(*, model: str, output_dir: Path) -> list[Image.Image]:
+def _run_diffusers_qwen_image_layered(*, model: str, input_image: Image.Image, output_dir: Path) -> list[Image.Image]:
     _run_pre_test_cleanup(enable_force=True)
     pipe: DiffusionPipeline | None = None
     try:
-        input_image = _build_input_image()
         pipe = DiffusionPipeline.from_pretrained(
             model,
             torch_dtype=torch.bfloat16,
@@ -145,12 +133,13 @@ def _run_diffusers_qwen_image_layered(*, model: str, output_dir: Path) -> list[I
 @pytest.mark.benchmark
 @pytest.mark.diffusion
 @hardware_test(res={"cuda": "H100"}, num_cards=1)
-def test_qwen_image_layered_matches_diffusers(accuracy_artifact_root: Path) -> None:
+def test_qwen_image_layered_matches_diffusers(accuracy_artifact_root: Path, qwen_bear_image: Image.Image) -> None:
     model = _model_name()
     output_dir = model_output_dir(accuracy_artifact_root, MODEL_ID)
+    input_image = qwen_bear_image.convert("RGBA")
 
-    vllm_outputs = _run_vllm_omni_qwen_image_layered(model=model, output_dir=output_dir)
-    diffusers_outputs = _run_diffusers_qwen_image_layered(model=model, output_dir=output_dir)
+    vllm_outputs = _run_vllm_omni_qwen_image_layered(model=model, input_image=input_image, output_dir=output_dir)
+    diffusers_outputs = _run_diffusers_qwen_image_layered(model=model, input_image=input_image, output_dir=output_dir)
 
     assert_image_sequence_similarity(
         model_name=MODEL_ID,
