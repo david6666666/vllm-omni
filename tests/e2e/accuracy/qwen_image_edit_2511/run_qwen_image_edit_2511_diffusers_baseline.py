@@ -6,7 +6,7 @@ from pathlib import Path
 import torch
 from diffusers import QwenImageEditPlusPipeline
 
-from tests.e2e.accuracy.qwen_image_edit_2511 import (
+from tests.e2e.accuracy.qwen_image_edit_2511.common import (
     GUIDANCE_SCALE,
     HEIGHT,
     MODEL_NAME,
@@ -18,8 +18,10 @@ from tests.e2e.accuracy.qwen_image_edit_2511 import (
     SEED,
     TRUE_CFG_SCALE,
     WIDTH,
+    resolve_configured_image_sources,
+)
+from tests.e2e.accuracy.utils import (
     load_input_image,
-    resolve_image_sources,
     write_json,
 )
 
@@ -56,7 +58,7 @@ def main() -> int:
     pipeline.vae.use_tiling = True
     pipeline.vae.use_slicing = True
 
-    image_sources = resolve_image_sources(args.image_source)
+    image_sources = resolve_configured_image_sources(args.image_source)
     images = [load_input_image(source) for source in image_sources]
     image_input = images if len(images) > 1 else images[0]
 
