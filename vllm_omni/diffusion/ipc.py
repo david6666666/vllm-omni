@@ -72,6 +72,9 @@ def _pack_diffusion_fields(output: DiffusionOutput) -> DiffusionOutput:
     if output.trajectory_latents is not None and isinstance(output.trajectory_latents, torch.Tensor):
         if output.trajectory_latents.nelement() * output.trajectory_latents.element_size() > _SHM_TENSOR_THRESHOLD:
             output.trajectory_latents = _tensor_to_shm(output.trajectory_latents)
+    if output.trajectory_log_probs is not None and isinstance(output.trajectory_log_probs, torch.Tensor):
+        if output.trajectory_log_probs.nelement() * output.trajectory_log_probs.element_size() > _SHM_TENSOR_THRESHOLD:
+            output.trajectory_log_probs = _tensor_to_shm(output.trajectory_log_probs)
     return output
 
 
@@ -95,6 +98,8 @@ def _unpack_diffusion_fields(output: DiffusionOutput) -> DiffusionOutput:
         output.output = _tensor_from_shm(output.output)
     if isinstance(output.trajectory_latents, dict) and output.trajectory_latents.get("__tensor_shm__"):
         output.trajectory_latents = _tensor_from_shm(output.trajectory_latents)
+    if isinstance(output.trajectory_log_probs, dict) and output.trajectory_log_probs.get("__tensor_shm__"):
+        output.trajectory_log_probs = _tensor_from_shm(output.trajectory_log_probs)
     return output
 
 

@@ -16,7 +16,7 @@ import torch
 from PIL import Image
 from vllm.logger import init_logger
 
-from vllm_omni.diffusion.data import DiffusionRequestAbortedError
+from vllm_omni.diffusion.data import normalize_omni_error
 from vllm_omni.diffusion.diffusion_engine import DiffusionEngine
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.engine.stage_init_utils import StageMetadata
@@ -56,8 +56,8 @@ class InlineStageDiffusionClient:
         self._engine = DiffusionEngine.make_engine(self.od_config)
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="inline-diffusion")
 
-        self._output_queue: asyncio.Queue[OmniRequestOutput] = asyncio.Queue()
-        self._tasks: dict[str, asyncio.Task] = {}
+        self._output_queue: asyncio.Queue[OmniRequestOutput | dict[str, Any]] = asyncio.Queue()
+        self._tasks: dict[str, asyncio.Task[Any]] = {}
         self._shutting_down = False
 
         logger.info(
@@ -69,6 +69,28 @@ class InlineStageDiffusionClient:
     def _enrich_config(self) -> None:
         """Load model metadata from HuggingFace and populate od_config fields."""
         self.od_config.enrich_config()
+
+    def _queue_error(self, request_id: str, exc: Exception, log_prefix: str) -> None:
+        err = normalize_omni_error(exc, request_id=request_id, stage_id=self.stage_id)
+        logger.exception(
+            "[InlineStageDiffusionClient] Stage-%s %s req=%s failed: %s",
+            self.stage_id,
+            log_prefix,
+            request_id,
+            err,
+        )
+        self._output_queue.put_nowait(
+            {
+                "type": "error",
+                "request_id": request_id,
+                "stage_id": self.stage_id,
+                "status_code": err.status_code,
+                "error": str(err),
+                "error_type": err.error_type,
+                "detail": err.detail,
+                "finished": True,
+            }
+        )
 
     # ------------------------------------------------------------------
     # Request processing
@@ -99,12 +121,14 @@ class InlineStageDiffusionClient:
         kv_sender_info: dict[str, Any] | None = None,
     ) -> None:
         try:
+            # Inline diffusion uses the same request envelope as AsyncOmniDiffusion.
+            # kv_sender_info is accepted at the interface layer for compatibility
+            # with other stage clients but is not consumed by DiffusionEngine here.
+            _ = kv_sender_info
             request = OmniDiffusionRequest(
                 prompts=[prompt],
                 sampling_params=sampling_params,
                 request_ids=[request_id],
-                request_id=request_id,
-                kv_sender_info=kv_sender_info,
             )
 
             loop = asyncio.get_running_loop()
@@ -114,16 +138,10 @@ class InlineStageDiffusionClient:
                 result.request_id = request_id
 
             self._output_queue.put_nowait(result)
-        except DiffusionRequestAbortedError as e:
-            logger.info("request_id: %s aborted: %s", request_id, str(e))
+        except asyncio.CancelledError:
+            logger.info("request_id: %s cancelled", request_id)
         except Exception as e:
-            logger.exception("Diffusion request %s failed: %s", request_id, e)
-            error_output = OmniRequestOutput.from_diffusion(
-                request_id=request_id,
-                images=[],
-            )
-            error_output.error = str(e)
-            self._output_queue.put_nowait(error_output)
+            self._queue_error(request_id, e, "request")
         finally:
             self._tasks.pop(request_id, None)
 
@@ -152,12 +170,11 @@ class InlineStageDiffusionClient:
         kv_sender_info: dict[str, Any] | None = None,
     ) -> None:
         try:
+            _ = kv_sender_info
             request = OmniDiffusionRequest(
                 prompts=prompts,
                 sampling_params=sampling_params,
                 request_ids=[f"{request_id}-{i}" for i in range(len(prompts))],
-                request_id=request_id,
-                kv_sender_info=kv_sender_info,
             )
 
             loop = asyncio.get_running_loop()
@@ -170,10 +187,10 @@ class InlineStageDiffusionClient:
             merged_custom: dict[str, Any] = {}
             peak_mem = 0.0
             latents = None
-            trajectory_latents: list[torch.Tensor] | None = None
+            trajectory_latents: torch.Tensor | None = None
             trajectory_timesteps: list[torch.Tensor] | None = None
             trajectory_log_probs: torch.Tensor | None = None
-            trajectory_decoded: list[Image.Image] | None = None
+            trajectory_decoded: list[torch.Tensor] | list[Image.Image] | None = None
             final_output_type = "image"
 
             for r in results:
@@ -214,24 +231,21 @@ class InlineStageDiffusionClient:
             )
 
             self._output_queue.put_nowait(result)
-        except DiffusionRequestAbortedError as e:
-            logger.info("request_id: %s aborted: %s", request_id, str(e))
+        except asyncio.CancelledError:
+            logger.info("request_id: %s cancelled", request_id)
         except Exception as e:
-            logger.exception("Batch diffusion request %s failed: %s", request_id, e)
-            error_output = OmniRequestOutput.from_diffusion(
-                request_id=request_id,
-                images=[],
-            )
-            error_output.error = str(e)
-            self._output_queue.put_nowait(error_output)
+            self._queue_error(request_id, e, "batch request")
         finally:
             self._tasks.pop(request_id, None)
 
-    def get_diffusion_output_nowait(self) -> OmniRequestOutput | None:
+    def get_diffusion_output_async(self) -> OmniRequestOutput | dict[str, Any] | None:
         try:
             return self._output_queue.get_nowait()
         except asyncio.QueueEmpty:
             return None
+
+    def get_diffusion_output_nowait(self) -> OmniRequestOutput | dict[str, Any] | None:
+        return self.get_diffusion_output_async()
 
     async def abort_requests_async(self, request_ids: list[str]) -> None:
         for rid in request_ids:

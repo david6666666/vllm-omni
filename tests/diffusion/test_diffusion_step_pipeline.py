@@ -443,15 +443,24 @@ class TestWorker:
 class TestIPC:
     def test_pack_unpack_runner_output_shm(self):
         tensor = torch.zeros(300_000, dtype=torch.float32)
-        output = RunnerOutput(req_id="req-1", finished=True, result=DiffusionOutput(output=tensor))
+        log_probs = torch.ones(300_000, dtype=torch.float32)
+        output = RunnerOutput(
+            req_id="req-1",
+            finished=True,
+            result=DiffusionOutput(output=tensor, trajectory_log_probs=log_probs),
+        )
 
         packed = pack_diffusion_output_shm(output)
         assert isinstance(packed.result.output, dict)
         assert packed.result.output["__tensor_shm__"] is True
+        assert isinstance(packed.result.trajectory_log_probs, dict)
+        assert packed.result.trajectory_log_probs["__tensor_shm__"] is True
 
         unpacked = unpack_diffusion_output_shm(packed)
         assert isinstance(unpacked.result.output, torch.Tensor)
+        assert isinstance(unpacked.result.trajectory_log_probs, torch.Tensor)
         torch.testing.assert_close(unpacked.result.output, tensor)
+        torch.testing.assert_close(unpacked.result.trajectory_log_probs, log_probs)
 
 
 @pytest.mark.cpu

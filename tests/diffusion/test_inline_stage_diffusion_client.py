@@ -47,7 +47,6 @@ def client(mock_engine):
 
 @pytest.mark.asyncio
 async def test_inline_dispatch_request_success(client, mock_engine):
-    # Setup mock engine step to return a successful result
     mock_result = OmniRequestOutput.from_diffusion(request_id="req-1", images=[MagicMock()])
     mock_engine.step.return_value = [mock_result]
 
@@ -64,11 +63,38 @@ async def test_inline_dispatch_request_success(client, mock_engine):
     assert output is not None
     assert output.request_id == "req-1"
     mock_engine.step.assert_called_once()
+    request = mock_engine.step.call_args.args[0]
+    assert request.prompts == ["A test prompt"]
+    assert request.request_ids == ["req-1"]
+
+
+@pytest.mark.asyncio
+async def test_inline_dispatch_batch_success(client, mock_engine):
+    mock_engine.step.return_value = [
+        OmniRequestOutput.from_diffusion(request_id="req-batch-0", images=[MagicMock()]),
+        OmniRequestOutput.from_diffusion(request_id="req-batch-1", images=[MagicMock()]),
+    ]
+
+    sampling_params = OmniDiffusionSamplingParams()
+    prompts = ["prompt-0", "prompt-1"]
+    await client.add_batch_request_async("req-batch", prompts, sampling_params)
+
+    for _ in range(10):
+        output = client.get_diffusion_output_nowait()
+        if output is not None:
+            break
+        await asyncio.sleep(0.01)
+
+    assert output is not None
+    assert output.request_id == "req-batch"
+    assert len(output.images) == 2
+    request = mock_engine.step.call_args.args[0]
+    assert request.prompts == prompts
+    assert request.request_ids == ["req-batch-0", "req-batch-1"]
 
 
 @pytest.mark.asyncio
 async def test_inline_dispatch_request_error(client, mock_engine):
-    # Setup mock engine step to raise an exception
     mock_engine.step.side_effect = RuntimeError("Engine failure")
 
     sampling_params = OmniDiffusionSamplingParams()
@@ -81,9 +107,9 @@ async def test_inline_dispatch_request_error(client, mock_engine):
         await asyncio.sleep(0.01)
 
     assert output is not None
-    assert output.request_id == "req-err"
-    assert output.error == "Engine failure"
-    assert not output.images
+    assert output["request_id"] == "req-err"
+    assert output["error"] == "Engine failure"
+    assert output["error_type"] == "RuntimeError"
 
 
 def test_inline_shutdown(client, mock_engine):
