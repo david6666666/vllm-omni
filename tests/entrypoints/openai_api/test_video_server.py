@@ -416,8 +416,8 @@ def test_sampling_params_pass_through(test_client, mocker: MockerFixture):
 def test_frame_interpolation_params_pass_to_diffusion_sampling_params(test_client, mocker: MockerFixture):
     """Frame interpolation parameters should be forwarded to diffusion worker sampling params."""
     mocker.patch(
-        "vllm_omni.entrypoints.openai.serving_video.encode_video_base64",
-        return_value="Zg==",
+        "vllm_omni.entrypoints.openai.serving_video._encode_video_bytes",
+        return_value=b"fake-video",
     )
     response = test_client.post(
         "/v1/videos",
@@ -450,17 +450,19 @@ def test_worker_fps_multiplier_is_applied_to_async_encoding(test_client, mocker:
     async def _generate(prompt, request_id, sampling_params_list):
         engine.captured_prompt = prompt
         engine.captured_sampling_params_list = sampling_params_list
-        yield MockVideoResult([object()], custom_output={"video_fps_multiplier": 2})
+        import numpy as np
+
+        yield MockVideoResult([np.zeros((1, 64, 64, 3), dtype=np.uint8)], custom_output={"video_fps_multiplier": 2})
 
     engine.generate = _generate
 
     def _fake_encode(video, fps, **kwargs):
         del video, kwargs
         fps_values.append(fps)
-        return "Zg=="
+        return b"fake-video"
 
     mocker.patch(
-        "vllm_omni.entrypoints.openai.serving_video.encode_video_base64",
+        "vllm_omni.entrypoints.openai.serving_video._encode_video_bytes",
         side_effect=_fake_encode,
     )
 

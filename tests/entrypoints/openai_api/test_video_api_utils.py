@@ -13,13 +13,14 @@ pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 
 def _install_fake_video_mux(monkeypatch, mux_calls):
-    def _fake_mux_video_audio_bytes(frames, audio, fps, audio_sample_rate):
+    def _fake_mux_video_audio_bytes(frames, audio, fps, audio_sample_rate, video_codec_options=None):
         mux_calls.append(
             {
                 "frames": frames,
                 "audio": audio,
                 "fps": fps,
                 "audio_sample_rate": audio_sample_rate,
+                "video_codec_options": video_codec_options,
             }
         )
         return b"fake-video"
