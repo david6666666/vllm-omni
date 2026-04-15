@@ -2010,6 +2010,10 @@ async def create_video(
     true_cfg_scale: float | None = Form(default=None),
     seed: int | None = Form(default=None),
     negative_prompt: str | None = Form(default=None),
+    enable_frame_interpolation: bool = Form(default=False),
+    frame_interpolation_exp: int = Form(default=1, ge=1),
+    frame_interpolation_scale: float = Form(default=1.0, gt=0.0),
+    frame_interpolation_model_path: str | None = Form(default=None),
     lora: str | None = Form(default=None),
     extra_params: str | None = Form(default=None),
 ) -> VideoResponse:
@@ -2079,6 +2083,10 @@ async def create_video(
         "true_cfg_scale": true_cfg_scale,
         "seed": seed,
         "negative_prompt": negative_prompt,
+        "enable_frame_interpolation": enable_frame_interpolation,
+        "frame_interpolation_exp": frame_interpolation_exp,
+        "frame_interpolation_scale": frame_interpolation_scale,
+        "frame_interpolation_model_path": frame_interpolation_model_path,
         "lora": _parse_form_json(lora, expected_type=dict),
         "extra_params": _parse_form_json(extra_params, expected_type=dict),
     }
