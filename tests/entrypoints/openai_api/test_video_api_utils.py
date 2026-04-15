@@ -31,9 +31,24 @@ def _install_fake_video_mux(monkeypatch, mux_calls):
     )
 
 
+def _install_fake_export_to_video(monkeypatch, export_calls):
+    def _fake_export_to_video(frames, output_path, fps):
+        export_calls.append(
+            {
+                "frames": frames,
+                "output_path": output_path,
+                "fps": fps,
+            }
+        )
+        with open(output_path, "wb") as f:
+            f.write(b"fake-video")
+
+    monkeypatch.setattr("diffusers.utils.export_to_video", _fake_export_to_video)
+
+
 def test_encode_video_bytes_exports_frames_without_interpolation(monkeypatch):
-    mux_calls = []
-    _install_fake_video_mux(monkeypatch, mux_calls)
+    export_calls = []
+    _install_fake_export_to_video(monkeypatch, export_calls)
 
     frames = [np.full((2, 2, 3), fill_value=i / 5, dtype=np.float32) for i in range(5)]
     video_bytes = video_api_utils._encode_video_bytes(
@@ -42,10 +57,46 @@ def test_encode_video_bytes_exports_frames_without_interpolation(monkeypatch):
     )
 
     assert video_bytes == b"fake-video"
-    assert mux_calls[0]["frames"].shape == (5, 2, 2, 3)
-    assert mux_calls[0]["frames"].dtype == np.uint8
-    assert mux_calls[0]["fps"] == 8.0
-    assert mux_calls[0]["audio"] is None
+    assert len(export_calls) == 1
+    assert len(export_calls[0]["frames"]) == 5
+    assert export_calls[0]["frames"][0].shape == (2, 2, 3)
+    assert export_calls[0]["fps"] == 8
+
+
+def test_encode_video_bytes_uses_array_fast_path(monkeypatch):
+    export_calls = []
+    _install_fake_export_to_video(monkeypatch, export_calls)
+    monkeypatch.setattr(
+        video_api_utils,
+        "_normalize_frames",
+        lambda frames: (_ for _ in ()).throw(AssertionError("ndarray input should not go through frame list path")),
+    )
+
+    video = np.linspace(0.0, 1.0, num=5 * 2 * 2 * 3, dtype=np.float32).reshape(5, 2, 2, 3)
+    video_bytes = video_api_utils._encode_video_bytes(video, fps=12)
+
+    assert video_bytes == b"fake-video"
+    assert len(export_calls) == 1
+    assert len(export_calls[0]["frames"]) == 5
+    assert export_calls[0]["frames"][0].flags["C_CONTIGUOUS"]
+    assert export_calls[0]["fps"] == 12.0
+
+
+def test_encode_video_bytes_without_audio_uses_diffusers_export(monkeypatch):
+    export_calls = []
+    _install_fake_export_to_video(monkeypatch, export_calls)
+    monkeypatch.setattr(
+        "vllm_omni.diffusion.utils.media_utils.mux_video_audio_bytes",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no-audio path should not use mux_video_audio_bytes")),
+    )
+
+    video = np.linspace(0.0, 1.0, num=4 * 2 * 2 * 3, dtype=np.float32).reshape(4, 2, 2, 3)
+    video_bytes = video_api_utils._encode_video_bytes(video, fps=10)
+
+    assert video_bytes == b"fake-video"
+    assert len(export_calls) == 1
+    assert export_calls[0]["fps"] == 10
+    assert len(export_calls[0]["frames"]) == 4
 
 
 def test_rife_model_inference_runs_on_dummy_tensors():

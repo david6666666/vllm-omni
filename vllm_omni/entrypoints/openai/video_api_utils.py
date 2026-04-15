@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+import os
+import tempfile
 from io import BytesIO
 from typing import Any
 
@@ -157,29 +159,33 @@ def _normalize_frames(frames: list[Any]) -> list[np.ndarray]:
     return normalized
 
 
-def _coerce_video_to_frames(video: Any) -> list[np.ndarray]:
-    """Convert a video payload into a list of normalized float32 frames."""
+def _coerce_video_to_array(video: Any) -> np.ndarray:
+    """Convert a video payload into a normalized array of frames (F, H, W, C)."""
     if isinstance(video, torch.Tensor):
         video_array = _normalize_video_tensor(video)
-        return list(video_array)
+        if video_array.ndim == 4:
+            return video_array
+        if video_array.ndim == 3:
+            return video_array[None, ...]
+        raise ValueError(f"Unsupported video array shape: {video_array.shape}")
     if isinstance(video, np.ndarray):
         video_array = _normalize_video_array(video)
         if isinstance(video_array, list):
             raise ValueError("Batched video arrays must be split before encoding.")
         if video_array.ndim == 4:
-            return list(video_array)
+            return video_array
         if video_array.ndim == 3:
-            return [video_array]
+            return video_array[None, ...]
         raise ValueError(f"Unsupported video array shape: {video_array.shape}")
     if isinstance(video, list):
         if not video:
-            return []
+            return np.empty((0,), dtype=np.float32)
         # If this looks like a list of frames, normalize directly.
         if all(isinstance(item, (np.ndarray, torch.Tensor, Image.Image)) for item in video):
             # If each item is itself a video (ndim==4), handle elsewhere.
             if all(hasattr(item, "ndim") and item.ndim >= 4 for item in video):
                 raise ValueError("Expected a single video, got a list of video tensors/arrays.")
-            return _normalize_frames(video)
+            return np.stack(_normalize_frames(video), axis=0)
         raise ValueError("Unsupported list contents for video payload.")
     raise ValueError(f"Unsupported video payload type: {type(video)}")
 
@@ -210,15 +216,28 @@ def _encode_video_bytes(
     video_codec_options: dict[str, str] | None = None,
 ) -> bytes:
     """Encode a video payload into MP4 bytes, optionally muxing audio."""
-    from vllm_omni.diffusion.utils.media_utils import mux_video_audio_bytes
-
-    frames = _coerce_video_to_frames(video)
-    if not frames:
+    frames_np = _coerce_video_to_array(video)
+    if frames_np.size == 0:
         raise ValueError("No frames found to encode.")
-
-    frames_np = np.stack(frames, axis=0)
     if frames_np.ndim == 4 and frames_np.shape[-1] == 4:
         frames_np = frames_np[..., :3]
+
+    if audio is None:
+        from diffusers.utils import export_to_video
+
+        tmp_file = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+        tmp_file.close()
+        try:
+            export_to_video(list(frames_np), tmp_file.name, fps=fps)
+            with open(tmp_file.name, "rb") as f:
+                return f.read()
+        finally:
+            try:
+                os.remove(tmp_file.name)
+            except OSError:
+                pass
+
+    from vllm_omni.diffusion.utils.media_utils import mux_video_audio_bytes
 
     if frames_np.dtype == np.uint8:
         frames_u8 = frames_np

@@ -462,6 +462,25 @@ class TestIPC:
         torch.testing.assert_close(unpacked.result.output, tensor)
         torch.testing.assert_close(unpacked.result.trajectory_log_probs, log_probs)
 
+    def test_pack_unpack_runner_output_shm_bfloat16(self):
+        tensor = torch.arange(600_000, dtype=torch.bfloat16)
+        output = RunnerOutput(
+            req_id="req-1",
+            finished=True,
+            result=DiffusionOutput(output=tensor),
+        )
+
+        packed = pack_diffusion_output_shm(output)
+        assert isinstance(packed.result.output, dict)
+        assert packed.result.output["__tensor_shm__"] is True
+        assert packed.result.output["torch_dtype"] == str(torch.bfloat16)
+        assert packed.result.output["numpy_dtype"] == "uint16"
+
+        unpacked = unpack_diffusion_output_shm(packed)
+        assert isinstance(unpacked.result.output, torch.Tensor)
+        assert unpacked.result.output.dtype == torch.bfloat16
+        torch.testing.assert_close(unpacked.result.output, tensor)
+
 
 @pytest.mark.cpu
 class TestSupportedPipelines:
