@@ -36,7 +36,6 @@ from vllm_omni.diffusion.models.qwen_image.pipeline_qwen_image_edit import (
     retrieve_timesteps,
 )
 from vllm_omni.diffusion.models.qwen_image.prompt_length_validation import (
-    build_qwen_image_edit_plus_prompt_prefix,
     get_effective_qwen_prompt_lengths,
     validate_qwen_prompt_lengths,
 )
@@ -312,10 +311,11 @@ class QwenImageEditPlusPipeline(
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
 
+        img_prompt_template = "Picture {}: <|vision_start|><|image_pad|><|vision_end|>"
         if isinstance(image, list):
-            base_img_prompt = build_qwen_image_edit_plus_prompt_prefix(len(image))
+            base_img_prompt = "".join(img_prompt_template.format(i + 1) for i in range(len(image)))
         elif image is not None:
-            base_img_prompt = build_qwen_image_edit_plus_prompt_prefix(1)
+            base_img_prompt = img_prompt_template.format(1)
         else:
             base_img_prompt = ""
 

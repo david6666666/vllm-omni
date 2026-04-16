@@ -1,7 +1,6 @@
 import pytest
 
 from vllm_omni.diffusion.models.qwen_image.prompt_length_validation import (
-    build_qwen_image_edit_plus_prompt_prefix,
     get_effective_qwen_prompt_lengths,
     validate_qwen_prompt_lengths,
 )
@@ -24,15 +23,6 @@ class FakeTensor:
 
     def tolist(self):
         return self._values
-
-
-def test_build_qwen_image_edit_plus_prompt_prefix():
-    assert build_qwen_image_edit_plus_prompt_prefix(0) == ""
-    assert build_qwen_image_edit_plus_prompt_prefix(1) == "Picture 1: <|vision_start|><|image_pad|><|vision_end|>"
-    assert build_qwen_image_edit_plus_prompt_prefix(2) == (
-        "Picture 1: <|vision_start|><|image_pad|><|vision_end|>"
-        "Picture 2: <|vision_start|><|image_pad|><|vision_end|>"
-    )
 
 
 def test_get_effective_qwen_prompt_lengths():
