@@ -33,8 +33,8 @@ from vllm_omni.diffusion.models.qwen_image.cfg_parallel import (
 )
 from vllm_omni.diffusion.models.qwen_image.pipeline_qwen_image import calculate_shift
 from vllm_omni.diffusion.models.qwen_image.prompt_length_validation import (
-    get_effective_qwen_prompt_lengths,
-    validate_qwen_prompt_lengths,
+    get_qwen_text_prompt_lengths,
+    validate_qwen_text_prompt_lengths,
 )
 from vllm_omni.diffusion.models.qwen_image.qwen_image_transformer import (
     QwenImageTransformer2DModel,
@@ -395,6 +395,18 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
         dtype = dtype or self.text_encoder.dtype
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
+        prompt_tokens = self.tokenizer(
+            prompt,
+            padding=True,
+            truncation=False,
+            return_tensors="pt",
+        )
+        prompt_lengths = get_qwen_text_prompt_lengths(prompt_tokens.attention_mask)
+        validate_qwen_text_prompt_lengths(
+            prompt_lengths,
+            max_sequence_length=max_sequence_length,
+            field_name=field_name,
+        )
 
         template = self.prompt_template_encode
         drop_idx = self.prompt_template_encode_start_idx
@@ -405,15 +417,6 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
             text=txt,
             images=image,
         ).to(self.device)
-        effective_lengths = get_effective_qwen_prompt_lengths(
-            model_inputs.attention_mask,
-            drop_idx=drop_idx,
-        )
-        validate_qwen_prompt_lengths(
-            effective_lengths,
-            max_sequence_length=max_sequence_length,
-            field_name=field_name,
-        )
 
         outputs = self.text_encoder(
             input_ids=model_inputs.input_ids,
