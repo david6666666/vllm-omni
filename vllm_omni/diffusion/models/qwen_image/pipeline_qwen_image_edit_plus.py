@@ -37,7 +37,8 @@ from vllm_omni.diffusion.models.qwen_image.pipeline_qwen_image_edit import (
 )
 from vllm_omni.diffusion.models.qwen_image.prompt_length_validation import (
     build_qwen_image_edit_plus_prompt_prefix,
-    tokenize_and_validate_qwen_vl_prompt,
+    get_effective_qwen_prompt_lengths,
+    validate_qwen_prompt_lengths,
 )
 from vllm_omni.diffusion.models.qwen_image.qwen_image_transformer import (
     QwenImageTransformer2DModel,
@@ -322,14 +323,19 @@ class QwenImageEditPlusPipeline(
         drop_idx = self.prompt_template_encode_start_idx
         txt = [template.format(base_img_prompt + e) for e in prompt]
 
-        model_inputs = tokenize_and_validate_qwen_vl_prompt(
-            self.processor,
-            texts=txt,
+        model_inputs = self.processor(
+            text=txt,
             images=image,
+        ).to(self.device)
+        effective_lengths = get_effective_qwen_prompt_lengths(
+            model_inputs.attention_mask,
             drop_idx=drop_idx,
+        )
+        validate_qwen_prompt_lengths(
+            effective_lengths,
             max_sequence_length=max_sequence_length,
             field_name=field_name,
-        ).to(self.device)
+        )
 
         outputs = self.text_encoder(
             input_ids=model_inputs.input_ids,

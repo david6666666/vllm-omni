@@ -1,37 +1,12 @@
-from types import SimpleNamespace
-
 import pytest
 
 from vllm_omni.diffusion.models.qwen_image.prompt_length_validation import (
     build_qwen_image_edit_plus_prompt_prefix,
-    tokenize_and_validate_qwen_text_prompt,
-    tokenize_and_validate_qwen_vl_prompt,
+    get_effective_qwen_prompt_lengths,
+    validate_qwen_prompt_lengths,
 )
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
-
-
-class FakeProcessor:
-    def __init__(self, lengths: list[int]):
-        self._lengths = lengths
-
-    def __call__(self, *, text, images, padding, return_tensors):
-        assert padding is True
-        assert return_tensors == "pt"
-        assert isinstance(text, list)
-        return SimpleNamespace(attention_mask=FakeAttentionMask(self._lengths))
-
-
-class FakeTokenizer:
-    def __init__(self, lengths: list[int]):
-        self._lengths = lengths
-
-    def __call__(self, texts, padding, truncation, return_tensors):
-        assert isinstance(texts, list)
-        assert padding is True
-        assert truncation is False
-        assert return_tensors == "pt"
-        return SimpleNamespace(attention_mask=FakeAttentionMask(self._lengths))
 
 
 class FakeAttentionMask:
@@ -60,71 +35,32 @@ def test_build_qwen_image_edit_plus_prompt_prefix():
     )
 
 
-def test_tokenize_and_validate_qwen_text_prompt_accepts_valid_length():
-    tokenizer = FakeTokenizer(lengths=[66])
+def test_get_effective_qwen_prompt_lengths():
+    attention_mask = FakeAttentionMask([66, 1059, 20])
+    assert get_effective_qwen_prompt_lengths(attention_mask, drop_idx=34) == [32, 1025, 0]
 
-    result = tokenize_and_validate_qwen_text_prompt(
-        tokenizer,
-        texts=["hello"],
-        drop_idx=34,
+
+def test_validate_qwen_prompt_lengths_accepts_valid_length():
+    validate_qwen_prompt_lengths(
+        [32],
         max_sequence_length=32,
         field_name="prompt",
     )
 
-    assert isinstance(result, SimpleNamespace)
 
-
-def test_tokenize_and_validate_qwen_text_prompt_rejects_overlong_prompt():
-    tokenizer = FakeTokenizer(lengths=[1059])
-
+def test_validate_qwen_prompt_lengths_rejects_overlong_prompt():
     with pytest.raises(ValueError, match="`prompt` is too long"):
-        tokenize_and_validate_qwen_text_prompt(
-            tokenizer,
-            texts=["hello"],
-            drop_idx=34,
+        validate_qwen_prompt_lengths(
+            [1025],
             max_sequence_length=1024,
             field_name="prompt",
         )
 
 
-def test_tokenize_and_validate_qwen_vl_prompt_accepts_valid_length():
-    processor = FakeProcessor(lengths=[96])
-
-    result = tokenize_and_validate_qwen_vl_prompt(
-        processor,
-        texts=["hello"],
-        images=None,
-        drop_idx=64,
-        max_sequence_length=32,
-        field_name="prompt",
-    )
-
-    assert isinstance(result, SimpleNamespace)
-
-
-def test_tokenize_and_validate_qwen_vl_prompt_rejects_overlong_prompt():
-    processor = FakeProcessor(lengths=[1164])
-
-    with pytest.raises(ValueError, match="`prompt` is too long"):
-        tokenize_and_validate_qwen_vl_prompt(
-            processor,
-            texts=["hello"],
-            images=None,
-            drop_idx=64,
-            max_sequence_length=1024,
-            field_name="prompt",
-        )
-
-
-def test_tokenize_and_validate_qwen_vl_prompt_mentions_negative_prompt():
-    processor = FakeProcessor(lengths=[90, 1165])
-
+def test_validate_qwen_prompt_lengths_mentions_negative_prompt():
     with pytest.raises(ValueError, match="`negative_prompt` is too long"):
-        tokenize_and_validate_qwen_vl_prompt(
-            processor,
-            texts=["a", "b"],
-            images=None,
-            drop_idx=64,
+        validate_qwen_prompt_lengths(
+            [26, 1101],
             max_sequence_length=1024,
             field_name="negative_prompt",
         )
