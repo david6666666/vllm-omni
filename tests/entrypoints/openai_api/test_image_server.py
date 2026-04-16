@@ -618,6 +618,7 @@ def test_parameter_validation():
     assert req.size is None  # Engine will use model defaults
     assert req.num_inference_steps is None  # Engine will use model defaults
     assert req.true_cfg_scale is None  # Engine will use model defaults
+    assert req.max_sequence_length is None
 
     # Invalid num_inference_steps (out of range)
     with pytest.raises(ValueError):
@@ -653,6 +654,7 @@ def test_parameters_passed_through(test_client, mock_async_diffusion):
             "num_inference_steps": 100,
             "guidance_scale": 7.5,
             "true_cfg_scale": 3.0,
+            "max_sequence_length": 1024,
             "seed": 42,
         },
     )
@@ -663,6 +665,7 @@ def test_parameters_passed_through(test_client, mock_async_diffusion):
     assert captured.num_inference_steps == 100
     assert captured.guidance_scale == 7.5
     assert captured.true_cfg_scale == 3.0
+    assert captured.max_sequence_length == 1024
     assert captured.seed == 42
 
 
@@ -795,6 +798,7 @@ def test_image_edit_parameter_pass(async_omni_test_client):
             "output_format": "jpeg",
             "num_inference_steps": 20,
             "guidance_scale": 8.0,
+            "max_sequence_length": 1024,
             "seed": 1234,
             "negative_prompt": "negative",
             "n": 2,
@@ -809,6 +813,7 @@ def test_image_edit_parameter_pass(async_omni_test_client):
     assert captured_prompt["negative_prompt"] == "negative"
     assert captured_sampling_params.num_inference_steps == 20
     assert captured_sampling_params.guidance_scale == 8.0
+    assert captured_sampling_params.max_sequence_length == 1024
     assert captured_sampling_params.seed == 1234
     assert captured_sampling_params.num_outputs_per_prompt == 2
     assert captured_sampling_params.width == 16

@@ -122,6 +122,11 @@ class ImageGenerationRequest(BaseModel):
         default=None,
         description="Device for the seeded torch.Generator (e.g. 'cpu', 'cuda'). Defaults to the runner's device.",
     )
+    max_sequence_length: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional prompt token limit for models that support configurable maximum sequence lengths.",
+    )
 
     # vllm-omni extension for per-request LoRA.
     # This mirrors the `extra_body.lora` convention in /v1/chat/completions.

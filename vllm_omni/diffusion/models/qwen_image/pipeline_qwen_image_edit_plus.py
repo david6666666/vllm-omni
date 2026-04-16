@@ -35,6 +35,10 @@ from vllm_omni.diffusion.models.qwen_image.pipeline_qwen_image_edit import (
     retrieve_latents,
     retrieve_timesteps,
 )
+from vllm_omni.diffusion.models.qwen_image.prompt_length_validation import (
+    build_qwen_image_edit_plus_prompt_prefix,
+    tokenize_and_validate_qwen_vl_prompt,
+)
 from vllm_omni.diffusion.models.qwen_image.qwen_image_transformer import (
     QwenImageTransformer2DModel,
 )
@@ -299,20 +303,18 @@ class QwenImageEditPlusPipeline(
         prompt: str | list[str],
         image: list[torch.Tensor] | torch.Tensor | None = None,
         dtype: torch.dtype | None = None,
+        max_sequence_length: int | None = None,
+        field_name: str = "prompt",
     ):
         """Get prompt embeddings with support for multiple images."""
         dtype = dtype or self.text_encoder.dtype
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
 
-        # Build image prompt template for multiple images
-        img_prompt_template = "Picture {}: <|vision_start|><|image_pad|><|vision_end|>"
         if isinstance(image, list):
-            base_img_prompt = ""
-            for i, img in enumerate(image):
-                base_img_prompt += img_prompt_template.format(i + 1)
+            base_img_prompt = build_qwen_image_edit_plus_prompt_prefix(len(image))
         elif image is not None:
-            base_img_prompt = img_prompt_template.format(1)
+            base_img_prompt = build_qwen_image_edit_plus_prompt_prefix(1)
         else:
             base_img_prompt = ""
 
@@ -320,12 +322,13 @@ class QwenImageEditPlusPipeline(
         drop_idx = self.prompt_template_encode_start_idx
         txt = [template.format(base_img_prompt + e) for e in prompt]
 
-        # Use processor to handle both text and image inputs
-        model_inputs = self.processor(
-            text=txt,
+        model_inputs = tokenize_and_validate_qwen_vl_prompt(
+            self.processor,
+            texts=txt,
             images=image,
-            padding=True,
-            return_tensors="pt",
+            drop_idx=drop_idx,
+            max_sequence_length=max_sequence_length,
+            field_name=field_name,
         ).to(self.device)
 
         outputs = self.text_encoder(
@@ -360,6 +363,7 @@ class QwenImageEditPlusPipeline(
         prompt_embeds: torch.Tensor | None = None,
         prompt_embeds_mask: torch.Tensor | None = None,
         max_sequence_length: int = 1024,
+        field_name: str = "prompt",
     ):
         r"""
 
@@ -379,7 +383,15 @@ class QwenImageEditPlusPipeline(
         batch_size = len(prompt) if prompt_embeds is None else prompt_embeds.shape[0]
 
         if prompt_embeds is None:
-            prompt_embeds, prompt_embeds_mask = self._get_qwen_prompt_embeds(prompt, image)
+            prompt_embeds, prompt_embeds_mask = self._get_qwen_prompt_embeds(
+                prompt,
+                image,
+                max_sequence_length=max_sequence_length,
+                field_name=field_name,
+            )
+
+        prompt_embeds = prompt_embeds[:, :max_sequence_length]
+        prompt_embeds_mask = prompt_embeds_mask[:, :max_sequence_length]
 
         _, seq_len, _ = prompt_embeds.shape
         prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
@@ -682,6 +694,7 @@ class QwenImageEditPlusPipeline(
             prompt_embeds_mask=prompt_embeds_mask,
             num_images_per_prompt=num_images_per_prompt,
             max_sequence_length=max_sequence_length,
+            field_name="prompt",
         )
 
         if do_true_cfg:
@@ -692,6 +705,7 @@ class QwenImageEditPlusPipeline(
                 prompt_embeds_mask=negative_prompt_embeds_mask,
                 num_images_per_prompt=num_images_per_prompt,
                 max_sequence_length=max_sequence_length,
+                field_name="negative_prompt",
             )
 
         num_channels_latents = self.transformer.in_channels // 4

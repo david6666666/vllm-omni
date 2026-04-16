@@ -1347,6 +1347,7 @@ async def generate_images(request: ImageGenerationRequest, raw_request: Request)
         _update_if_not_none(gen_params, "num_inference_steps", request.num_inference_steps)
         _update_if_not_none(gen_params, "guidance_scale", request.guidance_scale)
         _update_if_not_none(gen_params, "true_cfg_scale", request.true_cfg_scale)
+        _update_if_not_none(gen_params, "max_sequence_length", request.max_sequence_length)
         # If seed is not provided, generate a random one to ensure
         # a proper generator is initialized in the backend.
         # This fixes issues where using the default global generator
@@ -1432,6 +1433,7 @@ async def edit_images(
     guidance_scale: float | None = Form(None),
     strength: float | None = Form(None),
     true_cfg_scale: float | None = Form(None),
+    max_sequence_length: Annotated[int | None, Form(ge=1)] = None,
     seed: int | None = Form(None),
     generator_device: str | None = Form(None),
     # vllm-omni extension for per-request LoRA.
@@ -1546,6 +1548,7 @@ async def edit_images(
         _update_if_not_none(gen_params, "guidance_scale", guidance_scale)
         _update_if_not_none(gen_params, "strength", strength)
         _update_if_not_none(gen_params, "true_cfg_scale", true_cfg_scale)
+        _update_if_not_none(gen_params, "max_sequence_length", max_sequence_length)
         # If seed is not provided, generate a random one to ensure
         # a proper generator is initialized in the backend.
         # This fixes issues where using the default global generator
