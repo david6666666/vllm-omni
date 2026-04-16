@@ -4,6 +4,7 @@ import pytest
 
 from vllm_omni.diffusion.models.qwen_image.prompt_length_validation import (
     build_qwen_image_edit_plus_prompt_prefix,
+    tokenize_and_validate_qwen_text_prompt,
     tokenize_and_validate_qwen_vl_prompt,
 )
 
@@ -18,6 +19,18 @@ class FakeProcessor:
         assert padding is True
         assert return_tensors == "pt"
         assert isinstance(text, list)
+        return SimpleNamespace(attention_mask=FakeAttentionMask(self._lengths))
+
+
+class FakeTokenizer:
+    def __init__(self, lengths: list[int]):
+        self._lengths = lengths
+
+    def __call__(self, texts, padding, truncation, return_tensors):
+        assert isinstance(texts, list)
+        assert padding is True
+        assert truncation is False
+        assert return_tensors == "pt"
         return SimpleNamespace(attention_mask=FakeAttentionMask(self._lengths))
 
 
@@ -45,6 +58,33 @@ def test_build_qwen_image_edit_plus_prompt_prefix():
         "Picture 1: <|vision_start|><|image_pad|><|vision_end|>"
         "Picture 2: <|vision_start|><|image_pad|><|vision_end|>"
     )
+
+
+def test_tokenize_and_validate_qwen_text_prompt_accepts_valid_length():
+    tokenizer = FakeTokenizer(lengths=[66])
+
+    result = tokenize_and_validate_qwen_text_prompt(
+        tokenizer,
+        texts=["hello"],
+        drop_idx=34,
+        max_sequence_length=32,
+        field_name="prompt",
+    )
+
+    assert isinstance(result, SimpleNamespace)
+
+
+def test_tokenize_and_validate_qwen_text_prompt_rejects_overlong_prompt():
+    tokenizer = FakeTokenizer(lengths=[1059])
+
+    with pytest.raises(ValueError, match="`prompt` is too long"):
+        tokenize_and_validate_qwen_text_prompt(
+            tokenizer,
+            texts=["hello"],
+            drop_idx=34,
+            max_sequence_length=1024,
+            field_name="prompt",
+        )
 
 
 def test_tokenize_and_validate_qwen_vl_prompt_accepts_valid_length():

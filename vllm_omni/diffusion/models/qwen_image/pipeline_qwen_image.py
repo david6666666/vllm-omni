@@ -29,6 +29,9 @@ from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineL
 from vllm_omni.diffusion.models.qwen_image.cfg_parallel import (
     QwenImageCFGParallelMixin,
 )
+from vllm_omni.diffusion.models.qwen_image.prompt_length_validation import (
+    tokenize_and_validate_qwen_text_prompt,
+)
 from vllm_omni.diffusion.models.qwen_image.qwen_image_transformer import (
     QwenImageTransformer2DModel,
 )
@@ -378,6 +381,8 @@ class QwenImagePipeline(nn.Module, QwenImageCFGParallelMixin, DiffusionPipelineP
         self,
         prompt: str | list[str] = None,
         dtype: torch.dtype | None = None,
+        max_sequence_length: int | None = None,
+        field_name: str = "prompt",
     ):
         dtype = dtype or self.text_encoder.dtype
 
@@ -386,12 +391,12 @@ class QwenImagePipeline(nn.Module, QwenImageCFGParallelMixin, DiffusionPipelineP
         template = self.prompt_template_encode
         drop_idx = self.prompt_template_encode_start_idx
         txt = [template.format(e) for e in prompt]
-        txt_tokens = self.tokenizer(
-            txt,
-            max_length=self.tokenizer_max_length + drop_idx,
-            padding=True,
-            truncation=True,
-            return_tensors="pt",
+        txt_tokens = tokenize_and_validate_qwen_text_prompt(
+            self.tokenizer,
+            texts=txt,
+            drop_idx=drop_idx,
+            max_sequence_length=max_sequence_length,
+            field_name=field_name,
         ).to(self.device)
         # print(f"attention mask: {txt_tokens.attention_mask}")
         encoder_hidden_states = self.text_encoder(
@@ -422,6 +427,7 @@ class QwenImagePipeline(nn.Module, QwenImageCFGParallelMixin, DiffusionPipelineP
         prompt_embeds: torch.Tensor | None = None,
         prompt_embeds_mask: torch.Tensor | None = None,
         max_sequence_length: int = 1024,
+        field_name: str = "prompt",
     ):
         r"""
 
@@ -439,7 +445,11 @@ class QwenImagePipeline(nn.Module, QwenImageCFGParallelMixin, DiffusionPipelineP
         batch_size = len(prompt) if prompt_embeds is None else prompt_embeds.shape[0]
 
         if prompt_embeds is None:
-            prompt_embeds, prompt_embeds_mask = self._get_qwen_prompt_embeds(prompt)
+            prompt_embeds, prompt_embeds_mask = self._get_qwen_prompt_embeds(
+                prompt,
+                max_sequence_length=max_sequence_length,
+                field_name=field_name,
+            )
 
         prompt_embeds = prompt_embeds[:, :max_sequence_length]
         prompt_embeds_mask = prompt_embeds_mask[:, :max_sequence_length]
@@ -624,6 +634,7 @@ class QwenImagePipeline(nn.Module, QwenImageCFGParallelMixin, DiffusionPipelineP
             prompt_embeds_mask=prompt_embeds_mask,
             num_images_per_prompt=num_images_per_prompt,
             max_sequence_length=max_sequence_length,
+            field_name="prompt",
         )
         if do_true_cfg:
             negative_prompt_embeds, negative_prompt_embeds_mask = self.encode_prompt(
@@ -632,6 +643,7 @@ class QwenImagePipeline(nn.Module, QwenImageCFGParallelMixin, DiffusionPipelineP
                 prompt_embeds_mask=negative_prompt_embeds_mask,
                 num_images_per_prompt=num_images_per_prompt,
                 max_sequence_length=max_sequence_length,
+                field_name="negative_prompt",
             )
         else:
             negative_prompt_embeds = None
