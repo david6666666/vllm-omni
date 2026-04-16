@@ -31,6 +31,10 @@ from vllm_omni.diffusion.models.qwen_image.autoencoder_kl_qwenimage import (
 from vllm_omni.diffusion.models.qwen_image.cfg_parallel import (
     QwenImageCFGParallelMixin,
 )
+from vllm_omni.diffusion.models.qwen_image.prompt_length_validation import (
+    get_qwen_text_prompt_lengths,
+    validate_qwen_text_prompt_lengths,
+)
 from vllm_omni.diffusion.models.qwen_image.qwen_image_transformer import (
     QwenImageTransformer2DModel,
 )
@@ -340,6 +344,24 @@ the image\n<|vision_start|><|image_pad|><|vision_end|><|im_end|>\n<|im_start|>as
                 "generate `negative_prompt_embeds`."
             )
 
+        for field_name, field_value in (("prompt", prompt), ("negative_prompt", negative_prompt)):
+            if field_value is None:
+                continue
+
+            text_inputs = [field_value] if isinstance(field_value, str) else field_value
+            tokenized_inputs = self.tokenizer(
+                text_inputs,
+                padding=True,
+                truncation=False,
+                return_tensors="pt",
+            )
+            prompt_lengths = get_qwen_text_prompt_lengths(tokenized_inputs.attention_mask)
+            validate_qwen_text_prompt_lengths(
+                prompt_lengths,
+                max_sequence_length=max_sequence_length,
+                field_name=field_name,
+            )
+
         if max_sequence_length is not None and max_sequence_length > 1024:
             raise ValueError(f"`max_sequence_length` cannot be greater than 1024 but is {max_sequence_length}")
 
@@ -398,7 +420,7 @@ the image\n<|vision_start|><|image_pad|><|vision_end|><|im_end|>\n<|im_start|>as
         num_images_per_prompt: int = 1,
         prompt_embeds: torch.Tensor | None = None,
         prompt_embeds_mask: torch.Tensor | None = None,
-        max_sequence_length: int = 1024,
+        max_sequence_length: int = 512,
     ):
         r"""
 
@@ -696,6 +718,19 @@ the image\n<|vision_start|><|image_pad|><|vision_end|><|im_end|>\n<|im_start|>as
         # 3. encode prompot & negative prompt
         if prompt is None or prompt == "" or prompt == " ":
             prompt = self.get_image_caption(prompt_image, use_en_prompt=use_en_prompt, device=self.device)
+            prompt_lengths = get_qwen_text_prompt_lengths(
+                self.tokenizer(
+                    [prompt],
+                    padding=True,
+                    truncation=False,
+                    return_tensors="pt",
+                ).attention_mask
+            )
+            validate_qwen_text_prompt_lengths(
+                prompt_lengths,
+                max_sequence_length=max_sequence_length,
+                field_name="prompt",
+            )
         if prompt is not None and isinstance(prompt, str):
             batch_size = 1
         elif prompt is not None and isinstance(prompt, list):

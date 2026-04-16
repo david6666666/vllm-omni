@@ -327,6 +327,24 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
                 "that was used to generate `negative_prompt_embeds`."
             )
 
+        for field_name, field_value in (("prompt", prompt), ("negative_prompt", negative_prompt)):
+            if field_value is None:
+                continue
+
+            text_inputs = [field_value] if isinstance(field_value, str) else field_value
+            tokenized_inputs = self.tokenizer(
+                text_inputs,
+                padding=True,
+                truncation=False,
+                return_tensors="pt",
+            )
+            prompt_lengths = get_qwen_text_prompt_lengths(tokenized_inputs.attention_mask)
+            validate_qwen_text_prompt_lengths(
+                prompt_lengths,
+                max_sequence_length=max_sequence_length,
+                field_name=field_name,
+            )
+
         if max_sequence_length is not None and max_sequence_length > 1024:
             raise ValueError(f"`max_sequence_length` cannot be greater than 1024 but is {max_sequence_length}")
 
@@ -388,25 +406,11 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
         prompt: str | list[str] = None,
         image: PIL.Image.Image | torch.Tensor | None = None,
         dtype: torch.dtype | None = None,
-        max_sequence_length: int | None = None,
-        field_name: str = "prompt",
     ):
         """Get prompt embeddings with image support for editing."""
         dtype = dtype or self.text_encoder.dtype
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
-        prompt_tokens = self.tokenizer(
-            prompt,
-            padding=True,
-            truncation=False,
-            return_tensors="pt",
-        )
-        prompt_lengths = get_qwen_text_prompt_lengths(prompt_tokens.attention_mask)
-        validate_qwen_text_prompt_lengths(
-            prompt_lengths,
-            max_sequence_length=max_sequence_length,
-            field_name=field_name,
-        )
 
         template = self.prompt_template_encode
         drop_idx = self.prompt_template_encode_start_idx
@@ -451,8 +455,7 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
         num_images_per_prompt: int = 1,
         prompt_embeds: torch.Tensor | None = None,
         prompt_embeds_mask: torch.Tensor | None = None,
-        max_sequence_length: int = 1024,
-        field_name: str = "prompt",
+        max_sequence_length: int = 512,
     ):
         r"""
 
@@ -472,12 +475,7 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
         batch_size = len(prompt) if prompt_embeds is None else prompt_embeds.shape[0]
 
         if prompt_embeds is None:
-            prompt_embeds, prompt_embeds_mask = self._get_qwen_prompt_embeds(
-                prompt,
-                image,
-                max_sequence_length=max_sequence_length,
-                field_name=field_name,
-            )
+            prompt_embeds, prompt_embeds_mask = self._get_qwen_prompt_embeds(prompt, image)
 
         prompt_embeds = prompt_embeds[:, :max_sequence_length]
         prompt_embeds_mask = prompt_embeds_mask[:, :max_sequence_length]
@@ -756,7 +754,6 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
             prompt_embeds_mask=prompt_embeds_mask,
             num_images_per_prompt=num_images_per_prompt,
             max_sequence_length=max_sequence_length,
-            field_name="prompt",
         )
 
         if do_true_cfg:
@@ -767,7 +764,6 @@ class QwenImageEditPipeline(nn.Module, SupportImageInput, QwenImageCFGParallelMi
                 prompt_embeds_mask=negative_prompt_embeds_mask,
                 num_images_per_prompt=num_images_per_prompt,
                 max_sequence_length=max_sequence_length,
-                field_name="negative_prompt",
             )
 
         num_channels_latents = self.transformer.in_channels // 4
