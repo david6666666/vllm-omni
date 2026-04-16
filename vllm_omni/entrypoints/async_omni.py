@@ -423,12 +423,15 @@ class AsyncOmni(EngineClient, OmniBase):
 
             # Check for errors
             if "error" in result:
+                error_message = result["error"]
                 logger.error(
                     "[AsyncOmni] Orchestrator error for req=%s stage-%s: %s",
                     request_id,
                     stage_id,
-                    result["error"],
+                    error_message,
                 )
+                if isinstance(error_message, str) and "exceeds max_sequence_length=" in error_message:
+                    raise ValueError(error_message)
                 raise RuntimeError(result)
 
             # Process the result (constructs OmniRequestOutput)

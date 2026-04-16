@@ -338,6 +338,8 @@ class QwenImageEditPlusPipeline(
         model_inputs = self.processor(
             text=txt,
             images=image,
+            padding=True,
+            return_tensors="pt",
         ).to(self.device)
 
         outputs = self.text_encoder(
