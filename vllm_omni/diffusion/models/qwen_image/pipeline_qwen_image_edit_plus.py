@@ -23,6 +23,7 @@ from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2Tokenizer, Qwe
 from vllm.model_executor.models.utils import AutoWeightsLoader
 
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
+from vllm_omni.diffusion.model_metadata import QWEN_IMAGE_EDIT_PLUS_MAX_INPUT_IMAGES
 from vllm_omni.diffusion.distributed.utils import get_local_device
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
 from vllm_omni.diffusion.models.interface import SupportImageInput
@@ -59,7 +60,7 @@ VAE_IMAGE_SIZE = 1024 * 1024
 # Keep this in sync with the practical conditioning-token budget for
 # Qwen-Image-Edit-2511. Empirically, 4 images stays within the supported range
 # while 5 images overflows the prompt/conditioning path and fails downstream.
-MAX_QWEN_IMAGE_EDIT_PLUS_INPUT_IMAGES = 4
+MAX_QWEN_IMAGE_EDIT_PLUS_INPUT_IMAGES = QWEN_IMAGE_EDIT_PLUS_MAX_INPUT_IMAGES
 
 
 def get_qwen_image_edit_plus_pre_process_func(
