@@ -77,6 +77,7 @@ def load_transformer_config(model_path: str, subfolder: str = "transformer", loc
             pass
     return {}
 
+
 def create_transformer_from_config(config: dict) -> WanTransformer3DModel:
     """Create WanTransformer3DModel from config dict."""
     kwargs = {}
