@@ -18,6 +18,8 @@ pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
 def test_qwen_image_edit_plus_rejects_too_many_input_images(tmp_path: Path):
     vae_dir = tmp_path / "vae"
     vae_dir.mkdir()
+    # Keep the mock config intentionally minimal: this test only needs the
+    # fields touched during pre-process initialization.
     (vae_dir / "config.json").write_text(json.dumps({"z_dim": 16}))
 
     pre_process = get_qwen_image_edit_plus_pre_process_func(SimpleNamespace(model=str(tmp_path)))

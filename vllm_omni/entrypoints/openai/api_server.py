@@ -1435,7 +1435,7 @@ async def edit_images(
         # Reject oversized multi-image edit requests before fetching or decoding
         # any inputs. This keeps over-limit URL requests from burning network,
         # CPU, and memory on work that will be rejected anyway.
-        max_input_images = _get_max_edit_input_images(raw_request, engine_client, model_name)
+        max_input_images = _get_max_edit_input_images(raw_request, engine_client)
         if max_input_images is not None and len(input_images_list) > max_input_images:
             detail = (
                 "Received multiple input images. Only a single image is supported by this model."
@@ -1613,16 +1613,6 @@ def _get_engine_and_model(raw_request: Request):
     return engine_client, model_name, normalized_stage_configs
 
 
-def _supports_multimodal_image_inputs(raw_request: Request, engine_client: Any) -> bool:
-    od_config = _get_diffusion_od_config(raw_request, engine_client)
-
-    if od_config is None:
-        # Preserve the existing compatibility behavior when the diffusion
-        # config is not exposed on the serving surface.
-        return True
-    return bool(getattr(od_config, "supports_multimodal_inputs", False))
-
-
 def _get_diffusion_od_config(raw_request: Request, engine_client: Any) -> Any:
     diffusion_engine = getattr(raw_request.app.state, "diffusion_engine", None) or engine_client
     get_diffusion_od_config = getattr(diffusion_engine, "get_diffusion_od_config", None)
@@ -1631,27 +1621,17 @@ def _get_diffusion_od_config(raw_request: Request, engine_client: Any) -> Any:
     )
 
 
-def _get_max_edit_input_images(raw_request: Request, engine_client: Any, model_name: str) -> int | None:
-    if not _supports_multimodal_image_inputs(raw_request, engine_client):
+def _get_max_edit_input_images(raw_request: Request, engine_client: Any) -> int | None:
+    od_config = _get_diffusion_od_config(raw_request, engine_client)
+    if od_config is None:
+        # Preserve the existing compatibility behavior when the diffusion
+        # config is not exposed on the serving surface.
+        return None
+
+    if not bool(getattr(od_config, "supports_multimodal_inputs", False)):
         return 1
 
-    # Keep the API-side limit model-specific: this helper should not hardcode a
-    # generic "multi-image means 4" rule because future edit pipelines may have
-    # different conditioning budgets. Query the serving model / OD config first,
-    # then defer to the owning pipeline constant.
-    od_config = _get_diffusion_od_config(raw_request, engine_client)
-    model_identifiers = [model_name]
-    if od_config is not None:
-        model_identifiers.append(getattr(od_config, "model", None))
-
-    if any(isinstance(identifier, str) and "Qwen-Image-Edit-2511" in identifier for identifier in model_identifiers):
-        from vllm_omni.diffusion.models.qwen_image.pipeline_qwen_image_edit_plus import (
-            MAX_QWEN_IMAGE_EDIT_PLUS_INPUT_IMAGES,
-        )
-
-        return MAX_QWEN_IMAGE_EDIT_PLUS_INPUT_IMAGES
-
-    return None
+    return getattr(od_config, "max_multimodal_image_inputs", None)
 
 
 def _get_lora_from_json_str(lora_body):
