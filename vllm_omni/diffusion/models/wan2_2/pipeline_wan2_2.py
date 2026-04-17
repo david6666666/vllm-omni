@@ -251,6 +251,7 @@ class Wan22Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPipe
                 pass
 
         self.boundary_ratio = od_config.boundary_ratio
+        self.tokenizer_max_length = WAN22_MAX_SEQUENCE_LENGTH
 
         # Determine which transformers to load based on boundary_ratio
         # boundary_ratio=1.0: only load transformer_2 (low-noise stage only)
@@ -293,21 +294,17 @@ class Wan22Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPipe
         ).to(self.device)
 
         # Initialize transformers with correct config (weights loaded via load_weights)
-        transformer_config: dict = {}
         if load_transformer:
             transformer_config = load_transformer_config(model, "transformer", local_files_only)
             self.transformer = create_transformer_from_config(transformer_config)
         else:
             self.transformer = None
 
-        transformer_2_config: dict = {}
         if load_transformer_2:
             transformer_2_config = load_transformer_config(model, "transformer_2", local_files_only)
             self.transformer_2 = create_transformer_from_config(transformer_2_config)
         else:
             self.transformer_2 = None
-
-        self.tokenizer_max_length = resolve_wan22_tokenizer_max_length(transformer_config, transformer_2_config)
 
         # Store the active transformer config
         if load_transformer:
@@ -751,12 +748,10 @@ class Wan22Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, DiffusionPipe
         negative_prompt: str | list[str] | None = None,
         do_classifier_free_guidance: bool = True,
         num_videos_per_prompt: int = 1,
-        max_sequence_length: int | None = None,
+        max_sequence_length: int = WAN22_MAX_SEQUENCE_LENGTH,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
     ):
-        if max_sequence_length is None:
-            max_sequence_length = self.tokenizer_max_length
         device = device or self.device
         dtype = dtype or self.text_encoder.dtype
 

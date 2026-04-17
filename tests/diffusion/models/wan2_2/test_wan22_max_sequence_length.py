@@ -75,7 +75,6 @@ def test_encode_prompt_rejects_prompt_longer_than_explicit_max_sequence_length(p
 
     with pytest.raises(ValueError, match=r"got 17 tokens, but `max_sequence_length` is 16"):
         pipeline.encode_prompt(prompt="prompt", max_sequence_length=16)
-
 def _sampling_params(**overrides):
     defaults = dict(
         height=None,

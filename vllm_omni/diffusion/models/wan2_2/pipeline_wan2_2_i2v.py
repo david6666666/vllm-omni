@@ -215,6 +215,7 @@ class Wan22I2VPipeline(
 
         # Text encoder
         self.tokenizer = AutoTokenizer.from_pretrained(model, subfolder="tokenizer", local_files_only=local_files_only)
+        self.tokenizer_max_length = WAN22_MAX_SEQUENCE_LENGTH
         self.text_encoder = UMT5EncoderModel.from_pretrained(
             model, subfolder="text_encoder", torch_dtype=dtype, local_files_only=local_files_only
         ).to(self.device)
@@ -246,9 +247,7 @@ class Wan22I2VPipeline(
             transformer_2_config = load_transformer_config(model, "transformer_2", local_files_only)
             self.transformer_2 = create_transformer_from_config(transformer_2_config)
         else:
-            transformer_2_config = None
             self.transformer_2 = None
-        self.tokenizer_max_length = resolve_wan22_tokenizer_max_length(transformer_config, transformer_2_config)
 
         # Initialize UniPC scheduler
         flow_shift = od_config.flow_shift if od_config.flow_shift is not None else 5.0  # default for 720p
@@ -667,8 +666,6 @@ class Wan22I2VPipeline(
         dtype: torch.dtype | None = None,
     ):
         """Encode text prompts using T5 text encoder."""
-        if max_sequence_length is None:
-            max_sequence_length = self.tokenizer_max_length
         device = device or self.device
         dtype = dtype or self.text_encoder.dtype
 
