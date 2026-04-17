@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class DiffusionModelMetadata:
+    # Keep serving-facing capability metadata in a lightweight shared module so
+    # config/model plumbing can read it without importing concrete pipelines.
     supports_multimodal_inputs: bool = False
     max_multimodal_image_inputs: int | None = None
 
@@ -22,6 +24,8 @@ _DIFFUSION_MODEL_METADATA: dict[str, DiffusionModelMetadata] = {
 
 
 def get_diffusion_model_metadata(model_class_name: str | None) -> DiffusionModelMetadata:
+    # Unknown models fall back to "no special multimodal capabilities" so new
+    # pipelines do not accidentally inherit limits meant for other models.
     if model_class_name is None:
         return DiffusionModelMetadata()
     return _DIFFUSION_MODEL_METADATA.get(model_class_name, DiffusionModelMetadata())
