@@ -18,6 +18,8 @@ from vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2_ti2v import (
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
+pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
+
 
 class _RejectingTextEncoder:
     dtype = torch.float32
