@@ -379,6 +379,17 @@ class FrameInterpolator:
             logger.info("RIFE model loaded on device: %s", device)
             return model
 
+    @staticmethod
+    def _resolve_execution_device(
+        video_device: torch.device,
+        preferred_device: torch.device | None = None,
+    ) -> torch.device:
+        if preferred_device is not None:
+            return preferred_device
+        if video_device.type != "cpu":
+            return video_device
+        return _select_torch_device()
+
     def _make_inference(
         self,
         model: Model,
@@ -401,6 +412,7 @@ class FrameInterpolator:
         video: torch.Tensor,
         exp: int = 1,
         scale: float = 1.0,
+        preferred_device: torch.device | None = None,
     ) -> tuple[torch.Tensor, int]:
         if exp < 1:
             raise ValueError(f"frame interpolation exp must be >= 1, got {exp}")
@@ -412,9 +424,11 @@ class FrameInterpolator:
             return restore_layout(video), 1
 
         video, restore_range = _normalize_video_tensor_range(video)
-        # Prefer the decoded video's current device so CPU-offloaded requests do
-        # not move the tensor back to GPU just for interpolation.
-        model = self._ensure_model_loaded(preferred_device=video.device)
+        # Prefer the decoded video's accelerator device when available, but
+        # fall back to the active Omni platform when transport has already
+        # staged the tensor on CPU. Explicit CPU preference still wins.
+        execution_device = self._resolve_execution_device(video.device, preferred_device)
+        model = self._ensure_model_loaded(preferred_device=execution_device)
         video = video.to(model.device())
         intermediates_per_pair = 2**exp // 2
 
@@ -434,7 +448,13 @@ def interpolate_video_tensor(
     exp: int = 1,
     scale: float = 1.0,
     model_path: str | None = None,
+    preferred_device: torch.device | None = None,
 ) -> tuple[torch.Tensor, int]:
     """Interpolate a video tensor and return the FPS multiplier."""
     interpolator = FrameInterpolator(model_path=model_path)
-    return interpolator.interpolate_tensor(video, exp=exp, scale=scale)
+    return interpolator.interpolate_tensor(
+        video,
+        exp=exp,
+        scale=scale,
+        preferred_device=preferred_device,
+    )

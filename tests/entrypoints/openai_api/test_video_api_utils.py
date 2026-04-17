@@ -72,7 +72,29 @@ def test_frame_interpolator_runs_actual_torch_tensor_path(monkeypatch):
     assert torch.isfinite(output_video).all()
 
 
-def test_frame_interpolator_prefers_input_tensor_device(monkeypatch):
+def test_frame_interpolator_falls_back_to_execution_device_for_cpu_tensor(monkeypatch):
+    chosen_devices = []
+    model = rife_interpolator.Model().eval()
+    execution_device = torch.device("cuda")
+
+    def _fake_ensure_model_loaded(*, preferred_device=None):
+        chosen_devices.append(preferred_device)
+        return model
+
+    interpolator = rife_interpolator.FrameInterpolator()
+    monkeypatch.setattr(interpolator, "_ensure_model_loaded", _fake_ensure_model_loaded)
+    monkeypatch.setattr(rife_interpolator, "_select_torch_device", lambda: execution_device)
+    monkeypatch.setattr(model.flownet, "to", lambda device: model.flownet)
+
+    video = torch.zeros(1, 3, 2, 32, 32)
+    output_video, multiplier = interpolator.interpolate_tensor(video, exp=1, scale=1.0)
+
+    assert chosen_devices == [execution_device]
+    assert multiplier == 2
+    assert output_video.shape == (1, 3, 3, 32, 32)
+
+
+def test_frame_interpolator_honors_explicit_cpu_preference(monkeypatch):
     chosen_devices = []
     model = rife_interpolator.Model().eval()
 
@@ -82,11 +104,17 @@ def test_frame_interpolator_prefers_input_tensor_device(monkeypatch):
 
     interpolator = rife_interpolator.FrameInterpolator()
     monkeypatch.setattr(interpolator, "_ensure_model_loaded", _fake_ensure_model_loaded)
+    monkeypatch.setattr(rife_interpolator, "_select_torch_device", lambda: torch.device("cuda"))
     monkeypatch.setattr(model.flownet, "to", lambda device: model.flownet)
 
     video = torch.zeros(1, 3, 2, 32, 32)
-    output_video, multiplier = interpolator.interpolate_tensor(video, exp=1, scale=1.0)
+    output_video, multiplier = interpolator.interpolate_tensor(
+        video,
+        exp=1,
+        scale=1.0,
+        preferred_device=torch.device("cpu"),
+    )
 
-    assert chosen_devices == [video.device]
+    assert chosen_devices == [torch.device("cpu")]
     assert multiplier == 2
     assert output_video.shape == (1, 3, 3, 32, 32)
