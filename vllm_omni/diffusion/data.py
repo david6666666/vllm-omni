@@ -667,6 +667,8 @@ class OmniDiffusionConfig:
             )
 
     def update_multimodal_support(self) -> None:
+        # Resolve serving-visible multimodal behavior from shared metadata
+        # instead of importing concrete pipeline modules into the config layer.
         metadata = get_diffusion_model_metadata(self.model_class_name)
         self.supports_multimodal_inputs = metadata.supports_multimodal_inputs
         self.max_multimodal_image_inputs = metadata.max_multimodal_image_inputs

@@ -60,6 +60,8 @@ VAE_IMAGE_SIZE = 1024 * 1024
 # Keep this in sync with the practical conditioning-token budget for
 # Qwen-Image-Edit-2511. Empirically, 4 images stays within the supported range
 # while 5 images overflows the prompt/conditioning path and fails downstream.
+# Re-export the shared metadata value locally so this pipeline keeps a nearby,
+# descriptive constant for validation and tests without becoming the source of truth.
 MAX_QWEN_IMAGE_EDIT_PLUS_INPUT_IMAGES = QWEN_IMAGE_EDIT_PLUS_MAX_INPUT_IMAGES
 
 
