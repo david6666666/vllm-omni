@@ -356,12 +356,6 @@ class DiffusionEngine:
 
                     finished_req_ids = self.scheduler.update_from_output(sched_output, output)
 
-                    if output.error:
-                        raise OmniRequestError(
-                            output.error,
-                            status_code=500,
-                            error_type="DiffusionExecutionError",
-                        )
                     if target_sched_req_id in finished_req_ids:
                         # self.scheduler.pop_request_state(target_sched_req_id)
                         return output

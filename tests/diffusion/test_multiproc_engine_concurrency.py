@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 import pytest
 import torch
 
-from vllm_omni.diffusion.data import DiffusionOutput
+from vllm_omni.diffusion.data import DiffusionOutput, OmniRequestError
 from vllm_omni.diffusion.diffusion_engine import DiffusionEngine
 from vllm_omni.diffusion.executor.multiproc_executor import MultiprocDiffusionExecutor
 from vllm_omni.diffusion.sched import RequestScheduler
@@ -304,16 +304,13 @@ class TestSerialOperations:
         assert rpc_out.error == "result_for_rpc"
 
     def test_serial_add_req_error_propagation(self):
-        """``add_req`` should raise when the worker reports an error."""
+        """``add_req`` should surface worker failures as ``OmniRequestError``."""
         engine, _, _, res_q = _make_engine()
         # Put an error response directly
         res_q.put({"status": "error", "error": "boom"})
 
-        out = engine.add_req_and_wait_for_response(_mock_request("fail"))
-
-        assert isinstance(out, DiffusionOutput)
-        assert out.error is not None
-        assert "boom" in out.error
+        with pytest.raises(OmniRequestError, match="boom"):
+            engine.add_req_and_wait_for_response(_mock_request("fail"))
 
     def test_serial_collective_rpc_error_propagation(self):
         """``collective_rpc`` should raise when the worker reports an error."""

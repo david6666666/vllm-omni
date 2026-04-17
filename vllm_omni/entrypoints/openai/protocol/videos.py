@@ -273,6 +273,14 @@ class VideoResponse(BaseModel):
         description="Filename of the saved output video files for this job.",
     )
     inference_time_s: float | None = Field(default=None, description="End-to-end inference time in seconds.")
+    stage_durations: dict[str, float] = Field(
+        default_factory=dict,
+        description="Per-stage profiler timings captured during generation, when available.",
+    )
+    peak_memory_mb: float | None = Field(
+        default=None,
+        description="Peak device memory used during generation in MiB, when reported by the pipeline.",
+    )
 
     @property
     def file_extension(self) -> str:
