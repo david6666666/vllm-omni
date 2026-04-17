@@ -14,6 +14,7 @@ from vllm_omni.diffusion.data import (
     DiffusionParallelConfig,
     OmniDiffusionConfig,
 )
+from vllm_omni.diffusion.model_metadata import QWEN_IMAGE_EDIT_PLUS_MAX_INPUT_IMAGES
 
 
 def _roundtrip_diffusion_config(**kwargs) -> OmniDiffusionConfig:
@@ -114,4 +115,4 @@ def test_qwen_image_edit_plus_sets_generic_multimodal_limit():
     od_config.update_multimodal_support()
 
     assert od_config.supports_multimodal_inputs is True
-    assert od_config.max_multimodal_image_inputs == 4
+    assert od_config.max_multimodal_image_inputs == QWEN_IMAGE_EDIT_PLUS_MAX_INPUT_IMAGES
