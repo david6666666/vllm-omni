@@ -18,6 +18,8 @@ from vllm_omni.diffusion.models.qwen_image.pipeline_qwen_image_layered import (
     QwenImageLayeredPipeline,
 )
 
+pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
+
 
 class _RejectingTextEncoder:
     dtype = torch.float32

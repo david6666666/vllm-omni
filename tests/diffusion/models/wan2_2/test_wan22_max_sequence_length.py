@@ -19,6 +19,8 @@ from vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2_vace import (
     Wan22VACEPipeline,
 )
 
+pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
+
 
 class _RejectingTextEncoder:
     dtype = torch.float32
