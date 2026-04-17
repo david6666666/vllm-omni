@@ -786,7 +786,7 @@ def test_image_edit_rejects_too_many_images_for_qwen_image_edit_2511(async_omni_
     engine = async_omni_test_client.app.state.engine_client
     engine.get_diffusion_od_config = lambda: SimpleNamespace(
         supports_multimodal_inputs=True,
-        model="Qwen/Qwen-Image-Edit-2511",
+        max_multimodal_image_inputs=4,
     )
 
     response = async_omni_test_client.post(
@@ -814,7 +814,7 @@ def test_image_edit_rejects_too_many_images_for_qwen_image_edit_2511_before_load
     engine = async_omni_test_client.app.state.engine_client
     engine.get_diffusion_od_config = lambda: SimpleNamespace(
         supports_multimodal_inputs=True,
-        model="Qwen/Qwen-Image-Edit-2511",
+        max_multimodal_image_inputs=4,
     )
 
     def _fail_load(*args, **kwargs):

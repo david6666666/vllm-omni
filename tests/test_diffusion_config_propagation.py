@@ -109,3 +109,12 @@ class TestCreateDefaultDiffusion:
         ea = stages[0]["engine_args"]
         assert ea["enforce_eager"] is True
         assert ea["lora_path"] == "/tmp/lora"
+
+
+def test_qwen_image_edit_plus_sets_generic_multimodal_limit():
+    od_config = OmniDiffusionConfig(model="Qwen/Qwen-Image-Edit-2511", model_class_name="QwenImageEditPlusPipeline")
+
+    od_config.update_multimodal_support()
+
+    assert od_config.supports_multimodal_inputs is True
+    assert od_config.max_multimodal_image_inputs == 4
