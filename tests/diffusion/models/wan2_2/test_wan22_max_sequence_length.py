@@ -18,8 +18,6 @@ from vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2_ti2v import (
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
-pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
-
 
 class _RejectingTextEncoder:
     dtype = torch.float32
@@ -64,7 +62,10 @@ def _make_pipeline(pipeline_class: type, *, total_sequence_length: int):
 def test_encode_prompt_rejects_prompt_longer_than_default_max_sequence_length(pipeline_class: type):
     pipeline = _make_pipeline(pipeline_class, total_sequence_length=WAN22_MAX_SEQUENCE_LENGTH + 1)
 
-    with pytest.raises(ValueError, match=r"got 513 tokens, but `max_sequence_length` is 512"):
+    with pytest.raises(
+        ValueError,
+        match=rf"got {WAN22_MAX_SEQUENCE_LENGTH + 1} tokens, but `max_sequence_length` is {WAN22_MAX_SEQUENCE_LENGTH}",
+    ):
         pipeline.encode_prompt(prompt="prompt")
 
 
@@ -74,7 +75,6 @@ def test_encode_prompt_rejects_prompt_longer_than_explicit_max_sequence_length(p
 
     with pytest.raises(ValueError, match=r"got 17 tokens, but `max_sequence_length` is 16"):
         pipeline.encode_prompt(prompt="prompt", max_sequence_length=16)
-
 
 def _sampling_params(**overrides):
     defaults = dict(
