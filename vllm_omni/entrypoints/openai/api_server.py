@@ -1628,20 +1628,10 @@ def _get_max_edit_input_images(raw_request: Request, engine_client: Any) -> int 
         # config is not exposed on the serving surface.
         return None
 
-    supports_multimodal_inputs = getattr(od_config, "supports_multimodal_inputs", None)
-    if not isinstance(supports_multimodal_inputs, bool):
-        # Serving-side mocks and older engine surfaces may not expose
-        # structured diffusion capability metadata yet. Keep the legacy
-        # "no hard limit" behavior instead of comparing against mock objects.
-        return None
-
-    if not supports_multimodal_inputs:
+    if not bool(getattr(od_config, "supports_multimodal_inputs", False)):
         return 1
 
-    max_input_images = getattr(od_config, "max_multimodal_image_inputs", None)
-    if isinstance(max_input_images, bool):
-        return None
-    return max_input_images if isinstance(max_input_images, int) else None
+    return getattr(od_config, "max_multimodal_image_inputs", None)
 
 
 def _get_lora_from_json_str(lora_body):
