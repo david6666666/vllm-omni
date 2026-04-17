@@ -87,7 +87,9 @@ def test_encode_video_bytes_without_audio_uses_diffusers_export(monkeypatch):
     _install_fake_export_to_video(monkeypatch, export_calls)
     monkeypatch.setattr(
         "vllm_omni.diffusion.utils.media_utils.mux_video_audio_bytes",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no-audio path should not use mux_video_audio_bytes")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("no-audio path should not use mux_video_audio_bytes")
+        ),
     )
 
     video = np.linspace(0.0, 1.0, num=4 * 2 * 2 * 3, dtype=np.float32).reshape(4, 2, 2, 3)
