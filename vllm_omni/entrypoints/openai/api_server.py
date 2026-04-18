@@ -81,6 +81,7 @@ from vllm.tool_parsers import ToolParserManager
 from vllm.utils import random_uuid
 from vllm.utils.system_utils import decorate_logs
 
+from vllm_omni.diffusion.data import OmniRequestError
 from vllm_omni.entrypoints.async_omni import AsyncOmni
 from vllm_omni.entrypoints.openai.errors import InvalidInputReferenceError
 from vllm_omni.entrypoints.openai.image_api_utils import (
@@ -1701,11 +1702,14 @@ async def _generate_with_async_omni(
                 pass
         sampling_params_list.append(default_stage_params)
 
-    async for output in engine_client.generate(
-        sampling_params_list=sampling_params_list,
-        **kwargs,
-    ):
-        result = output
+    try:
+        async for output in engine_client.generate(
+            sampling_params_list=sampling_params_list,
+            **kwargs,
+        ):
+            result = output
+    except OmniRequestError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
 
     if result is None:
         raise HTTPException(
