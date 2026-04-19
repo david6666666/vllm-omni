@@ -27,18 +27,38 @@ class _RejectingTextEncoder:
 
 
 class _FakeTokenBatch:
-    def __init__(self, total_sequence_length: int):
-        attention_mask = torch.ones((1, total_sequence_length), dtype=torch.long)
+    def __init__(self, total_sequence_length: int, padded_length: int | None = None):
+        padded_length = padded_length or total_sequence_length
+        attention_mask = torch.zeros((1, padded_length), dtype=torch.long)
+        attention_mask[:, :total_sequence_length] = 1
         self.input_ids = attention_mask.clone()
         self.attention_mask = attention_mask
 
 
 class _FakeTokenizer:
-    def __init__(self, total_sequence_length: int):
-        self.total_sequence_length = total_sequence_length
+    def __init__(self, total_sequence_length: int | list[int]):
+        if isinstance(total_sequence_length, list):
+            self.total_sequence_lengths = list(total_sequence_length)
+        else:
+            self.total_sequence_lengths = [total_sequence_length]
 
     def __call__(self, *args, **kwargs):
-        return _FakeTokenBatch(self.total_sequence_length)
+        if len(self.total_sequence_lengths) > 1:
+            total_sequence_length = self.total_sequence_lengths.pop(0)
+        else:
+            total_sequence_length = self.total_sequence_lengths[0]
+        return _FakeTokenBatch(total_sequence_length, kwargs.get("max_length"))
+
+
+class _RecordingTextEncoder:
+    dtype = torch.float32
+
+    def __init__(self):
+        self.input_lengths: list[int] = []
+
+    def __call__(self, input_ids, attention_mask):
+        self.input_lengths.append(input_ids.shape[1])
+        return SimpleNamespace(last_hidden_state=torch.zeros((1, input_ids.shape[1], 4), dtype=torch.float32))
 
 
 PIPELINE_CASES = [
@@ -75,6 +95,28 @@ def test_encode_prompt_rejects_prompt_longer_than_explicit_max_sequence_length(p
 
     with pytest.raises(ValueError, match=r"got 17 tokens, but `max_sequence_length` is 16"):
         pipeline.encode_prompt(prompt="prompt", max_sequence_length=16)
+
+
+@pytest.mark.parametrize("pipeline_class", PIPELINE_CASES)
+def test_encode_prompt_uses_actual_prompt_length_for_text_encoder_padding(pipeline_class: type):
+    pipeline = object.__new__(pipeline_class)
+    nn.Module.__init__(pipeline)
+    pipeline.device = torch.device("cpu")
+    pipeline.text_encoder = _RecordingTextEncoder()
+    # prompt validation, prompt encode, negative validation, negative encode
+    pipeline.tokenizer = _FakeTokenizer([17, 17, 9, 9])
+    pipeline.tokenizer_max_length = WAN22_MAX_SEQUENCE_LENGTH
+
+    prompt_embeds, negative_prompt_embeds = pipeline.encode_prompt(
+        prompt="prompt",
+        negative_prompt="neg",
+        do_classifier_free_guidance=True,
+    )
+
+    assert pipeline.text_encoder.input_lengths == [17, 17]
+    assert prompt_embeds.shape[1] == 17
+    assert negative_prompt_embeds is not None
+    assert negative_prompt_embeds.shape[1] == 17
 
 
 def _sampling_params(**overrides):

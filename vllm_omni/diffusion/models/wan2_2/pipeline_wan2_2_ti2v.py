@@ -533,29 +533,7 @@ class Wan22TI2VPipeline(nn.Module, SupportImageInput, CFGParallelMixin, Progress
             supported_max_sequence_length=self.tokenizer_max_length,
             error_context="for Wan2.2 text encoding",
         )
-
-        text_inputs = self.tokenizer(
-            prompt_clean,
-            padding="max_length",
-            max_length=max_sequence_length,
-            truncation=True,
-            add_special_tokens=True,
-            return_attention_mask=True,
-            return_tensors="pt",
-        )
-        ids, mask = text_inputs.input_ids, text_inputs.attention_mask
-        seq_lens = mask.gt(0).sum(dim=1).long()
-
-        prompt_embeds = self.text_encoder(ids.to(device), mask.to(device)).last_hidden_state
-        prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
-        prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, seq_lens)]
-        prompt_embeds = torch.stack(
-            [torch.cat([u, u.new_zeros(max_sequence_length - u.size(0), u.size(1))]) for u in prompt_embeds], dim=0
-        )
-
-        _, seq_len, _ = prompt_embeds.shape
-        prompt_embeds = prompt_embeds.repeat(1, num_videos_per_prompt, 1)
-        prompt_embeds = prompt_embeds.view(batch_size * num_videos_per_prompt, seq_len, -1)
+        prompt_encode_length = max(int(text_inputs_untruncated.attention_mask.sum(dim=1).max().item()), 1)
 
         negative_prompt_embeds = None
         if do_classifier_free_guidance:
@@ -577,10 +555,39 @@ class Wan22TI2VPipeline(nn.Module, SupportImageInput, CFGParallelMixin, Progress
                 prompt_name="negative_prompt",
                 error_context="for Wan2.2 text encoding",
             )
+            prompt_encode_length = max(
+                prompt_encode_length,
+                int(neg_text_inputs_untruncated.attention_mask.sum(dim=1).max().item()),
+            )
+
+        text_inputs = self.tokenizer(
+            prompt_clean,
+            padding="max_length",
+            max_length=prompt_encode_length,
+            truncation=True,
+            add_special_tokens=True,
+            return_attention_mask=True,
+            return_tensors="pt",
+        )
+        ids, mask = text_inputs.input_ids, text_inputs.attention_mask
+        seq_lens = mask.gt(0).sum(dim=1).long()
+
+        prompt_embeds = self.text_encoder(ids.to(device), mask.to(device)).last_hidden_state
+        prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
+        prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, seq_lens)]
+        prompt_embeds = torch.stack(
+            [torch.cat([u, u.new_zeros(prompt_encode_length - u.size(0), u.size(1))]) for u in prompt_embeds], dim=0
+        )
+
+        _, seq_len, _ = prompt_embeds.shape
+        prompt_embeds = prompt_embeds.repeat(1, num_videos_per_prompt, 1)
+        prompt_embeds = prompt_embeds.view(batch_size * num_videos_per_prompt, seq_len, -1)
+
+        if do_classifier_free_guidance:
             neg_text_inputs = self.tokenizer(
                 negative_prompt_clean,
                 padding="max_length",
-                max_length=max_sequence_length,
+                max_length=prompt_encode_length,
                 truncation=True,
                 add_special_tokens=True,
                 return_attention_mask=True,
@@ -593,7 +600,7 @@ class Wan22TI2VPipeline(nn.Module, SupportImageInput, CFGParallelMixin, Progress
             negative_prompt_embeds = [u[:v] for u, v in zip(negative_prompt_embeds, seq_lens_neg)]
             negative_prompt_embeds = torch.stack(
                 [
-                    torch.cat([u, u.new_zeros(max_sequence_length - u.size(0), u.size(1))])
+                    torch.cat([u, u.new_zeros(prompt_encode_length - u.size(0), u.size(1))])
                     for u in negative_prompt_embeds
                 ],
                 dim=0,
