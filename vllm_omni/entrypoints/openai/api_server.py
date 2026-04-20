@@ -1432,12 +1432,23 @@ async def edit_images(
             input_images_list.extend(urls)
         if not input_images_list:
             raise HTTPException(status_code=422, detail="Field 'image' or 'url' is required")
-        pil_images = await _load_input_images(input_images_list)
-        if len(pil_images) > 1 and not _supports_multimodal_image_inputs(raw_request, engine_client):
+        # Reject oversized multi-image edit requests before fetching or decoding
+        # any inputs so invalid requests fail fast with a 400.
+        max_input_images = _get_max_edit_input_images(raw_request, engine_client)
+        if max_input_images is not None and len(input_images_list) > max_input_images:
+            detail = (
+                "Received multiple input images. Only a single image is supported by this model."
+                if max_input_images == 1
+                else (
+                    f"Received {len(input_images_list)} input images. "
+                    f"At most {max_input_images} images are supported by this model."
+                )
+            )
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST.value,
-                detail="Received multiple input images. Only a single image is supported by this model.",
+                detail=detail,
             )
+        pil_images = await _load_input_images(input_images_list)
         prompt["multi_modal_data"] = {}
         prompt["multi_modal_data"]["image"] = pil_images
 
@@ -1601,18 +1612,34 @@ def _get_engine_and_model(raw_request: Request):
     return engine_client, model_name, normalized_stage_configs
 
 
-def _supports_multimodal_image_inputs(raw_request: Request, engine_client: Any) -> bool:
+def _get_diffusion_od_config(raw_request: Request, engine_client: Any) -> Any:
     diffusion_engine = getattr(raw_request.app.state, "diffusion_engine", None) or engine_client
     get_diffusion_od_config = getattr(diffusion_engine, "get_diffusion_od_config", None)
-    od_config = (
+    return (
         get_diffusion_od_config() if callable(get_diffusion_od_config) else getattr(diffusion_engine, "od_config", None)
     )
 
+
+def _get_max_edit_input_images(raw_request: Request, engine_client: Any) -> int | None:
+    od_config = _get_diffusion_od_config(raw_request, engine_client)
     if od_config is None:
         # Preserve the existing compatibility behavior when the diffusion
         # config is not exposed on the serving surface.
-        return True
-    return bool(getattr(od_config, "supports_multimodal_inputs", False))
+        return None
+
+    supports_multimodal_inputs = getattr(od_config, "supports_multimodal_inputs", None)
+    if not isinstance(supports_multimodal_inputs, bool):
+        return None
+
+    if not supports_multimodal_inputs:
+        return 1
+
+    max_input_images = getattr(od_config, "max_multimodal_image_inputs", None)
+    if isinstance(max_input_images, bool) or not isinstance(max_input_images, int):
+        return None
+    if max_input_images < 1:
+        return None
+    return max_input_images
 
 
 def _get_lora_from_json_str(lora_body):
@@ -1682,11 +1709,20 @@ async def _generate_with_async_omni(
                 pass
         sampling_params_list.append(default_stage_params)
 
-    async for output in engine_client.generate(
-        sampling_params_list=sampling_params_list,
-        **kwargs,
-    ):
-        result = output
+    try:
+        async for output in engine_client.generate(
+            sampling_params_list=sampling_params_list,
+            **kwargs,
+        ):
+            result = output
+    except RuntimeError as e:
+        payload = e.args[0] if e.args else None
+        error_message = (
+            payload.get("error") if isinstance(payload, dict) else payload if isinstance(payload, str) else None
+        )
+        if isinstance(error_message, str) and _is_image_edit_input_validation_error(error_message):
+            raise ValueError(error_message) from e
+        raise
 
     if result is None:
         raise HTTPException(
@@ -1694,6 +1730,19 @@ async def _generate_with_async_omni(
             detail="No output generated from multi-stage pipeline.",
         )
     return result
+
+
+def _is_image_edit_input_validation_error(message: str) -> bool:
+    normalized = message.strip()
+    if "input image" not in normalized and "input images" not in normalized:
+        return False
+
+    return (
+        normalized.startswith("Received ")
+        or "At most " in normalized
+        or "Only a single image is supported by this model." in normalized
+        or "This model requires one input image to run." in normalized
+    )
 
 
 def _check_max_generated_image_size(

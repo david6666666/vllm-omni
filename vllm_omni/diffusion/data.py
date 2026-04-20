@@ -468,8 +468,10 @@ class OmniDiffusionConfig:
     # Scheduler flow_shift for Wan2.2 (12.0 for 480p, 5.0 for 720p)
     flow_shift: float | None = None
 
-    # support multi images input
+    # Support multi-image inputs and expose any model-specific request limit
+    # through a generic config field so serving code stays model-agnostic.
     supports_multimodal_inputs: bool = False
+    max_multimodal_image_inputs: int | None = None
 
     log_level: str = "info"
 
@@ -616,6 +618,14 @@ class OmniDiffusionConfig:
 
     def update_multimodal_support(self) -> None:
         self.supports_multimodal_inputs = self.model_class_name in {"QwenImageEditPlusPipeline"}
+        self.max_multimodal_image_inputs = None
+
+        if self.model_class_name == "QwenImageEditPlusPipeline":
+            from vllm_omni.diffusion.models.qwen_image.pipeline_qwen_image_edit_plus import (
+                MAX_QWEN_IMAGE_EDIT_PLUS_INPUT_IMAGES,
+            )
+
+            self.max_multimodal_image_inputs = MAX_QWEN_IMAGE_EDIT_PLUS_INPUT_IMAGES
 
     def enrich_config(self) -> None:
         """Load model metadata from HuggingFace and populate config fields.

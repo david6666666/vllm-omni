@@ -53,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 CONDITION_IMAGE_SIZE = 384 * 384
 VAE_IMAGE_SIZE = 1024 * 1024
+MAX_QWEN_IMAGE_EDIT_PLUS_INPUT_IMAGES = 4
 
 
 def get_qwen_image_edit_plus_pre_process_func(
@@ -90,6 +91,11 @@ def get_qwen_image_edit_plus_pre_process_func(
 
             if not isinstance(raw_image, list):
                 raw_image = [raw_image]
+            if len(raw_image) > MAX_QWEN_IMAGE_EDIT_PLUS_INPUT_IMAGES:
+                raise ValueError(
+                    f"Received {len(raw_image)} input images. "
+                    f"At most {MAX_QWEN_IMAGE_EDIT_PLUS_INPUT_IMAGES} images are supported by this model."
+                )
             image = [
                 PIL.Image.open(im) if isinstance(im, str) else cast(PIL.Image.Image | np.ndarray | torch.Tensor, im)
                 for im in raw_image
