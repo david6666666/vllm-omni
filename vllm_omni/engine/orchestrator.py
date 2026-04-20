@@ -281,6 +281,7 @@ class Orchestrator:
                                         "request_id": parent_id,
                                         "stage_id": stage_id,
                                         "error": output.error,
+                                        "error_type": output.error_type,
                                     }
                                 )
                                 role_map = self._companion_map.get(parent_id, {})

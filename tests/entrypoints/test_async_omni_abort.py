@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from vllm_omni.entrypoints.async_omni import AsyncOmni
+from vllm_omni.entrypoints.errors import InputValidationError
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -81,5 +82,34 @@ def test_generate_accepts_request_after_repeated_cancellations():
             ["cancel-1"],
             ["cancel-2"],
         ]
+
+    asyncio.run(run_test())
+
+
+def test_process_orchestrator_results_restores_input_validation_error():
+    async def run_test():
+        omni = object.__new__(AsyncOmni)
+        req_state = SimpleNamespace(queue=asyncio.Queue(), stage_id=0)
+        omni.request_states = {"req-1": req_state}
+
+        await req_state.queue.put(
+            {
+                "request_id": "req-1",
+                "stage_id": 0,
+                "error": "Received 5 input images. At most 4 images are supported by this model.",
+                "error_type": "InputValidationError",
+            }
+        )
+
+        with pytest.raises(InputValidationError, match="At most 4 images are supported by this model"):
+            async for _ in AsyncOmni._process_orchestrator_results(
+                omni,
+                "req-1",
+                metrics=None,
+                final_stage_id_for_e2e=0,
+                req_start_ts={},
+                wall_start_ts=0.0,
+            ):
+                pass
 
     asyncio.run(run_test())

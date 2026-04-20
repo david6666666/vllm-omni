@@ -25,6 +25,7 @@ from vllm.tasks import SupportedTask
 from vllm.v1.engine.exceptions import EngineDeadError
 
 from vllm_omni.entrypoints.client_request_state import ClientRequestState
+from vllm_omni.entrypoints.errors import restore_serialized_error
 from vllm_omni.entrypoints.omni_base import OmniBase
 from vllm_omni.metrics.stats import OrchestratorAggregator as OrchestratorMetrics
 from vllm_omni.outputs import OmniRequestOutput
@@ -441,7 +442,7 @@ class AsyncOmni(EngineClient, OmniBase):
                     stage_id,
                     result["error"],
                 )
-                raise RuntimeError(result)
+                raise restore_serialized_error(result["error"], result.get("error_type"))
 
             # Process the result (constructs OmniRequestOutput)
             output_to_yield = self._process_single_result(

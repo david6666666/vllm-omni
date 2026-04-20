@@ -102,6 +102,7 @@ class OmniRequestOutput:
 
     # error handling
     error: str | None = None
+    error_type: str | None = None
 
     @classmethod
     def from_pipeline(

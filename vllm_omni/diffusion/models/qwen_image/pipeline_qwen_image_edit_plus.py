@@ -48,6 +48,7 @@ from vllm_omni.diffusion.utils.size_utils import (
     normalize_min_aligned_size,
 )
 from vllm_omni.diffusion.utils.tf_utils import get_transformer_config_kwargs
+from vllm_omni.entrypoints.errors import InputValidationError
 from vllm_omni.inputs.data import OmniTextPrompt
 from vllm_omni.model_executor.model_loader.weight_utils import (
     download_weights_from_hf_specific,
@@ -101,7 +102,7 @@ def get_qwen_image_edit_plus_pre_process_func(
             if not isinstance(raw_image, list):
                 raw_image = [raw_image]
             if len(raw_image) > MAX_QWEN_IMAGE_EDIT_PLUS_INPUT_IMAGES:
-                raise ValueError(
+                raise InputValidationError(
                     f"Received {len(raw_image)} input images. "
                     f"At most {MAX_QWEN_IMAGE_EDIT_PLUS_INPUT_IMAGES} images are supported by this model."
                 )

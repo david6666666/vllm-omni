@@ -18,6 +18,7 @@ from PIL import Image
 from pytest_mock import MockerFixture
 from vllm import SamplingParams
 
+from vllm_omni.entrypoints.errors import InputValidationError
 from vllm_omni.entrypoints.openai.image_api_utils import (
     encode_image_base64,
     parse_size,
@@ -1059,7 +1060,7 @@ def test_image_edit_maps_worker_side_input_limit_error_to_400(async_omni_test_cl
     engine.get_diffusion_od_config = lambda: None
 
     async def _fail_generate(*args, **kwargs):
-        raise RuntimeError("Received 5 input images. At most 4 images are supported by this model.")
+        raise InputValidationError("Received 5 input images. At most 4 images are supported by this model.")
         yield
 
     engine.generate = _fail_generate

@@ -30,6 +30,7 @@ from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.sched import RequestScheduler, SchedulerInterface, StepScheduler
 from vllm_omni.diffusion.sched.interface import DiffusionRequestStatus
 from vllm_omni.diffusion.worker.utils import RunnerOutput
+from vllm_omni.entrypoints.errors import get_serialized_error_type, restore_serialized_error
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniTextPrompt
 from vllm_omni.outputs import OmniRequestOutput
 
@@ -122,7 +123,7 @@ class DiffusionEngine:
         if output.aborted:
             raise DiffusionRequestAbortedError(output.abort_message or "Diffusion request aborted.")
         if output.error:
-            raise RuntimeError(f"{output.error}")
+            raise restore_serialized_error(output.error, output.error_type)
         logger.info("Generation completed successfully.")
 
         if output.output is None:
@@ -364,7 +365,7 @@ class DiffusionEngine:
                         req_id=sched_req_id,
                         step_index=None,
                         finished=True,
-                        result=DiffusionOutput(error=str(exc)),
+                        result=DiffusionOutput(error=str(exc), error_type=get_serialized_error_type(exc)),
                     )
 
                 self._process_aborts_queue()

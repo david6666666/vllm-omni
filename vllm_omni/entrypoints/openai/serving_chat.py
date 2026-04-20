@@ -88,6 +88,7 @@ from vllm_omni.entrypoints.openai.protocol.audio import AudioResponse, CreateAud
 from vllm_omni.entrypoints.openai.utils import (
     get_stage_type,
     get_supported_speakers_from_hf_config,
+    normalize_optional_bool,
     parse_lora_request,
     validate_requested_speaker,
 )
@@ -2255,8 +2256,12 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                 gen_prompt["multi_modal_data"] = {"image": pil_images[0]}
             else:
                 od_config = getattr(engine, "od_config", None)
-                supports_multimodal_inputs = getattr(od_config, "supports_multimodal_inputs", False)
-                if od_config is None:
+                supports_multimodal_inputs = (
+                    True
+                    if od_config is None
+                    else normalize_optional_bool(getattr(od_config, "supports_multimodal_inputs", None))
+                )
+                if supports_multimodal_inputs is None:
                     supports_multimodal_inputs = True
                 if supports_multimodal_inputs:
                     gen_prompt["multi_modal_data"] = {"image": pil_images}
@@ -2459,8 +2464,12 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                     gen_prompt["multi_modal_data"]["image"] = pil_images[0]
                 else:
                     od_config = getattr(self._diffusion_engine, "od_config", None)
-                    supports_multimodal_inputs = getattr(od_config, "supports_multimodal_inputs", False)
-                    if od_config is None:
+                    supports_multimodal_inputs = (
+                        True
+                        if od_config is None
+                        else normalize_optional_bool(getattr(od_config, "supports_multimodal_inputs", None))
+                    )
+                    if supports_multimodal_inputs is None:
                         # TODO: entry is asyncOmni. We hack the od config here.
                         supports_multimodal_inputs = True
                     if supports_multimodal_inputs:

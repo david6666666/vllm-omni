@@ -30,6 +30,7 @@ from vllm_omni.distributed.omni_connectors.utils.serialization import (
     OmniMsgpackDecoder,
     OmniMsgpackEncoder,
 )
+from vllm_omni.entrypoints.errors import get_serialized_error_type
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
 
@@ -339,6 +340,7 @@ class StageDiffusionProc:
                             "type": "error",
                             "request_id": request_id,
                             "error": str(e),
+                            "error_type": get_serialized_error_type(e),
                         }
                     )
                 )
@@ -394,6 +396,7 @@ class StageDiffusionProc:
                                         "type": "error",
                                         "request_id": rid,
                                         "error": str(e),
+                                        "error_type": get_serialized_error_type(e),
                                     }
                                 )
                             )
@@ -443,6 +446,7 @@ class StageDiffusionProc:
                                     "type": "error",
                                     "rpc_id": rpc_id,
                                     "error": str(e),
+                                    "error_type": get_serialized_error_type(e),
                                 }
                             )
                         )

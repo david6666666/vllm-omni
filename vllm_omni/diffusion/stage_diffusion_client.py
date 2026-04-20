@@ -178,6 +178,7 @@ class StageDiffusionClient:
                         images=[],
                     )
                     error_output.error = error_msg
+                    error_output.error_type = msg.get("error_type")
                     self._output_queue.put_nowait(error_output)
 
     # Fields that are subprocess-local and cannot be serialized across

@@ -83,3 +83,9 @@ def validate_requested_speaker(speaker: str | None, supported_speakers: set[str]
     if supported_speakers and normalized not in supported_speakers:
         raise ValueError(f"Invalid speaker '{speaker}'. Supported: {', '.join(sorted(supported_speakers))}")
     return normalized
+
+
+def normalize_optional_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    return None

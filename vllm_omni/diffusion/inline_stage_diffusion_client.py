@@ -20,6 +20,7 @@ from vllm_omni.diffusion.data import DiffusionRequestAbortedError
 from vllm_omni.diffusion.diffusion_engine import DiffusionEngine
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.engine.stage_init_utils import StageMetadata
+from vllm_omni.entrypoints.errors import get_serialized_error_type
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
 
@@ -123,6 +124,7 @@ class InlineStageDiffusionClient:
                 images=[],
             )
             error_output.error = str(e)
+            error_output.error_type = get_serialized_error_type(e)
             self._output_queue.put_nowait(error_output)
         finally:
             self._tasks.pop(request_id, None)
@@ -223,6 +225,7 @@ class InlineStageDiffusionClient:
                 images=[],
             )
             error_output.error = str(e)
+            error_output.error_type = get_serialized_error_type(e)
             self._output_queue.put_nowait(error_output)
         finally:
             self._tasks.pop(request_id, None)
