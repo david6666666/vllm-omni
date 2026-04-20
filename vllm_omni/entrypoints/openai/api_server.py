@@ -10,6 +10,7 @@ import os
 
 # Image generation API imports
 import random
+import re
 import time
 from argparse import Namespace
 from collections.abc import AsyncIterator
@@ -122,6 +123,10 @@ logger = init_logger(__name__)
 router = APIRouter()
 
 MAX_UINT32_SEED = 2**32 - 1
+_MULTI_IMAGE_SINGLE_INPUT_DETAIL = "Received multiple input images. Only a single image is supported by this model."
+_MULTI_IMAGE_LIMIT_DETAIL_RE = re.compile(
+    r"Received \d+ input images\. At most \d+ images are supported by this model\."
+)
 profiler_router = APIRouter()
 
 
@@ -1686,6 +1691,12 @@ async def edit_images(
         logger.error(f"Validation error: {e}")
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST.value, detail=str(e))
     except Exception as e:
+        image_input_validation_detail = _extract_image_input_validation_detail(e)
+        if image_input_validation_detail is not None:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST.value,
+                detail=image_input_validation_detail,
+            ) from e
         logger.exception(f"Image edit failed: {e}")
         raise HTTPException(status_code=HTTPStatus.INTERNAL_SERVER_ERROR.value, detail=f"Image edit failed: {str(e)}")
 
@@ -1746,10 +1757,43 @@ def _get_max_edit_input_images(raw_request: Request, engine_client: Any) -> int 
         # config is not exposed on the serving surface.
         return None
 
-    if not bool(getattr(od_config, "supports_multimodal_inputs", False)):
+    supports_multimodal_inputs = _normalize_optional_bool(getattr(od_config, "supports_multimodal_inputs", None))
+    if supports_multimodal_inputs is None:
+        return None
+
+    if not supports_multimodal_inputs:
         return 1
 
-    return getattr(od_config, "max_multimodal_image_inputs", None)
+    return _normalize_positive_int(getattr(od_config, "max_multimodal_image_inputs", None))
+
+
+def _normalize_optional_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    return None
+
+
+def _normalize_positive_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value < 1:
+        return None
+    return value
+
+
+def _extract_image_input_validation_detail(exc: Exception) -> str | None:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current)
+        if message == _MULTI_IMAGE_SINGLE_INPUT_DETAIL:
+            return message
+        match = _MULTI_IMAGE_LIMIT_DETAIL_RE.search(message)
+        if match is not None:
+            return match.group(0)
+        current = current.__cause__ or current.__context__
+    return None
 
 
 def _get_lora_from_json_str(lora_body):
