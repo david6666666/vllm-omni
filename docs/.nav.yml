@@ -60,6 +60,7 @@ nav:
       - Cache Acceleration:
         - TeaCache: user_guide/diffusion/cache_acceleration/teacache.md
         - Cache-DiT: user_guide/diffusion/cache_acceleration/cache_dit.md
+      - Attention Backends: user_guide/diffusion/attention_backends.md
       - Quantization:
         - Overview: user_guide/diffusion/quantization/overview.md
         - FP8: user_guide/diffusion/quantization/fp8.md

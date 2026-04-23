@@ -13,6 +13,7 @@ On CUDA, the practical choices today are:
 - `FLASH_ATTN`: FlashAttention backend. This is the default on supported CUDA systems when FlashAttention is installed.
 - `TORCH_SDPA`: PyTorch `scaled_dot_product_attention`.
 - `SAGE_ATTN`: SageAttention backend, if `sageattention` is installed.
+- `SAGE_ATTN_3`: SageAttention3 Blackwell backend, if `sageattn3` is installed.
 
 If `DIFFUSION_ATTENTION_BACKEND` is unset, vLLM-Omni asks the current platform to choose the default backend. On CUDA, that normally means `FLASH_ATTN` when available, otherwise `TORCH_SDPA`.
 
@@ -23,6 +24,7 @@ If `DIFFUSION_ATTENTION_BACKEND` is unset, vLLM-Omni asks the current platform t
 | `FLASH_ATTN` | Default on CUDA when FlashAttention is available. Good default for most diffusion workloads. |
 | `TORCH_SDPA` | Most conservative fallback. Useful for debugging or compatibility. |
 | `SAGE_ATTN` | Requires `sageattention`. Can improve performance on some workloads, but output quality must be validated model-by-model. |
+| `SAGE_ATTN_3` | Requires `sageattn3` from `SageAttention/sageattention3_blackwell`. CUDA only, intended for Blackwell GPUs, with GQA/MQA requests falling back to PyTorch SDPA. |
 
 ## Selection Priority
 
@@ -57,6 +59,29 @@ Quick check:
 python -c "import sageattention; print(sageattention.__file__)"
 ```
 
+## SageAttention3 Installation
+
+vLLM-Omni expects SageAttention3 to be installed into the same Python environment as vLLM-Omni.
+
+Build from source:
+
+```bash
+git clone https://github.com/thu-ml/SageAttention.git
+cd SageAttention/sageattention3_blackwell
+python setup.py install
+```
+
+Quick check:
+
+```bash
+python -c "import sageattn3; print(sageattn3.__file__)"
+```
+
+Notes:
+
+- `SAGE_ATTN_3` is only selected on CUDA when `sageattn3` is importable and the GPU is Blackwell-class.
+- SageAttention3's Blackwell kernel assumes `Hq == Hkv`. In vLLM-Omni, GQA/MQA diffusion requests fall back to PyTorch SDPA for correctness.
+
 ## Usage
 
 ### Enable SageAttention
@@ -83,6 +108,20 @@ DIFFUSION_ATTENTION_BACKEND=SAGE_ATTN python examples/offline_inference/text_to_
     --num-inference-steps 30 --seed 42 --guidance-scale 5.0 \
     --tensor-parallel-size 2 \
     --output outputs/wan22_sage.mp4
+```
+
+### Enable SageAttention3
+
+Example:
+
+```bash
+DIFFUSION_ATTENTION_BACKEND=SAGE_ATTN_3 python examples/offline_inference/text_to_video/text_to_video.py \
+    --model hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v \
+    --prompt "A dog running across a field of golden wheat." \
+    --height 480 --width 832 --num-frames 33 \
+    --num-inference-steps 30 --seed 42 --guidance-scale 6.0 \
+    --tensor-parallel-size 2 \
+    --output outputs/hv15_sage3.mp4
 ```
 
 ### Compare Against FlashAttention
