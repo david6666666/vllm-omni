@@ -274,6 +274,9 @@ class OmniOpenAIServingVideo:
         if default_sampling_params_list:
             for params in default_sampling_params_list:
                 if isinstance(params, OmniDiffusionSamplingParams):
+                    # Requests mutate sampling params in-place, including
+                    # nested dict fields like extra_args. Deep-copy the stage
+                    # defaults so one request cannot leak state into another.
                     return copy.deepcopy(params)
         return OmniDiffusionSamplingParams()
 
