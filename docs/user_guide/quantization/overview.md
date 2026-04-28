@@ -1,4 +1,4 @@
-# Quantization
+﻿# Quantization
 
 vLLM-Omni exposes quantization through the unified `quantization_config`
 path. The same configuration entrypoint is used across diffusion-only models,
@@ -9,19 +9,22 @@ type has a different quantization scope.
 
 | Mode | Guide | Description | Methods |
 |------|-------|-------------|---------|
-| Online quantization | [Online Quantization](online_quantization.md) | vLLM-Omni computes quantized weights and scales while loading the model. | FP8 W8A8, Int8 W8A8 |
+| Online quantization | [Online Quantization](online.md) | vLLM-Omni computes quantized weights and scales while loading the model. | FP8 W8A8, Int8 W8A8 |
 | Pre-quantized checkpoints | Method-specific guides | The checkpoint or an offline quantizer provides quantized weights and scales before serving. | GGUF, AutoRound, msModelSlim, serialized Int8 |
 
 ## Hardware Support
 
-| Device | FP8 | Int8 | GGUF | AutoRound | msModelSlim |
-|--------|-----|------|------|-----------|-------------|
-| NVIDIA Blackwell GPU (SM 100+) | Yes | Yes | Yes | Yes | No |
-| NVIDIA Ada/Hopper GPU (SM 89+) | Yes | Yes | Yes | Yes | No |
-| NVIDIA Ampere GPU (SM 80+) | Weight-only FP8 where available | Yes | Yes | Yes | No |
-| AMD ROCm | Not validated | Not validated | Not validated | Not validated | No |
-| Intel XPU | Not validated | Not validated | Not validated | Yes, AutoRound checkpoints | No |
-| Ascend NPU | No | Yes | No | No | Yes |
+| Device | FP8 W8A8 | Int8 W8A8 | GGUF | AutoRound | msModelSlim |
+|--------|----------|-----------|------|-----------|-------------|
+| NVIDIA Blackwell GPU (SM 100+) | ✅ | ✅ | ✅ | ✅ | ❌ |
+| NVIDIA Ada/Hopper GPU (SM 89+) | ✅ | ✅ | ✅ | ✅ | ❌ |
+| NVIDIA Ampere GPU (SM 80+) | ✅ | ✅ | ✅ | ✅ | ❌ |
+| AMD ROCm | ⭕ | ⭕ | ⭕ | ⭕ | ❌ |
+| Intel XPU | ⭕ | ⭕ | ⭕ | ✅ | ❌ |
+| Ascend NPU | ❌ | ✅ | ❌ | ❌ | ✅ |
+
+Legend: `✅` supported, `❌` unsupported, `⭕` not verified in this
+guide. FP8 on Ampere may use a weight-only path where available.
 
 ## Model Type Support
 
@@ -128,26 +131,4 @@ build_quant_config("auto-round", bits=4, group_size=128)
 build_quant_config({"method": "gguf", "gguf_model": "/path/to/model.gguf"})
 build_quant_config({"transformer": {"method": "fp8"}, "vae": None})
 build_quant_config(None)
-```
-
-## Migration Guide
-
-### Before v0.16.0
-
-```python
-from vllm_omni.diffusion.quantization import get_diffusion_quant_config
-
-config = get_diffusion_quant_config("fp8", activation_scheme="static")
-```
-
-### v0.16.0 and later
-
-```python
-from vllm_omni.quantization import build_quant_config
-
-config = build_quant_config({"method": "fp8", "activation_scheme": "static"})
-config = build_quant_config({
-    "transformer": {"method": "fp8"},
-    "vae": None,
-})
 ```

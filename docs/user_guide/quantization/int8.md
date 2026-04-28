@@ -1,4 +1,4 @@
-# Int8 Quantization
+﻿# Int8 Quantization
 
 ## Overview
 
@@ -12,12 +12,15 @@ Only online activation scaling is currently supported.
 
 | Device | Support |
 |--------|---------|
-| NVIDIA Blackwell GPU (SM 100+) | Yes |
-| NVIDIA Ada/Hopper GPU (SM 89+) | Yes |
-| NVIDIA Ampere GPU (SM 80+) | Yes |
-| AMD ROCm | Not validated |
-| Intel XPU | Not validated |
-| Ascend NPU | Yes |
+| NVIDIA Blackwell GPU (SM 100+) | ✅ |
+| NVIDIA Ada/Hopper GPU (SM 89+) | ✅ |
+| NVIDIA Ampere GPU (SM 80+) | ✅ |
+| AMD ROCm | ⭕ |
+| Intel XPU | ⭕ |
+| Ascend NPU | ✅ |
+
+Legend: `✅` supported, `❌` unsupported, `⭕` not verified in this
+guide.
 
 ## Model Type Support
 

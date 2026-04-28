@@ -1,4 +1,4 @@
-# GGUF Quantization
+﻿# GGUF Quantization
 
 ## Overview
 
@@ -13,12 +13,15 @@ GGUF is static quantization: the quantized weights are produced before serving.
 
 | Device | Support |
 |--------|---------|
-| NVIDIA Blackwell GPU (SM 100+) | Yes |
-| NVIDIA Ada/Hopper GPU (SM 89+) | Yes |
-| NVIDIA Ampere GPU (SM 80+) | Yes |
-| AMD ROCm | Not validated |
-| Intel XPU | Not validated |
-| Ascend NPU | No |
+| NVIDIA Blackwell GPU (SM 100+) | ✅ |
+| NVIDIA Ada/Hopper GPU (SM 89+) | ✅ |
+| NVIDIA Ampere GPU (SM 80+) | ✅ |
+| AMD ROCm | ⭕ |
+| Intel XPU | ⭕ |
+| Ascend NPU | ❌ |
+
+Legend: `✅` supported, `❌` unsupported, `⭕` not verified in this
+guide.
 
 ## Model Type Support
 

@@ -1,4 +1,4 @@
-# msModelSlim Quantization
+﻿# msModelSlim Quantization
 
 ## Overview
 
@@ -13,12 +13,15 @@ before vLLM-Omni inference starts.
 
 | Device | Support |
 |--------|---------|
-| NVIDIA Blackwell GPU (SM 100+) | No |
-| NVIDIA Ada/Hopper GPU (SM 89+) | No |
-| NVIDIA Ampere GPU (SM 80+) | No |
-| AMD ROCm | No |
-| Intel XPU | No |
-| Ascend NPU | Yes |
+| NVIDIA Blackwell GPU (SM 100+) | ❌ |
+| NVIDIA Ada/Hopper GPU (SM 89+) | ❌ |
+| NVIDIA Ampere GPU (SM 80+) | ❌ |
+| AMD ROCm | ❌ |
+| Intel XPU | ❌ |
+| Ascend NPU | ✅ |
+
+Legend: `✅` supported, `❌` unsupported, `⭕` not verified in this
+guide.
 
 ## Model Type Support
 

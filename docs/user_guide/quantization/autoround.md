@@ -1,4 +1,4 @@
-# AutoRound Quantization
+﻿# AutoRound Quantization
 
 ## Overview
 
@@ -14,12 +14,15 @@ inference time when the checkpoint already contains the quantization config.
 
 | Device | Support |
 |--------|---------|
-| NVIDIA Blackwell GPU (SM 100+) | Yes |
-| NVIDIA Ada/Hopper GPU (SM 89+) | Yes |
-| NVIDIA Ampere GPU (SM 80+) | Yes |
-| AMD ROCm | Not validated |
-| Intel XPU | Yes, AutoRound is Intel-supported |
-| Ascend NPU | No |
+| NVIDIA Blackwell GPU (SM 100+) | ✅ |
+| NVIDIA Ada/Hopper GPU (SM 89+) | ✅ |
+| NVIDIA Ampere GPU (SM 80+) | ✅ |
+| AMD ROCm | ⭕ |
+| Intel XPU | ✅ |
+| Ascend NPU | ❌ |
+
+Legend: `✅` supported, `❌` unsupported, `⭕` not verified in this
+guide. AutoRound is Intel-supported.
 
 ## Model Type Support
 

@@ -1,4 +1,4 @@
-# Online Quantization
+﻿# Online Quantization
 
 ## Overview
 
@@ -14,12 +14,15 @@ prepared before serving and are documented in their method-specific guides.
 
 | Device | FP8 W8A8 | Int8 W8A8 |
 |--------|----------|-----------|
-| NVIDIA Blackwell GPU (SM 100+) | Yes | Yes |
-| NVIDIA Ada/Hopper GPU (SM 89+) | Yes | Yes |
-| NVIDIA Ampere GPU (SM 80+) | Weight-only FP8 where available | Yes |
-| AMD ROCm | Not validated | Not validated |
-| Intel XPU | Not validated | Not validated |
-| Ascend NPU | No | Yes |
+| NVIDIA Blackwell GPU (SM 100+) | ✅ | ✅ |
+| NVIDIA Ada/Hopper GPU (SM 89+) | ✅ | ✅ |
+| NVIDIA Ampere GPU (SM 80+) | ✅ | ✅ |
+| AMD ROCm | ⭕ | ⭕ |
+| Intel XPU | ⭕ | ⭕ |
+| Ascend NPU | ❌ | ✅ |
+
+Legend: `✅` supported, `❌` unsupported, `⭕` not verified in this
+guide. FP8 on Ampere may use a weight-only path where available.
 
 ## Model Type Support
 
