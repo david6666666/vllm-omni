@@ -2,29 +2,31 @@
 
 ## Overview
 
-FP8 quantization converts BF16/FP16 weights to FP8 at model load time. No calibration or pre-quantized checkpoint needed.
+FP8 quantization converts BF16/FP16 weights to FP8 at model load time.
+Dynamic activation scaling is the default and does not require calibration.
+Static activation scaling is supported when calibrated scale information is
+available.
 
-Depending on the model, either all layers can be quantized, or some sensitive layers should stay in BF16. See the [per-model table](#supported-models) for which case applies.
-
-Common sensitive layers in DiT-based diffusion models include **image-stream MLPs** (`img_mlp`). These are particularly vulnerable to FP8 precision loss because they process denoising latents whose dynamic range shifts significantly across timesteps, and unlike attention projections (which benefit from QK-Norm stabilization), MLPs have no built-in normalization to absorb quantization error. In deep architectures (e.g., 60+ residual blocks), small per-layer errors compound and degrade output quality. Other layers such as **attention projections** (`to_qkv`, `to_out`) and **text-stream MLPs** (`txt_mlp`) are generally more robust due to normalization or more stable input statistics.
+Some architectures can quantize all linear layers. Others have quality-sensitive
+layers that should stay in BF16 through `ignored_layers`. Image-stream MLPs
+(`img_mlp`) are a common sensitive target because denoising latent ranges shift
+across timesteps and small per-layer errors can compound in deep DiT blocks.
 
 ## Configuration
 
-1. **Python API**: set `quantization="fp8"`. To skip sensitive layers, use `quantization_config` with `ignored_layers`.
+Python API:
 
 ```python
 from vllm_omni import Omni
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
-# All layers quantized
 omni = Omni(model="<your-model>", quantization="fp8")
 
-# Skip sensitive layers
-omni = Omni(
+omni_with_skips = Omni(
     model="<your-model>",
     quantization_config={
         "method": "fp8",
-        "ignored_layers": ["<layer-name>"],
+        "ignored_layers": ["img_mlp"],
     },
 )
 
@@ -34,39 +36,37 @@ outputs = omni.generate(
 )
 ```
 
-2. **CLI**: pass `--quantization fp8` and optionally `--ignored-layers`.
+CLI:
 
 ```bash
-# All layers
 python text_to_image.py --model <your-model> --quantization fp8
-
-# Skip sensitive layers
 python text_to_image.py --model <your-model> --quantization fp8 --ignored-layers "img_mlp"
-
-# Online serving
 vllm serve <your-model> --omni --quantization fp8
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `method` | str | — | Quantization method (`"fp8"`) |
+| `method` | str | - | Quantization method (`"fp8"`) |
 | `ignored_layers` | list[str] | `[]` | Layer name patterns to keep in BF16 |
-| `activation_scheme` | str | `"dynamic"` | `"dynamic"` (no calibration) or `"static"` |
+| `activation_scheme` | str | `"dynamic"` | `"dynamic"` for load-time scaling, or `"static"` when scales are available |
 | `weight_block_size` | list[int] \| None | `None` | Block size for block-wise weight quantization |
 
-The available `ignored_layers` names depend on the model architecture (e.g., `to_qkv`, `to_out`, `img_mlp`, `txt_mlp`). Consult the transformer source for your target model.
+The available `ignored_layers` names depend on the model architecture, for
+example `to_qkv`, `to_out`, `img_mlp`, or `txt_mlp`.
 
 ## Supported Models
 
-| Model | HF Models | Recommendation | `ignored_layers` |
-|-------|-----------|---------------|------------------|
-| Z-Image | `Tongyi-MAI/Z-Image-Turbo` | All layers | None |
-| Qwen-Image | `Qwen/Qwen-Image`, `Qwen/Qwen-Image-2512` | Skip sensitive layers | `img_mlp` |
-| Flux | `black-forest-labs/FLUX.1-dev` | All layers | None |
-| HunyuanImage-3 | `tencent/HunyuanImage3` | All layers | None |
-| HunyuanVideo-1.5 | `hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v`, `720p_t2v`, `480p_i2v` | All layers | None |
-| GLM-Image | `zai-org/GLM-Image` | All layers | None |
-| Helios | `BestWishYsh/Helios-Base`, `BestWishYsh/Helios-Mid`, `BestWishYsh/Helios-Distilled` | All layers | None |
+| Model | HF Models | Dynamic | Static | Recommendation | `ignored_layers` |
+|-------|-----------|:-------:|:------:|----------------|------------------|
+| Z-Image | `Tongyi-MAI/Z-Image-Turbo` | Yes | Yes | All layers | None |
+| Qwen-Image | `Qwen/Qwen-Image`, `Qwen/Qwen-Image-2512` | Yes | Yes | Skip sensitive image-stream MLPs when quality regresses | `img_mlp` |
+| FLUX.1 | `black-forest-labs/FLUX.1-dev`, `black-forest-labs/FLUX.1-schnell` | Yes | Yes | All layers | None |
+| FLUX.2-klein | `black-forest-labs/FLUX.2-klein-4B` | Yes | Yes | All layers | None |
+| HunyuanImage-3.0 | `tencent/HunyuanImage-3.0`, `tencent/HunyuanImage-3.0-Instruct` | Yes | Yes | All layers; use the Hunyuan stage config for multi-stage runs | None |
+| HunyuanVideo-1.5 | `hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v`, `720p_t2v`, `480p_i2v` | Yes | Yes | All layers | None |
+
+GLM-Image and Helios are not listed as FP8-supported diffusion models until
+they have method-specific validation.
 
 ## Combining with Other Features
 
