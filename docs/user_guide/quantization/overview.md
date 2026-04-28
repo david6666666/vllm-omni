@@ -5,6 +5,13 @@ path. The same configuration entrypoint is used across diffusion-only models,
 multi-stage omni/TTS models, and multi-stage diffusion models, but each model
 type has a different quantization scope.
 
+## Quantization Modes
+
+| Mode | Guide | Description | Methods |
+|------|-------|-------------|---------|
+| Online quantization | [Online Quantization](online_quantization.md) | vLLM-Omni computes quantized weights and scales while loading the model. | FP8 W8A8, Int8 W8A8 |
+| Pre-quantized checkpoints | Method-specific guides | The checkpoint or an offline quantizer provides quantized weights and scales before serving. | GGUF, AutoRound, msModelSlim, serialized Int8 |
+
 ## Hardware Support
 
 | Device | FP8 | Int8 | GGUF | AutoRound | msModelSlim |
@@ -27,8 +34,8 @@ otherwise.
 
 | Method | Guide | Mode | Example models | Status |
 |--------|-------|------|----------------|--------|
-| FP8 | [FP8](fp8.md) | Load-time W8A8 | Qwen-Image; Wan2.2 is not validated | Validated for Qwen-Image family and other DiT models |
-| Int8 | [Int8](int8.md) | Load-time or serialized W8A8 | Qwen-Image; Wan2.2 is not validated | Validated for Qwen-Image and Z-Image |
+| FP8 W8A8 | [FP8](fp8.md) | Online W8A8 or checkpoint FP8 | Qwen-Image; Wan2.2 is not validated | Validated for Qwen-Image family and other DiT models |
+| Int8 W8A8 | [Int8](int8.md) | Online or serialized W8A8 | Qwen-Image; Wan2.2 is not validated | Validated for Qwen-Image and Z-Image |
 | GGUF | [GGUF](gguf.md) | Pre-quantized transformer weights | Qwen-Image | Validated where a model-specific GGUF adapter exists |
 | AutoRound | [AutoRound](autoround.md) | Pre-quantized W4A16 checkpoints | FLUX.1-dev; Qwen-Image/Wan2.2 not validated | Checkpoint-driven |
 | msModelSlim | [msModelSlim](msmodelslim.md) | Pre-quantized Ascend checkpoints | Wan2.2 recipe; HunyuanImage-3.0 inference target | Ascend/NPU path |
@@ -62,9 +69,9 @@ attached to the intended stage rather than applied globally.
 | msModelSlim | [msModelSlim](msmodelslim.md) | Ascend-generated stage weights | GLM-Image | Requires model-specific adaptation |
 
 !!! note
-    "Dynamic" means vLLM-Omni computes the quantization data at load time.
-    "Static" means the checkpoint or external quantizer provides the required
-    quantized weights and scales.
+    "Online quantization" means vLLM-Omni computes the quantization data while
+    loading the model. "Pre-quantized" means the checkpoint or external
+    quantizer provides the required quantized weights and scales.
 
 ## Quantization Scope
 

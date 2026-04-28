@@ -4,7 +4,7 @@
 
 FP8 quantization converts BF16/FP16 weights to FP8 at model load time, or loads
 a checkpoint whose target stage already declares an FP8 quantization config.
-Dynamic activation scaling is the default and does not require calibration.
+Online activation scaling is the default and does not require calibration.
 Static activation scaling is supported when calibrated scale information is
 available.
 
@@ -29,7 +29,7 @@ in deep DiT blocks.
 
 ### Diffusion Model (Qwen-Image, Wan2.2)
 
-| Model | HF models | Dynamic | Static | Recommendation | `ignored_layers` |
+| Model | HF models | Online | Pre-calibrated | Recommendation | `ignored_layers` |
 |-------|-----------|:-------:|:------:|----------------|------------------|
 | Qwen-Image | `Qwen/Qwen-Image`, `Qwen/Qwen-Image-2512` | Yes | Yes | Skip sensitive image-stream MLPs when quality regresses | `img_mlp` |
 | Wan2.2 | Wan2.2 diffusion pipelines | Not validated | Not validated | Validate against BF16 before documenting as supported | TBD |
@@ -94,7 +94,7 @@ vllm serve <your-model> --omni --quantization fp8
 |-----------|------|---------|-------------|
 | `method` | str | - | Quantization method (`"fp8"`) |
 | `ignored_layers` | list[str] | `[]` | Layer name patterns to keep in BF16 |
-| `activation_scheme` | str | `"dynamic"` | `"dynamic"` for load-time scaling, or `"static"` when scales are available |
+| `activation_scheme` | str | `"dynamic"` | `"dynamic"` selects online activation scaling, or `"static"` when scales are available |
 | `weight_block_size` | list[int] \| None | `None` | Block size for block-wise weight quantization |
 
 The available `ignored_layers` names depend on the model architecture, for

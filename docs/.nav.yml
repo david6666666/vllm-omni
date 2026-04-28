@@ -78,6 +78,7 @@ nav:
       - Step Execution: user_guide/diffusion/step_execution.md
     - Quantization:
       - Overview: user_guide/quantization/overview.md
+      - Online Quantization: user_guide/quantization/online_quantization.md
       - FP8 W8A8: user_guide/quantization/fp8.md
       - Int8 W8A8: user_guide/quantization/int8.md
       - GGUF: user_guide/quantization/gguf.md

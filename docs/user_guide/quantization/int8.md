@@ -6,7 +6,7 @@ Int8 quantization supports W8A8 diffusion transformer inference on CUDA and
 Ascend NPU. It can quantize BF16/FP16 weights at load time, or load serialized
 Int8 checkpoints that already contain quantized weights and scales.
 
-Only the dynamic activation scheme is currently supported.
+Only online activation scaling is currently supported.
 
 ## Hardware Support
 
@@ -25,9 +25,9 @@ Only the dynamic activation scheme is currently supported.
 
 | Model | HF models | CUDA | Ascend NPU | Mode | Recommendation |
 |-------|-----------|:----:|:----------:|------|----------------|
-| Qwen-Image | `Qwen/Qwen-Image`, `Qwen/Qwen-Image-2512` | Yes | Yes | Dynamic load-time W8A8 | All layers |
-| Wan2.2 | Wan2.2 diffusion pipelines | Not validated | Not validated | Dynamic load-time W8A8 | Validate before enabling in docs |
-| Z-Image | `Tongyi-MAI/Z-Image-Turbo` | Yes | Yes | Dynamic load-time W8A8 | All layers |
+| Qwen-Image | `Qwen/Qwen-Image`, `Qwen/Qwen-Image-2512` | Yes | Yes | Online W8A8 | All layers |
+| Wan2.2 | Wan2.2 diffusion pipelines | Not validated | Not validated | Online W8A8 | Validate before enabling in docs |
+| Z-Image | `Tongyi-MAI/Z-Image-Turbo` | Yes | Yes | Online W8A8 | All layers |
 
 Other diffusion models may work if their transformer uses supported linear
 layers, but they are not validated in this guide.
@@ -83,7 +83,7 @@ vllm serve <your-model> --omni --quantization int8
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `method` | str | - | Quantization method (`"int8"`) |
-| `activation_scheme` | str | `"dynamic"` | Dynamic activation quantization; static is not supported |
+| `activation_scheme` | str | `"dynamic"` | `"dynamic"` selects online activation scaling; static is not supported |
 | `ignored_layers` | list[str] | `[]` | Layer name patterns to keep in BF16/FP16 |
 | `is_checkpoint_int8_serialized` | bool | `False` | Set by checkpoint config when loading serialized Int8 weights |
 
