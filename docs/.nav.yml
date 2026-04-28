@@ -54,13 +54,6 @@ nav:
     - configuration/*
   - Models:
     - models/supported_models.md
-  - Quantization:
-    - Overview: user_guide/quantization/overview.md
-    - FP8: user_guide/quantization/fp8.md
-    - Int8: user_guide/quantization/int8.md
-    - GGUF: user_guide/quantization/gguf.md
-    - AutoRound: user_guide/quantization/autoround.md
-    - msModelSlim: user_guide/quantization/msmodelslim.md
   - Features:
     - Sleep Mode: features/sleep_mode.md
     - Diffusion Features:
@@ -83,6 +76,13 @@ nav:
       - LoRA: user_guide/diffusion/lora.md
       - Custom Pipeline: features/custom_pipeline.md
       - Step Execution: user_guide/diffusion/step_execution.md
+    - Quantization:
+      - Overview: user_guide/quantization/overview.md
+      - FP8: user_guide/quantization/fp8.md
+      - Int8: user_guide/quantization/int8.md
+      - GGUF: user_guide/quantization/gguf.md
+      - AutoRound: user_guide/quantization/autoround.md
+      - msModelSlim: user_guide/quantization/msmodelslim.md
     - ComfyUI: features/comfyui.md
 - Developer Guide:
   - General:

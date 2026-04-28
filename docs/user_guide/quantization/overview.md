@@ -5,6 +5,17 @@ path. The same configuration entrypoint is used across diffusion-only models,
 multi-stage omni/TTS models, and multi-stage diffusion models, but each model
 type has a different quantization scope.
 
+## Hardware Support
+
+| Device | FP8 | Int8 | GGUF | AutoRound | msModelSlim |
+|--------|-----|------|------|-----------|-------------|
+| NVIDIA Blackwell GPU (SM 100+) | Yes | Yes | Yes | Yes | No |
+| NVIDIA Ada/Hopper GPU (SM 89+) | Yes | Yes | Yes | Yes | No |
+| NVIDIA Ampere GPU (SM 80+) | Weight-only FP8 where available | Yes | Yes | Yes | No |
+| AMD ROCm | Not validated | Not validated | Not validated | Not validated | No |
+| Intel XPU | Not validated | Not validated | Not validated | Yes, AutoRound checkpoints | No |
+| Ascend NPU | No | Yes | No | No | Yes |
+
 ## Model Type Support
 
 ### Diffusion Model (Qwen-Image, Wan2.2)
@@ -95,17 +106,6 @@ config = build_quant_config({
 | Selected diffusion or transformer stage | Method-specific | Must be routed to the intended stage |
 | Other generation stages | No | Keep BF16 unless separately validated |
 | VAE, tokenizer, scheduler | No | Loaded from the base checkpoint |
-
-## Hardware Support
-
-| Device | FP8 | Int8 | GGUF | AutoRound | msModelSlim |
-|--------|-----|------|------|-----------|-------------|
-| NVIDIA Blackwell GPU (SM 100+) | Yes | Yes | Yes | Yes | No |
-| NVIDIA Ada/Hopper GPU (SM 89+) | Yes | Yes | Yes | Yes | No |
-| NVIDIA Ampere GPU (SM 80+) | Weight-only FP8 where available | Yes | Yes | Yes | No |
-| AMD ROCm | Not validated | Not validated | Not validated | Not validated | No |
-| Intel XPU | Not validated | Not validated | Not validated | Yes, AutoRound checkpoints | No |
-| Ascend NPU | No | Yes | No | No | Yes |
 
 ## Python API
 

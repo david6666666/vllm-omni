@@ -9,6 +9,17 @@ for the transformer.
 
 GGUF is static quantization: the quantized weights are produced before serving.
 
+## Hardware Support
+
+| Device | Support |
+|--------|---------|
+| NVIDIA Blackwell GPU (SM 100+) | Yes |
+| NVIDIA Ada/Hopper GPU (SM 89+) | Yes |
+| NVIDIA Ampere GPU (SM 80+) | Yes |
+| AMD ROCm | Not validated |
+| Intel XPU | Not validated |
+| Ascend NPU | No |
+
 ## Model Type Support
 
 ### Diffusion Model (Qwen-Image, Wan2.2)
@@ -36,17 +47,6 @@ for the FLUX.2-klein path.
 |-------|-------|--------|-------|
 | BAGEL | Stage-specific transformer weights | Not validated | Requires a model-specific GGUF adapter |
 | GLM-Image | Stage-specific transformer weights | Not validated | Requires a model-specific GGUF adapter |
-
-## Hardware Support
-
-| Device | Support |
-|--------|---------|
-| NVIDIA Blackwell GPU (SM 100+) | Yes |
-| NVIDIA Ada/Hopper GPU (SM 89+) | Yes |
-| NVIDIA Ampere GPU (SM 80+) | Yes |
-| AMD ROCm | Not validated |
-| Intel XPU | Not validated |
-| Ascend NPU | No |
 
 ## Configuration
 

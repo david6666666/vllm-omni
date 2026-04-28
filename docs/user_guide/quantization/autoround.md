@@ -10,6 +10,17 @@ checkpoint's `config.json` and auto-detects
 AutoRound is static quantization: no `--quantization` flag is needed at
 inference time when the checkpoint already contains the quantization config.
 
+## Hardware Support
+
+| Device | Support |
+|--------|---------|
+| NVIDIA Blackwell GPU (SM 100+) | Yes |
+| NVIDIA Ada/Hopper GPU (SM 89+) | Yes |
+| NVIDIA Ampere GPU (SM 80+) | Yes |
+| AMD ROCm | Not validated |
+| Intel XPU | Yes, AutoRound is Intel-supported |
+| Ascend NPU | No |
+
 ## Model Type Support
 
 ### Diffusion Model (Qwen-Image, Wan2.2)
@@ -38,17 +49,6 @@ vLLM-Omni's runtime module names.
 |-------|-------|--------|-------|
 | BAGEL | Checkpoint-defined diffusion or transformer stage | Not validated | Requires a compatible AutoRound checkpoint |
 | GLM-Image | Checkpoint-defined diffusion or transformer stage | Not validated | Requires a compatible AutoRound checkpoint |
-
-## Hardware Support
-
-| Device | Support |
-|--------|---------|
-| NVIDIA Blackwell GPU (SM 100+) | Yes |
-| NVIDIA Ada/Hopper GPU (SM 89+) | Yes |
-| NVIDIA Ampere GPU (SM 80+) | Yes |
-| AMD ROCm | Not validated |
-| Intel XPU | Yes, AutoRound is Intel-supported |
-| Ascend NPU | No |
 
 ## Configuration
 

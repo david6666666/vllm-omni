@@ -8,6 +8,17 @@ Int8 checkpoints that already contain quantized weights and scales.
 
 Only the dynamic activation scheme is currently supported.
 
+## Hardware Support
+
+| Device | Support |
+|--------|---------|
+| NVIDIA Blackwell GPU (SM 100+) | Yes |
+| NVIDIA Ada/Hopper GPU (SM 89+) | Yes |
+| NVIDIA Ampere GPU (SM 80+) | Yes |
+| AMD ROCm | Not validated |
+| Intel XPU | Not validated |
+| Ascend NPU | Yes |
+
 ## Model Type Support
 
 ### Diffusion Model (Qwen-Image, Wan2.2)
@@ -34,17 +45,6 @@ layers, but they are not validated in this guide.
 |-------|-------|--------|-------|
 | BAGEL | Stage-specific transformer or DiT module | Not validated | Requires explicit stage routing |
 | GLM-Image | Stage-specific transformer or DiT module | Not validated | Requires quality comparison with BF16 |
-
-## Hardware Support
-
-| Device | Support |
-|--------|---------|
-| NVIDIA Blackwell GPU (SM 100+) | Yes |
-| NVIDIA Ada/Hopper GPU (SM 89+) | Yes |
-| NVIDIA Ampere GPU (SM 80+) | Yes |
-| AMD ROCm | Not validated |
-| Intel XPU | Not validated |
-| Ascend NPU | Yes |
 
 ## Configuration
 

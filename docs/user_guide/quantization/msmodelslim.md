@@ -9,6 +9,17 @@ checkpoints run through the Ascend/NPU path with `--quantization ascend`.
 msModelSlim is static quantization: quantized weights are generated offline
 before vLLM-Omni inference starts.
 
+## Hardware Support
+
+| Device | Support |
+|--------|---------|
+| NVIDIA Blackwell GPU (SM 100+) | No |
+| NVIDIA Ada/Hopper GPU (SM 89+) | No |
+| NVIDIA Ampere GPU (SM 80+) | No |
+| AMD ROCm | No |
+| Intel XPU | No |
+| Ascend NPU | Yes |
+
 ## Model Type Support
 
 ### Diffusion Model (Qwen-Image, Wan2.2)
@@ -36,17 +47,6 @@ to generate the checkpoint manually.
 |-------|-------|--------|-------|
 | BAGEL | Stage-specific diffusion or transformer weights | Not validated | Requires a model-specific Ascend adaptation |
 | GLM-Image | Stage-specific diffusion or transformer weights | Not validated | Requires a model-specific Ascend adaptation |
-
-## Hardware Support
-
-| Device | Support |
-|--------|---------|
-| NVIDIA Blackwell GPU (SM 100+) | No |
-| NVIDIA Ada/Hopper GPU (SM 89+) | No |
-| NVIDIA Ampere GPU (SM 80+) | No |
-| AMD ROCm | No |
-| Intel XPU | No |
-| Ascend NPU | Yes |
 
 ## Configuration
 

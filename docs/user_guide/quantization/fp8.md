@@ -14,6 +14,17 @@ Image-stream MLPs (`img_mlp`) are a common sensitive target because denoising
 latent ranges shift across timesteps and small per-layer errors can compound
 in deep DiT blocks.
 
+## Hardware Support
+
+| Device | Support |
+|--------|---------|
+| NVIDIA Blackwell GPU (SM 100+) | Yes |
+| NVIDIA Ada/Hopper GPU (SM 89+) | Yes |
+| NVIDIA Ampere GPU (SM 80+) | Weight-only FP8 where available |
+| AMD ROCm | Not validated |
+| Intel XPU | Not validated |
+| Ascend NPU | No |
+
 ## Model Type Support
 
 ### Diffusion Model (Qwen-Image, Wan2.2)
@@ -44,17 +55,6 @@ model-specific guide says otherwise.
 |-------|-------|--------|-------|
 | BAGEL | Stage-specific transformer or DiT module | Not validated | Route FP8 to the intended stage before enabling |
 | GLM-Image | Stage-specific transformer or DiT module | Not validated | Validate quality against BF16 baseline |
-
-## Hardware Support
-
-| Device | Support |
-|--------|---------|
-| NVIDIA Blackwell GPU (SM 100+) | Yes |
-| NVIDIA Ada/Hopper GPU (SM 89+) | Yes |
-| NVIDIA Ampere GPU (SM 80+) | Weight-only FP8 where available |
-| AMD ROCm | Not validated |
-| Intel XPU | Not validated |
-| Ascend NPU | No |
 
 ## Configuration
 
