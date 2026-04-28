@@ -10,24 +10,45 @@ checkpoint's `config.json` and auto-detects
 AutoRound is static quantization: no `--quantization` flag is needed at
 inference time when the checkpoint already contains the quantization config.
 
-## Supported Schemes
+## Model Type Support
 
-| Scheme | Bits | Status |
-|--------|------|--------|
-| W4A16 | 4 | Supported |
-| W8A16 | 8 | Planned |
-
-## Supported Models
+### Diffusion Model (Qwen-Image, Wan2.2)
 
 | Model | Checkpoint | Scope | Scheme | Backend |
 |-------|------------|-------|--------|---------|
-| FLUX.1-dev | `vllm-project-org/FLUX.1-dev-AutoRound-w4a16` | Diffusion transformer | W4A16 | GPTQ-Marlin |
-| Qwen2.5-Omni-7B | `Intel/Qwen2.5-Omni-7B-int4-AutoRound` | Language model stage | W4A16 | GPTQ-Marlin |
-| Qwen3-Omni-30B-A3B-Instruct | `Intel/Qwen3-Omni-30B-A3B-Instruct-int4-AutoRound` | Thinker language model stage | W4A16 | GPTQ-Marlin |
+| FLUX.1-dev | `vllm-project-org/FLUX.1-dev-AutoRound-w4a16` | Diffusion transformer | W4A16 | GPTQ-Marlin or Intel-supported AutoRound backend |
+| Qwen-Image | Not listed | Diffusion transformer | W4A16 | Not validated |
+| Wan2.2 | Not listed | Diffusion transformer | W4A16 | Not validated |
+
+### Multi-Stage Omni/TTS Model (Qwen3-Omni, Qwen3-TTS)
+
+| Model | Checkpoint | Scope | Scheme | Backend |
+|-------|------------|-------|--------|---------|
+| Qwen2.5-Omni-7B | `Intel/Qwen2.5-Omni-7B-int4-AutoRound` | Language-model stage | W4A16 | AutoRound |
+| Qwen3-Omni-30B-A3B-Instruct | `Intel/Qwen3-Omni-30B-A3B-Instruct-int4-AutoRound` | Thinker language-model stage | W4A16 | AutoRound |
+| Qwen3-TTS | Not listed | TTS language-model stage | W4A16 | Not validated |
 
 AutoRound support is checkpoint-driven. A model is supported when its
 checkpoint uses a compatible INC/AutoRound config and the target stage maps to
 vLLM-Omni's runtime module names.
+
+### Multi-Stage Diffusion Model (BAGEL, GLM-Image)
+
+| Model | Scope | Status | Notes |
+|-------|-------|--------|-------|
+| BAGEL | Checkpoint-defined diffusion or transformer stage | Not validated | Requires a compatible AutoRound checkpoint |
+| GLM-Image | Checkpoint-defined diffusion or transformer stage | Not validated | Requires a compatible AutoRound checkpoint |
+
+## Hardware Support
+
+| Device | Support |
+|--------|---------|
+| NVIDIA Blackwell GPU (SM 100+) | Yes |
+| NVIDIA Ada/Hopper GPU (SM 89+) | Yes |
+| NVIDIA Ampere GPU (SM 80+) | Yes |
+| AMD ROCm | Not validated |
+| Intel XPU | Yes, AutoRound is Intel-supported |
+| Ascend NPU | No |
 
 ## Configuration
 
@@ -56,7 +77,15 @@ python examples/offline_inference/text_to_image/text_to_image.py \
   --output outputs/flux_w4a16.png
 ```
 
-## Checkpoint Config
+## Parameters
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `quant_method` | str | Must be `"auto-round"` |
+| `bits` | int | Quantized weight bit width, usually `4` |
+| `group_size` | int | Quantization group size |
+| `packing_format` | str | AutoRound packing format, for example `auto_round:auto_gptq` |
+| `block_name_to_quantize` | str | Checkpoint block names that should map to runtime module names |
 
 The checkpoint should contain a config like:
 
@@ -73,10 +102,12 @@ The checkpoint should contain a config like:
 }
 ```
 
+## Validation and Notes
+
 At load time, vLLM-Omni builds an `OmniINCConfig`, remaps checkpoint block names
 to runtime module names, and selects the matching vLLM compute backend.
 
-## Creating a Quantized Checkpoint
+Example checkpoint creation:
 
 ```bash
 auto-round \

@@ -236,7 +236,7 @@ def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
 
 ### Step 3: Add to Supported Models Documentation
 
-Update the FP8 supported models table in `docs/user_guide/diffusion/quantization/fp8.md`:
+Update the FP8 supported models table in `docs/user_guide/quantization/fp8.md`:
 
 ```markdown
 | Your-Model | `org/Your-Model` | ✅ | ✅ | ✅ | `sensitive_layer` |
@@ -474,5 +474,5 @@ Adding FP8 quantization support to a new model:
 2. ✅ **Identify sensitive layers** — Profile which layers need `ignored_layers` for quality
 3. ✅ **Apply FP8 weight storage** — Call `apply_fp8_weight_storage()` on text encoder and VAE in pipeline `__init__`
 4. ✅ **Fix `load_weights`** — Mark pre-loaded component weights as loaded
-5. ✅ **Update docs** — Add model to the supported models table in `docs/user_guide/diffusion/quantization/fp8.md`
+5. ✅ **Update docs** — Add model to the supported models table in `docs/user_guide/quantization/fp8.md`
 6. ✅ **Test** — Verify quality, memory savings, and sensitive layer behavior

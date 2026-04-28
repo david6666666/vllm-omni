@@ -9,16 +9,44 @@ for the transformer.
 
 GGUF is static quantization: the quantized weights are produced before serving.
 
-## Supported Models
+## Model Type Support
+
+### Diffusion Model (Qwen-Image, Wan2.2)
 
 | Model | HF base model | GGUF input | Scope | Adapter |
 |-------|---------------|------------|-------|---------|
 | Qwen-Image family | `Qwen/Qwen-Image`, `Qwen/Qwen-Image-2512`, edit and layered Qwen-Image pipelines | Local `.gguf`, `repo/file.gguf`, or `repo:quant_type` | Transformer only | `QwenImageGGUFAdapter` |
+| Wan2.2 | Wan2.2 diffusion pipelines | Not validated | Transformer only | No validated adapter listed |
 | Z-Image | `Tongyi-MAI/Z-Image-Turbo` | Local `.gguf`, `repo/file.gguf`, or `repo:quant_type` | Transformer only | `ZImageGGUFAdapter` |
 | FLUX.2-klein | `black-forest-labs/FLUX.2-klein-4B` | Local `.gguf`, `repo/file.gguf`, or `repo:quant_type` | Transformer only | `Flux2KleinGGUFAdapter` |
 
 Generic FLUX.1 GGUF checkpoints are not listed here; the implemented adapter is
 for the FLUX.2-klein path.
+
+### Multi-Stage Omni/TTS Model (Qwen3-Omni, Qwen3-TTS)
+
+| Model | Scope | Status | Notes |
+|-------|-------|--------|-------|
+| Qwen3-Omni | Thinker language-model stage | Not validated | GGUF is not documented for omni/TTS AR stages |
+| Qwen3-TTS | TTS language-model stage | Not validated | GGUF is not documented for TTS stages |
+
+### Multi-Stage Diffusion Model (BAGEL, GLM-Image)
+
+| Model | Scope | Status | Notes |
+|-------|-------|--------|-------|
+| BAGEL | Stage-specific transformer weights | Not validated | Requires a model-specific GGUF adapter |
+| GLM-Image | Stage-specific transformer weights | Not validated | Requires a model-specific GGUF adapter |
+
+## Hardware Support
+
+| Device | Support |
+|--------|---------|
+| NVIDIA Blackwell GPU (SM 100+) | Yes |
+| NVIDIA Ada/Hopper GPU (SM 89+) | Yes |
+| NVIDIA Ampere GPU (SM 80+) | Yes |
+| AMD ROCm | Not validated |
+| Intel XPU | Not validated |
+| Ascend NPU | No |
 
 ## Configuration
 
@@ -46,6 +74,13 @@ vllm serve Qwen/Qwen-Image \
   --quantization-config '{"method":"gguf","gguf_model":"QuantStack/Qwen-Image-GGUF/Qwen_Image-Q4_K_M.gguf"}'
 ```
 
+## Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `method` | str | - | Quantization method (`"gguf"`) |
+| `gguf_model` | str | - | Local GGUF file, explicit Hugging Face file, or `repo:quant_type` selector |
+
 `gguf_model` accepts:
 
 | Form | Example |
@@ -54,7 +89,7 @@ vllm serve Qwen/Qwen-Image \
 | Explicit HF file | `QuantStack/Qwen-Image-GGUF/Qwen_Image-Q4_K_M.gguf` |
 | HF repo plus quant type | `owner/repo:Q4_K_M` |
 
-## How It Works
+## Validation and Notes
 
 1. `OmniDiffusionConfig` receives `{"method": "gguf", "gguf_model": ...}`.
 2. `DiffusersPipelineLoader` resolves the GGUF file.
@@ -65,13 +100,5 @@ vllm serve Qwen/Qwen-Image \
 5. vLLM's GGUF linear method performs dequantization and GEMM at runtime.
 
 Unsupported models fail fast with a clear "No GGUF adapter matched" error
-instead of falling back to a generic mapper.
-
-## Notes
-
-1. Many GGUF repositories do not include `model_index.json`; always pass the
-   normal base model through `--model`.
-2. GGUF quantization does not use `activation_scheme`; it is a static
-   pre-quantized format.
-3. Keep GGUF files aligned with the exact base model family. Tensor names and
-   fused projections differ across Qwen-Image, Z-Image, and FLUX.2-klein.
+instead of falling back to a generic mapper. Many GGUF repositories do not
+include `model_index.json`; always pass the normal base model through `--model`.
