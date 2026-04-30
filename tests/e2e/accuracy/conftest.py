@@ -15,6 +15,9 @@ from PIL import Image
 from tests.helpers.runtime import OmniServer, OmniServerParams
 
 
+GEMMA_ACCURACY_JUDGE_MODEL = "cyankiwi/gemma-4-31B-it-AWQ-4bit"
+
+
 def pytest_addoption(parser):
     group = parser.getgroup("accuracy-e2e")
     group.addoption("--gebench-root", action="store", default=None, help="Local GEBench dataset root")
@@ -28,7 +31,7 @@ def pytest_addoption(parser):
     group.addoption(
         "--accuracy-judge-model",
         action="store",
-        default="cyankiwi/gemma-4-31B-it-AWQ-4bit",
+        default=GEMMA_ACCURACY_JUDGE_MODEL,
         help="Judge model path",
     )
     group.addoption("--accuracy-gpu", action="store", default="0", help="Single GPU id used sequentially")
@@ -228,6 +231,8 @@ def _build_accuracy_server_config(
         "--gpu-memory-utilization",
         "0.8",
     ]
+    if judge_model == GEMMA_ACCURACY_JUDGE_MODEL:
+        judge_server_args.extend(["--reasoning-parser", "gemma4"])
 
     judge_env = {"CUDA_VISIBLE_DEVICES": shared_gpu}
 
