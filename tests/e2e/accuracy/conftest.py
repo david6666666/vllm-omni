@@ -28,7 +28,7 @@ def pytest_addoption(parser):
     group.addoption(
         "--accuracy-judge-model",
         action="store",
-        default="Qwen/Qwen3.6-35B-A3B-FP8",
+        default="QuantTrio/Qwen3.5-35B-A3B-AWQ",
         help="Judge model path",
     )
     group.addoption("--accuracy-gpu", action="store", default="0", help="Single GPU id used sequentially")
