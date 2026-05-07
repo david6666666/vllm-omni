@@ -56,7 +56,7 @@
 /apps/ @fhfuih
 
 # Large Scale Serving
-/vllm_omni/distributed/ @princepride @yuanheng-zhao
+/vllm_omni/distributed/ @princepride @yuanheng-zhao @xuechendi @natureofnature @fake0fan
 
 # Quantization and configuration
 /vllm_omni/config/ @lishunyang12
