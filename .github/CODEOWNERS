@@ -37,15 +37,14 @@
 
 # Omni and TTS support
 /vllm_omni/transformers_utils/ @tzhouam @yuanheng-zhao
-/vllm_omni/model_executor/models/ @linyueqian @ZeldaHuang @princepride @yuanheng-zhao
+/vllm_omni/model_executor/models/ @linyueqian @ZeldaHuang @princepride @yuanheng-zhao @amy-why-3459 @Bounty-hunter
 
 # Benchmarks
 /benchmarks/accuracy/ @david6666666
 /benchmarks/build_dataset/ @linyueqian @yuanheng-zhao
 /benchmarks/diffusion/ @Isotr0py @princepride @SamitHuang @wtomin @ZJY0516 @RuixiangMa
 /benchmarks/distributed/ @princepride
-/benchmarks/fish-speech/ @linyueqian @yuanheng-zhao
-/benchmarks/glm_image/ @princepride
+/benchmarks/glm_image/ @princepride @JaredforReal
 /benchmarks/tts/ @linyueqian @ZeldaHuang @princepride
 
 # Usability and Observability
@@ -64,17 +63,4 @@
 /vllm_omni/quantization/ @david6666666 @Isotr0py @lishunyang12
 
 # Hardware plugins and accelerators
-/vllm_omni/platforms/npu/ @gcanlin
-/docker/Dockerfile.npu @gcanlin
-/docker/Dockerfile.npu.a3 @gcanlin
-/requirements/npu.txt @gcanlin
-
-# ROCm
-/vllm_omni/platforms/rocm/ @tjtanaa
-/docker/Dockerfile.rocm @tjtanaa
-/requirements/rocm.txt @tjtanaa
-
-# Intel XPU
-/vllm_omni/platforms/xpu/ @xuechendi
-/docker/Dockerfile.xpu @xuechendi
-/requirements/xpu.txt @xuechendi
+/vllm_omni/platforms/ @gcanlin @tjtanaa @xuechendi
