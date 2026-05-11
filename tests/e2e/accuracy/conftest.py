@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 
+import numpy as np
 import pytest
 import requests
 import torch
@@ -219,6 +220,54 @@ def rabbit_image(accuracy_artifact_root: Path):
     image.save(image_path)
     yield image
     image.close()
+
+
+def assert_images_pixel_close(
+    *,
+    model_name: str,
+    vllm_image: Image.Image,
+    diffusers_image: Image.Image,
+    compare_mode: str = "RGB",
+    max_channel_abs_diff: int | None = 0,
+    max_mean_abs_diff: float = 0.0,
+    max_p99_abs_diff: float = 0.0,
+) -> None:
+    assert vllm_image.size == diffusers_image.size, (
+        f"Online and diffusers output sizes mismatch: online={vllm_image.size}, diffusers={diffusers_image.size}"
+    )
+
+    vllm_array = np.asarray(vllm_image.convert(compare_mode), dtype=np.int16)
+    diffusers_array = np.asarray(diffusers_image.convert(compare_mode), dtype=np.int16)
+    channel_abs_diff = np.abs(vllm_array - diffusers_array)
+    max_abs_diff = int(channel_abs_diff.max(initial=0))
+    mean_abs_diff = float(channel_abs_diff.mean())
+    p99_abs_diff = float(np.percentile(channel_abs_diff, 99))
+
+    print(f"{model_name} pixel metrics:")
+    max_threshold_text = "not asserted" if max_channel_abs_diff is None else f"threshold<={max_channel_abs_diff}"
+    print(f"  max_abs_diff: value={max_abs_diff}, {max_threshold_text}, range=[0, 255], lower_is_better=True")
+    print(
+        f"  mean_abs_diff: value={mean_abs_diff:.8f}, threshold<={max_mean_abs_diff:.8f}, "
+        "range=[0, 255], lower_is_better=True"
+    )
+    print(
+        f"  p99_abs_diff: value={p99_abs_diff:.8f}, threshold<={max_p99_abs_diff:.8f}, "
+        "range=[0, 255], lower_is_better=True"
+    )
+
+    if max_channel_abs_diff is not None:
+        assert max_abs_diff <= max_channel_abs_diff, (
+            f"Pixel channel diff above threshold for {model_name}: got {max_abs_diff}, "
+            f"expected <= {max_channel_abs_diff}."
+        )
+    assert mean_abs_diff <= max_mean_abs_diff, (
+        f"Mean pixel channel diff above threshold for {model_name}: got {mean_abs_diff:.8f}, "
+        f"expected <= {max_mean_abs_diff:.8f}."
+    )
+    assert p99_abs_diff <= max_p99_abs_diff, (
+        f"P99 pixel channel diff above threshold for {model_name}: got {p99_abs_diff:.8f}, "
+        f"expected <= {max_p99_abs_diff:.8f}."
+    )
 
 
 def _build_accuracy_server_config(
