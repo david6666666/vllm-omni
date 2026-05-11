@@ -232,6 +232,23 @@ def assert_images_pixel_close(
     max_mean_abs_diff: float = 0.0,
     max_p99_abs_diff: float = 0.0,
 ) -> None:
+    """Assert full-image pixel closeness between online serving and diffusers output.
+
+    The comparison converts both images to ``compare_mode`` and computes absolute
+    per-channel differences for every pixel. For RGB images, this means each
+    pixel contributes three channel samples in the [0, 255] uint8 range.
+
+    Pixel accuracy improves as all reported diff values move lower:
+    - ``max_channel_abs_diff`` gates the worst single channel sample. Set it to
+      ``None`` when rare local outliers are expected and should only be logged.
+    - ``max_mean_abs_diff`` gates global average channel drift across the image.
+    - ``max_p99_abs_diff`` gates tail drift: 99% of channel samples must be at
+      or below this value.
+
+    The printed mismatch ratios are diagnostics only. ``pixel_ratio`` counts
+    pixels where any channel exceeds a tolerance, while ``channel_ratio`` counts
+    individual channel samples above that tolerance.
+    """
     assert vllm_image.size == diffusers_image.size, (
         f"Online and diffusers output sizes mismatch: online={vllm_image.size}, diffusers={diffusers_image.size}"
     )
