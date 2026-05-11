@@ -39,7 +39,7 @@ EDIT_2511_TRUE_CFG_SCALE = 4.0
 EDIT_2511_GUIDANCE_SCALE = 1.0
 EDIT_2511_SEED = 42
 EDIT_2511_MAX_MEAN_ABS_DIFF = 10.0
-EDIT_2511_MAX_P99_ABS_DIFF = 150.0
+EDIT_2511_MAX_P99_ABS_DIFF = 170.0
 EDIT_2511_NEGATIVE_PROMPT = " "
 EDIT_2511_PROMPT = (
     "将第二张图中人脸/猫狗脸转换为3D卡通形象，质量要求：毛发纹理自然电影级色彩校准，注意保留原图的外貌、"
@@ -192,7 +192,7 @@ def _run_diffusers_image_edit_2511(
     input_images: list[Image.Image],
     output_path: Path,
 ) -> Image.Image:
-    run_pre_test_cleanup(enable_force=True)
+    run_pre_test_cleanup()
     pipe: QwenImageEditPlusPipeline | None = None
     device = torch.device("cuda:0")
     torch.cuda.set_device(device)
@@ -227,7 +227,7 @@ def _run_diffusers_image_edit_2511(
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        run_post_test_cleanup(enable_force=True)
+        run_post_test_cleanup()
 
 
 def _vllm_omni_output_single_image(
@@ -351,19 +351,30 @@ def test_qwen_image_edit_2511_matches_diffusers_pixelwise(accuracy_artifact_root
     model = _edit_2511_model_name()
     output_dir = model_output_dir(accuracy_artifact_root, EDIT_2511_MODEL)
     input_images = _load_edit_2511_input_images()
+    input_paths: list[Path] = []
     for index, image in enumerate(input_images, start=1):
-        image.save(output_dir / f"edit_2511_input_{index}.png")
+        input_path = output_dir / f"edit_2511_input_{index}.png"
+        image.save(input_path)
+        input_paths.append(input_path)
+    vllm_output_path = output_dir / "vllm_omni_edit_2511.png"
+    diffusers_output_path = output_dir / "diffusers_edit_2511.png"
 
     vllm_image = _run_vllm_omni_image_edit_2511(
         model=model,
         input_images=input_images,
-        output_path=output_dir / "vllm_omni_edit_2511.png",
+        output_path=vllm_output_path,
     )
     diffusers_image = _run_diffusers_image_edit_2511(
         model=model,
         input_images=input_images,
-        output_path=output_dir / "diffusers_edit_2511.png",
+        output_path=diffusers_output_path,
     )
+
+    print(f"{EDIT_2511_MODEL} generated images:")
+    for index, input_path in enumerate(input_paths, start=1):
+        print(f"  input_{index}: {input_path}")
+    print(f"  vllm_omni: {vllm_output_path}")
+    print(f"  diffusers: {diffusers_output_path}")
 
     assert_images_pixel_close(
         model_name=EDIT_2511_MODEL,

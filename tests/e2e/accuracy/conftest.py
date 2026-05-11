@@ -242,6 +242,9 @@ def assert_images_pixel_close(
     max_abs_diff = int(channel_abs_diff.max(initial=0))
     mean_abs_diff = float(channel_abs_diff.mean())
     p99_abs_diff = float(np.percentile(channel_abs_diff, 99))
+    percentiles = {
+        percentile: float(np.percentile(channel_abs_diff, percentile)) for percentile in (50, 90, 95, 99, 99.9)
+    }
 
     print(f"{model_name} pixel metrics:")
     max_threshold_text = "not asserted" if max_channel_abs_diff is None else f"threshold<={max_channel_abs_diff}"
@@ -254,6 +257,18 @@ def assert_images_pixel_close(
         f"  p99_abs_diff: value={p99_abs_diff:.8f}, threshold<={max_p99_abs_diff:.8f}, "
         "range=[0, 255], lower_is_better=True"
     )
+    print("  abs_diff_percentiles:")
+    for percentile, value in percentiles.items():
+        print(f"    p{percentile}: value={value:.8f}, range=[0, 255], lower_is_better=True")
+    print("  mismatch_ratios_by_channel_threshold:")
+    for tolerance in (0, 1, 2, 4, 8, 16, 32, 64, 128):
+        pixel_mismatch = np.any(channel_abs_diff > tolerance, axis=-1)
+        pixel_mismatch_ratio = float(np.count_nonzero(pixel_mismatch) / pixel_mismatch.size)
+        channel_mismatch_ratio = float(np.count_nonzero(channel_abs_diff > tolerance) / channel_abs_diff.size)
+        print(
+            f"    threshold>{tolerance}: pixel_ratio={pixel_mismatch_ratio:.8f}, "
+            f"channel_ratio={channel_mismatch_ratio:.8f}"
+        )
 
     if max_channel_abs_diff is not None:
         assert max_abs_diff <= max_channel_abs_diff, (

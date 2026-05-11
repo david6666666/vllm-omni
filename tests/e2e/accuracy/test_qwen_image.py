@@ -160,7 +160,7 @@ def _run_vllm_omni_qwen_image_2512(*, model: str, output_path: Path) -> Image.Im
 
 
 def _run_diffusers_qwen_image_2512(*, model: str, output_path: Path) -> Image.Image:
-    run_pre_test_cleanup(enable_force=True)
+    run_pre_test_cleanup()
     pipe: DiffusionPipeline | None = None
     try:
         pipe = DiffusionPipeline.from_pretrained(
@@ -189,7 +189,7 @@ def _run_diffusers_qwen_image_2512(*, model: str, output_path: Path) -> Image.Im
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        run_post_test_cleanup(enable_force=True)
+        run_post_test_cleanup()
 
 
 @pytest.mark.benchmark
@@ -217,9 +217,15 @@ def test_qwen_image_matches_diffusers(accuracy_artifact_root: Path) -> None:
 def test_qwen_image_2512_matches_diffusers_pixelwise(accuracy_artifact_root: Path) -> None:
     model = _model_2512_name()
     output_dir = model_output_dir(accuracy_artifact_root, MODEL_2512_ID)
+    vllm_output_path = output_dir / "vllm_omni_2512.png"
+    diffusers_output_path = output_dir / "diffusers_2512.png"
 
-    vllm_output = _run_vllm_omni_qwen_image_2512(model=model, output_path=output_dir / "vllm_omni_2512.png")
-    diffusers_output = _run_diffusers_qwen_image_2512(model=model, output_path=output_dir / "diffusers_2512.png")
+    vllm_output = _run_vllm_omni_qwen_image_2512(model=model, output_path=vllm_output_path)
+    diffusers_output = _run_diffusers_qwen_image_2512(model=model, output_path=diffusers_output_path)
+
+    print(f"{MODEL_2512_ID} generated images:")
+    print(f"  vllm_omni: {vllm_output_path}")
+    print(f"  diffusers: {diffusers_output_path}")
 
     assert_images_pixel_close(
         model_name=MODEL_2512_ID,
