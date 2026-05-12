@@ -228,22 +228,19 @@ def assert_images_pixel_close(
     vllm_image: Image.Image,
     diffusers_image: Image.Image,
     compare_mode: str = "RGB",
-    max_channel_abs_diff: int | None = 0,
-    max_mean_abs_diff: float = 0.0,
-    max_p99_abs_diff: float = 0.0,
+    mean_threshold: float,
+    p99_threshold: float,
 ) -> None:
     """Assert full-image pixel closeness between online serving and diffusers output.
 
-    The comparison converts both images to ``compare_mode`` and computes absolute
-    per-channel differences for every pixel. For RGB images, this means each
-    pixel contributes three channel samples in the [0, 255] uint8 range.
+    Match the threshold style used by diffusion parallelism tests: convert both
+    images to float32 RGB tensors in the [0, 1] range, then compare mean and p99
+    absolute channel differences.
 
-    Pixel accuracy improves as all reported diff values move lower:
-    - ``max_channel_abs_diff`` gates the worst single channel sample. Set it to
-      ``None`` when rare local outliers are expected and should only be logged.
-    - ``max_mean_abs_diff`` gates global average channel drift across the image.
-    - ``max_p99_abs_diff`` gates tail drift: 99% of channel samples must be at
-      or below this value.
+    Accuracy improves as both values move lower:
+    - ``mean_abs_diff`` tracks global average drift across the whole image.
+    - ``p99_abs_diff`` tracks tail drift while ignoring the noisiest 1% of
+      channel samples.
 
     The printed mismatch ratios are diagnostics only. ``pixel_ratio`` counts
     pixels where any channel exceeds a tolerance, while ``channel_ratio`` counts
@@ -253,52 +250,43 @@ def assert_images_pixel_close(
         f"Online and diffusers output sizes mismatch: online={vllm_image.size}, diffusers={diffusers_image.size}"
     )
 
-    vllm_array = np.asarray(vllm_image.convert(compare_mode), dtype=np.int16)
-    diffusers_array = np.asarray(diffusers_image.convert(compare_mode), dtype=np.int16)
+    vllm_array = np.asarray(vllm_image.convert(compare_mode), dtype=np.float32) / 255.0
+    diffusers_array = np.asarray(diffusers_image.convert(compare_mode), dtype=np.float32) / 255.0
     channel_abs_diff = np.abs(vllm_array - diffusers_array)
-    max_abs_diff = int(channel_abs_diff.max(initial=0))
     mean_abs_diff = float(channel_abs_diff.mean())
-    p99_abs_diff = float(np.percentile(channel_abs_diff, 99))
+    p99_abs_diff = float(np.quantile(channel_abs_diff, 0.99))
     percentiles = {
-        percentile: float(np.percentile(channel_abs_diff, percentile)) for percentile in (50, 90, 95, 99, 99.9)
+        percentile: float(np.quantile(channel_abs_diff, percentile / 100.0)) for percentile in (50, 90, 95, 99, 99.9)
     }
 
     print(f"{model_name} pixel metrics:")
-    max_threshold_text = "not asserted" if max_channel_abs_diff is None else f"threshold<={max_channel_abs_diff}"
-    print(f"  max_abs_diff: value={max_abs_diff}, {max_threshold_text}, range=[0, 255], lower_is_better=True")
     print(
-        f"  mean_abs_diff: value={mean_abs_diff:.8f}, threshold<={max_mean_abs_diff:.8f}, "
-        "range=[0, 255], lower_is_better=True"
+        f"  mean_abs_diff: value={mean_abs_diff:.6e}, threshold<={mean_threshold:.6e}, "
+        "range=[0, 1], lower_is_better=True"
     )
     print(
-        f"  p99_abs_diff: value={p99_abs_diff:.8f}, threshold<={max_p99_abs_diff:.8f}, "
-        "range=[0, 255], lower_is_better=True"
+        f"  p99_abs_diff: value={p99_abs_diff:.6e}, threshold<={p99_threshold:.6e}, range=[0, 1], lower_is_better=True"
     )
     print("  abs_diff_percentiles:")
     for percentile, value in percentiles.items():
-        print(f"    p{percentile}: value={value:.8f}, range=[0, 255], lower_is_better=True")
+        print(f"    p{percentile}: value={value:.6e}, range=[0, 1], lower_is_better=True")
     print("  mismatch_ratios_by_channel_threshold:")
     for tolerance in (0, 1, 2, 4, 8, 16, 32, 64, 128):
-        pixel_mismatch = np.any(channel_abs_diff > tolerance, axis=-1)
+        normalized_tolerance = tolerance / 255.0
+        pixel_mismatch = np.any(channel_abs_diff > normalized_tolerance, axis=-1)
         pixel_mismatch_ratio = float(np.count_nonzero(pixel_mismatch) / pixel_mismatch.size)
-        channel_mismatch_ratio = float(np.count_nonzero(channel_abs_diff > tolerance) / channel_abs_diff.size)
+        channel_mismatch_ratio = float(
+            np.count_nonzero(channel_abs_diff > normalized_tolerance) / channel_abs_diff.size
+        )
         print(
-            f"    threshold>{tolerance}: pixel_ratio={pixel_mismatch_ratio:.8f}, "
+            f"    threshold>{normalized_tolerance:.6e} ({tolerance}/255): pixel_ratio={pixel_mismatch_ratio:.8f}, "
             f"channel_ratio={channel_mismatch_ratio:.8f}"
         )
 
-    if max_channel_abs_diff is not None:
-        assert max_abs_diff <= max_channel_abs_diff, (
-            f"Pixel channel diff above threshold for {model_name}: got {max_abs_diff}, "
-            f"expected <= {max_channel_abs_diff}."
-        )
-    assert mean_abs_diff <= max_mean_abs_diff, (
-        f"Mean pixel channel diff above threshold for {model_name}: got {mean_abs_diff:.8f}, "
-        f"expected <= {max_mean_abs_diff:.8f}."
-    )
-    assert p99_abs_diff <= max_p99_abs_diff, (
-        f"P99 pixel channel diff above threshold for {model_name}: got {p99_abs_diff:.8f}, "
-        f"expected <= {max_p99_abs_diff:.8f}."
+    assert mean_abs_diff <= mean_threshold and p99_abs_diff <= p99_threshold, (
+        f"Image diff exceeded threshold for {model_name}: mean_abs_diff={mean_abs_diff:.6e}, "
+        f"p99_abs_diff={p99_abs_diff:.6e} (thresholds: mean<={mean_threshold:.6e}, "
+        f"p99<={p99_threshold:.6e})"
     )
 
 

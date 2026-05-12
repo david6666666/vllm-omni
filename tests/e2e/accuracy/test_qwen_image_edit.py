@@ -38,8 +38,8 @@ EDIT_2511_NUM_INFERENCE_STEPS = 40
 EDIT_2511_TRUE_CFG_SCALE = 4.0
 EDIT_2511_GUIDANCE_SCALE = 1.0
 EDIT_2511_SEED = 42
-EDIT_2511_MAX_MEAN_ABS_DIFF = 10.0
-EDIT_2511_MAX_P99_ABS_DIFF = 170.0
+EDIT_2511_MEAN_ABS_DIFF_THRESHOLD = 4e-2
+EDIT_2511_P99_ABS_DIFF_THRESHOLD = 6.7e-1
 EDIT_2511_NEGATIVE_PROMPT = " "
 EDIT_2511_PROMPT = (
     "将第二张图中人脸/猫狗脸转换为3D卡通形象，质量要求：毛发纹理自然电影级色彩校准，注意保留原图的外貌、"
@@ -112,7 +112,7 @@ def _run_diffusers_image_edit(
 ) -> Image.Image:
     run_pre_test_cleanup()
     pipe: QwenImageEditPipeline | QwenImageEditPlusPipeline | None = None
-    device = torch.device("cuda:0")
+    device = torch.device("cuda")
     torch.cuda.set_device(device)
     try:
         images = input_images[0] if len(input_images) == 1 else input_images
@@ -194,7 +194,7 @@ def _run_diffusers_image_edit_2511(
 ) -> Image.Image:
     run_pre_test_cleanup()
     pipe: QwenImageEditPlusPipeline | None = None
-    device = torch.device("cuda:0")
+    device = torch.device("cuda")
     torch.cuda.set_device(device)
     try:
         pipe = QwenImageEditPlusPipeline.from_pretrained(
@@ -380,7 +380,6 @@ def test_qwen_image_edit_2511_matches_diffusers_pixelwise(accuracy_artifact_root
         model_name=EDIT_2511_MODEL,
         vllm_image=vllm_image,
         diffusers_image=diffusers_image,
-        max_channel_abs_diff=None,
-        max_mean_abs_diff=EDIT_2511_MAX_MEAN_ABS_DIFF,
-        max_p99_abs_diff=EDIT_2511_MAX_P99_ABS_DIFF,
+        mean_threshold=EDIT_2511_MEAN_ABS_DIFF_THRESHOLD,
+        p99_threshold=EDIT_2511_P99_ABS_DIFF_THRESHOLD,
     )

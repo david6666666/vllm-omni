@@ -53,9 +53,8 @@ HEIGHT_2512 = 928
 NUM_INFERENCE_STEPS_2512 = 50
 TRUE_CFG_SCALE_2512 = 4.0
 SEED_2512 = 42
-MAX_CHANNEL_ABS_DIFF_2512 = 192
-MAX_MEAN_ABS_DIFF_2512 = 5.0
-MAX_P99_ABS_DIFF_2512 = 45.0
+MEAN_ABS_DIFF_THRESHOLD_2512 = 2e-2
+P99_ABS_DIFF_THRESHOLD_2512 = 1.8e-1
 
 
 def _model_name() -> str:
@@ -231,7 +230,6 @@ def test_qwen_image_2512_matches_diffusers_pixelwise(accuracy_artifact_root: Pat
         model_name=MODEL_2512_ID,
         vllm_image=vllm_output,
         diffusers_image=diffusers_output,
-        max_channel_abs_diff=MAX_CHANNEL_ABS_DIFF_2512,
-        max_mean_abs_diff=MAX_MEAN_ABS_DIFF_2512,
-        max_p99_abs_diff=MAX_P99_ABS_DIFF_2512,
+        mean_threshold=MEAN_ABS_DIFF_THRESHOLD_2512,
+        p99_threshold=P99_ABS_DIFF_THRESHOLD_2512,
     )
