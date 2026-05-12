@@ -113,7 +113,7 @@ def _run_diffusers_image_edit(
     run_pre_test_cleanup()
     pipe: QwenImageEditPipeline | QwenImageEditPlusPipeline | None = None
     device = torch.device("cuda")
-    torch.cuda.set_device(0)
+    torch.cuda.set_device(device)
     try:
         images = input_images[0] if len(input_images) == 1 else input_images
         pipe = pipeline_class.from_pretrained(
@@ -195,7 +195,7 @@ def _run_diffusers_image_edit_2511(
     run_pre_test_cleanup()
     pipe: QwenImageEditPlusPipeline | None = None
     device = torch.device("cuda")
-    torch.cuda.set_device(0)
+    torch.cuda.set_device(device)
     try:
         pipe = QwenImageEditPlusPipeline.from_pretrained(
             model,
