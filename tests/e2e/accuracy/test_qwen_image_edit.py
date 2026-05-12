@@ -38,8 +38,8 @@ EDIT_2511_NUM_INFERENCE_STEPS = 40
 EDIT_2511_TRUE_CFG_SCALE = 4.0
 EDIT_2511_GUIDANCE_SCALE = 1.0
 EDIT_2511_SEED = 42
-EDIT_2511_MEAN_ABS_DIFF_THRESHOLD = 4e-2
-EDIT_2511_P99_ABS_DIFF_THRESHOLD = 6.7e-1
+EDIT_2511_MEAN_ABS_DIFF_THRESHOLD = 2.5e-2
+EDIT_2511_P99_ABS_DIFF_THRESHOLD = 4e-1
 EDIT_2511_NEGATIVE_PROMPT = " "
 EDIT_2511_PROMPT = (
     "将第二张图中人脸/猫狗脸转换为3D卡通形象，质量要求：毛发纹理自然电影级色彩校准，注意保留原图的外貌、"
@@ -113,7 +113,7 @@ def _run_diffusers_image_edit(
     run_pre_test_cleanup()
     pipe: QwenImageEditPipeline | QwenImageEditPlusPipeline | None = None
     device = torch.device("cuda")
-    torch.cuda.set_device(device)
+    torch.cuda.set_device(0)
     try:
         images = input_images[0] if len(input_images) == 1 else input_images
         pipe = pipeline_class.from_pretrained(
@@ -195,7 +195,7 @@ def _run_diffusers_image_edit_2511(
     run_pre_test_cleanup()
     pipe: QwenImageEditPlusPipeline | None = None
     device = torch.device("cuda")
-    torch.cuda.set_device(device)
+    torch.cuda.set_device(0)
     try:
         pipe = QwenImageEditPlusPipeline.from_pretrained(
             model,
