@@ -111,17 +111,15 @@ def _run_diffusers_image_edit(
 ) -> Image.Image:
     run_pre_test_cleanup()
     pipe: QwenImageEditPipeline | QwenImageEditPlusPipeline | None = None
-    device = torch.device("cuda")
-    torch.cuda.set_device(device)
     try:
         images = input_images[0] if len(input_images) == 1 else input_images
         pipe = pipeline_class.from_pretrained(
             model,
             torch_dtype=torch.bfloat16,
             trust_remote_code=True,
-        ).to(device)
+        ).to("cuda")
         pipe.set_progress_bar_config(disable=False)
-        generator = torch.Generator(device=device).manual_seed(SEED)
+        generator = torch.Generator(device="cuda").manual_seed(SEED)
         result = pipe(  # pyright: ignore[reportCallIssue]
             prompt=prompt,
             image=images,
@@ -193,17 +191,15 @@ def _run_diffusers_image_edit_2511(
 ) -> Image.Image:
     run_pre_test_cleanup()
     pipe: QwenImageEditPlusPipeline | None = None
-    device = torch.device("cuda")
-    torch.cuda.set_device(device)
     try:
         pipe = QwenImageEditPlusPipeline.from_pretrained(
             model,
             torch_dtype=torch.bfloat16,
             trust_remote_code=True,
             local_files_only=_local_files_only(model),
-        ).to(device)
+        ).to("cuda")
         pipe.set_progress_bar_config(disable=False)
-        generator = torch.Generator(device=device).manual_seed(EDIT_2511_SEED)
+        generator = torch.Generator(device="cuda").manual_seed(EDIT_2511_SEED)
         result = pipe(  # pyright: ignore[reportCallIssue]
             image=input_images,
             prompt=EDIT_2511_PROMPT,
