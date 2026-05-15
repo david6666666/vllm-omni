@@ -11,8 +11,7 @@ from diffusers import QwenImageEditPipeline, QwenImageEditPlusPipeline
 from PIL import Image
 
 from benchmarks.accuracy.common import decode_base64_image, pil_to_png_bytes
-from tests.e2e.accuracy.conftest import assert_images_pixel_close
-from tests.e2e.accuracy.helpers import assert_similarity, model_output_dir
+from tests.e2e.accuracy.helpers import assert_images_pixel_close, assert_similarity, model_output_dir
 from tests.helpers.env import run_post_test_cleanup, run_pre_test_cleanup
 from tests.helpers.mark import hardware_test
 from tests.helpers.runtime import OmniServer
