@@ -66,37 +66,50 @@ class FlashInferAttentionImpl(AttentionImpl):
         self.softmax_scale = softmax_scale
 
     @staticmethod
-    def _pack_mask_for_flashinfer(attn_mask: torch.Tensor, qo_len: int, kv_len: int) -> torch.Tensor | None:
-        """Convert a diffusion-style attn_mask into the 2D boolean form
-        FlashInfer's ``custom_mask`` expects: ``(qo_len, kv_len)``, ``True``
-        = keep.
+    def _pack_mask_for_flashinfer(
+        attn_mask: torch.Tensor, batch_size: int, qo_len: int, kv_len: int
+    ) -> torch.Tensor | None:
+        """Convert a diffusion-style attn_mask into the boolean form
+        FlashInfer's ``custom_mask`` expects (``True`` = keep).
 
-        Accepts any input shape that broadcasts to ``(qo_len, kv_len)`` —
-        includes the common ``(B, 1, 1, kv_len)`` key-padding mask from
-        diffusion text encoders. Returns ``None`` when the mask is all-ones
-        (elide). Raises ``ValueError`` when shapes are incompatible; the
-        caller falls back to SDPA.
+        Returns either ``(qo_len, kv_len)`` (shared across the batch) or
+        ``(batch_size, qo_len, kv_len)`` (per-sample), or ``None`` when the
+        mask is all-keep (elide). Only boolean masks are handled here;
+        additive/float masks raise ``ValueError`` so the caller falls back to
+        SDPA, which applies them with the correct softmax semantics. Shape
+        mismatches also raise ``ValueError``.
         """
         mask = attn_mask
-        # Strip leading singleton dims while keeping at least 2D so the final
-        # broadcast sees (..., kv_len) or (qo_len, kv_len).
-        while mask.dim() > 2:
-            mask = mask[0]
+        if mask.dtype != torch.bool:
+            # Additive masks (0 / -inf / -1e4 / finfo.min) cannot be faithfully
+            # reduced to a boolean keep-mask here; SDPA handles them correctly.
+            raise ValueError(
+                f"non-boolean attn_mask (dtype={mask.dtype}); FlashInfer custom_mask "
+                "is boolean-only — deferring to SDPA"
+            )
+        # Diffusion masks arrive as (qo,kv), (1,1,kv), (B,1,1,kv), (B,1,qo,kv)
+        # or (B,H,qo,kv). The mask is identical across heads, so collapse the
+        # head dim, but keep a real batch dim — indexing mask[0] would reuse
+        # sample 0's padding for every sample (wrong under CFG / mixed lengths).
+        if mask.dim() == 4:
+            mask = mask[:, 0]  # (B, qo|1, kv)
+        if mask.dim() == 3 and mask.shape[0] == 1:
+            mask = mask[0]  # (qo|1, kv) — shared across the batch
         try:
-            mask = mask.broadcast_to((qo_len, kv_len))
+            if mask.dim() >= 3:
+                mask = mask.broadcast_to((batch_size, qo_len, kv_len))
+            else:
+                mask = mask.broadcast_to((qo_len, kv_len))
         except RuntimeError as e:
             raise ValueError(
-                f"attn_mask shape {tuple(attn_mask.shape)} cannot broadcast to (qo_len={qo_len}, kv_len={kv_len})"
+                f"attn_mask shape {tuple(attn_mask.shape)} cannot broadcast to "
+                f"(batch={batch_size}, qo_len={qo_len}, kv_len={kv_len})"
             ) from e
-        if mask.dtype == torch.bool:
-            bool_mask = mask
-        else:
-            bool_mask = mask != float("-inf")
-        if bool_mask.all():
+        if mask.all():
             return None
         # ``broadcast_to`` returns a non-contiguous view; materialize for the
         # kernel, which reads from GPU memory directly.
-        return bool_mask.contiguous()
+        return mask.contiguous()
 
     def _sdpa_fallback(
         self,
@@ -131,18 +144,28 @@ class FlashInferAttentionImpl(AttentionImpl):
         # Try the custom_mask path; if the mask can't be packed into the
         # (qo_len, kv_len) layout FlashInfer expects, fall back to SDPA
         # instead of risking an illegal-memory-access crash in the kernel.
+        # Input layout is (B, S, H, D); FlashInfer dense prefill takes (S, H, D).
+        batch_size = query.shape[0]
+
         custom_mask = None
         if attn_metadata is not None and attn_metadata.attn_mask is not None:
             try:
                 custom_mask = self._pack_mask_for_flashinfer(
-                    attn_metadata.attn_mask, qo_len=query.shape[1], kv_len=key.shape[1]
+                    attn_metadata.attn_mask,
+                    batch_size=batch_size,
+                    qo_len=query.shape[1],
+                    kv_len=key.shape[1],
                 )
             except ValueError as e:
                 logger.debug("Falling back to SDPA for mask path: %s", e)
                 return self._sdpa_fallback(query, key, value, attn_metadata)
+            # FlashInfer cannot combine causal masking with a custom_mask; rather
+            # than silently dropping the explicit mask (diverging from SDPA), let
+            # SDPA handle the causal+mask case correctly.
+            if custom_mask is not None and self.causal:
+                logger.debug("causal=True with explicit attn_mask; deferring to SDPA")
+                return self._sdpa_fallback(query, key, value, attn_metadata)
 
-        # Input layout is (B, S, H, D); FlashInfer dense prefill takes (S, H, D).
-        batch_size = query.shape[0]
         outputs = []
         for b in range(batch_size):
             kwargs: dict = {
@@ -150,9 +173,8 @@ class FlashInferAttentionImpl(AttentionImpl):
                 "causal": self.causal,
                 "return_lse": False,
             }
-            # ``custom_mask`` is only honored when causal=False per FlashInfer docs.
-            if custom_mask is not None and not self.causal:
-                kwargs["custom_mask"] = custom_mask
+            if custom_mask is not None:
+                kwargs["custom_mask"] = custom_mask if custom_mask.dim() == 2 else custom_mask[b]
             out = single_prefill_with_kv_cache(query[b], key[b], value[b], **kwargs)
             outputs.append(out)
 

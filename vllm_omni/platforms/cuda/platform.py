@@ -110,8 +110,12 @@ class CudaOmniPlatform(OmniPlatform, CudaPlatformBase):
             import flashinfer  # noqa: F401
 
             flashinfer_available = True
-        except ImportError:
-            pass
+        except Exception as e:
+            # A partially installed / ABI-mismatched wheel can raise OSError or
+            # RuntimeError from extension loading, not just ImportError. This
+            # runs during default backend selection, so a probe failure must
+            # not abort startup — just treat FlashInfer as unavailable.
+            logger.debug("FlashInfer probe failed (%s); treating as unavailable", e)
 
         if selected_backend is not None:
             backend_upper = selected_backend.upper()
