@@ -284,16 +284,14 @@ At minimum, keep the same:
 
 ## Reproducing the Benchmark Table
 
-```bash
-# Single command for one model:
-bash benchmarks/diffusion/bench_e2e_attention.sh        # HV-1.5
-bash benchmarks/diffusion/bench_e2e_wan22.sh            # Wan 2.2 14B
-bash benchmarks/diffusion/bench_e2e_flux2.sh            # FLUX.2-dev (TP=2)
-bash benchmarks/diffusion/bench_e2e_zimage.sh           # Z-Image-Turbo
-bash benchmarks/diffusion/bench_e2e_ltx2.sh             # LTX-2.0 (CUDNN_ATTN crashes)
+The end-to-end numbers above were collected by running `text_to_video.py` /
+`text_to_image.py` with the same prompt and seed while varying
+`DIFFUSION_ATTENTION_BACKEND`. For a quick kernel-level comparison of the
+backends without loading a model:
 
-# Kernel microbench (no model load):
+```bash
 python benchmarks/diffusion/bench_attention_backends.py --preset hv15
 ```
 
-Each script runs all three BF16 backends in sequence and prints a ranking table at the end.
+It runs all three BF16 backends on representative DiT attention shapes and
+prints a ranking table at the end.

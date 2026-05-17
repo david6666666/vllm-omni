@@ -321,7 +321,7 @@ def main() -> None:
     print("  * Ratios are relative to CUDNN_ATTENTION. >1.0x means faster than cuDNN.")
     print("  * Mask-path winner inherits CUDNN_ATTN's fallback in the PR's backends.")
     print("  * `trtllm-gen` and FA4 4.0.0b10 are known-broken on sm_120 as of Apr 2026.")
-    print("  * For e2e timings run benchmarks/diffusion/bench_e2e_attention.sh.")
+    print("  * For e2e timings, run text_to_video.py / text_to_image.py while varying DIFFUSION_ATTENTION_BACKEND.")
 
 
 if __name__ == "__main__":
