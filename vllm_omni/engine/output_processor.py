@@ -1,11 +1,9 @@
+import inspect
 from typing import Any
 
 import numpy as np
 import torch
 from vllm.logger import init_logger
-from vllm.model_executor.layers.fused_moe.routed_experts_capturer import (
-    split_routed_experts,
-)
 from vllm.outputs import PoolingRequestOutput
 from vllm.sampling_params import RequestOutputKind
 from vllm.tokenizers import TokenizerLike
@@ -24,6 +22,39 @@ from vllm_omni.engine.output_modality import DRAINABLE_MODALITIES
 from vllm_omni.outputs import OmniRequestOutput
 
 logger = init_logger(__name__)
+
+_SUPPORTS_PROMPT_ROUTED_EXPERTS = "prompt_routed_experts" in inspect.signature(
+    RequestState._new_request_output
+).parameters
+
+
+try:
+    from vllm.model_executor.layers.fused_moe.routed_experts_capturer import (
+        split_routed_experts,
+    )
+except ImportError:
+
+    def split_routed_experts(
+        routed_experts: np.ndarray,
+        prompt_len: int,
+        num_output_tokens: int | None = None,
+    ) -> tuple[np.ndarray | None, np.ndarray | None]:
+        prompt_routed_experts = routed_experts[:prompt_len]
+        gen_routed_experts = routed_experts[prompt_len:]
+
+        if (
+            num_output_tokens is not None
+            and gen_routed_experts.shape[0] > num_output_tokens
+            and num_output_tokens > 0
+        ):
+            gen_routed_experts = gen_routed_experts[:num_output_tokens]
+
+        if prompt_routed_experts.size == 0:
+            prompt_routed_experts = None
+        if gen_routed_experts.size == 0:
+            gen_routed_experts = None
+
+        return prompt_routed_experts, gen_routed_experts
 
 
 class OmniRequestState(RequestState):
@@ -253,12 +284,19 @@ class OmniRequestState(RequestState):
                 return None
             external_req_id = self.parent_req.external_req_id
 
+        if _SUPPORTS_PROMPT_ROUTED_EXPERTS:
+            return self._new_request_output(
+                external_req_id,
+                outputs,
+                finished,
+                kv_transfer_params,
+                prompt_routed_experts,
+            )
         return self._new_request_output(
             external_req_id,
             outputs,
             finished,
             kv_transfer_params,
-            prompt_routed_experts,
         )
 
     def _new_completion_output(
