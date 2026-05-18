@@ -267,7 +267,7 @@ def _extract_inner_output(outputs: Any) -> Any:
 
 def _synchronize_cuda() -> None:
     if torch.cuda.is_available():
-        torch.cuda.synchronize()
+        torch.accelerator.synchronize()
 
 
 def _request_peak_memory_mb(result: Any) -> float | None:
@@ -420,7 +420,7 @@ def _run_variant(args: argparse.Namespace, config: VariantConfig) -> VariantRun:
         del omni
         gc.collect()
         if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+            torch.accelerator.empty_cache()
 
     if not measured_results:
         raise RuntimeError("No measured results were produced.")
