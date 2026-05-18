@@ -80,8 +80,31 @@ Our test scripts use the pytest framework. First, please use `git clone https://
 
     ```bash
     cd tests
-    pytest -s -v -m "full_model and omni and H100" --run-level=full_model
+    pytest -s -v -m "full_model and (omni or tts) and H100" --run-level=full_model
     ```
+
+=== "L5 level"
+
+    L5 includes stability and reliability testing. Typical commands:
+
+    ```bash
+    cd tests
+
+    # Stability: Qwen3-Omni
+    pytest -s -v dfx/stability/scripts/test_stability_qwen3_omni.py -m slow
+
+    # Stability: Wan2.2 (v1/videos diffusion benchmark loop)
+    pytest -s -v dfx/stability/scripts/test_stability_wan22.py -m slow
+
+    # Reliability: Qwen3-Omni
+    pytest -s -v dfx/reliability/test_reliability_qwen3_omni.py -m slow
+
+    # Reliability: Wan2.2
+    pytest -s -v dfx/reliability/test_reliability_wan22.py -m slow
+
+    ```
+
+    The latest L5 commands for CI can be found in the [pipeline](https://github.com/vllm-project/vllm-omni/blob/main/.buildkite/test-ready.yml).
 
 You can find more information about markers in the documentation: [marker doc](./tests_markers.md)
 
