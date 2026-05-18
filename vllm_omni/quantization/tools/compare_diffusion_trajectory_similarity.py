@@ -265,11 +265,6 @@ def _extract_inner_output(outputs: Any) -> Any:
     return outputs
 
 
-def _synchronize_cuda() -> None:
-    if torch.cuda.is_available():
-        torch.accelerator.synchronize()
-
-
 def _request_peak_memory_mb(result: Any) -> float | None:
     diffusion_output = getattr(result, "request_output", None)
     peak_memory_mb = getattr(diffusion_output, "peak_memory_mb", None)
@@ -388,6 +383,7 @@ def _build_sampling_params(args: argparse.Namespace, seed: int):
 
 def _run_variant(args: argparse.Namespace, config: VariantConfig) -> VariantRun:
     from vllm_omni.entrypoints.omni import Omni
+    from vllm_omni.platforms import current_omni_platform
 
     omni = Omni(**_build_omni_kwargs(args, config))
     measured_results: list[Any] = []
@@ -410,7 +406,7 @@ def _run_variant(args: argparse.Namespace, config: VariantConfig) -> VariantRun:
                 sampling_params,
                 use_tqdm=False,
             )
-            _synchronize_cuda()
+            current_omni_platform.synchronize()
             generation_times.append(time.perf_counter() - start)
             result = _extract_inner_output(outputs)
             peak_memory_mb.append(_request_peak_memory_mb(result))
@@ -419,8 +415,7 @@ def _run_variant(args: argparse.Namespace, config: VariantConfig) -> VariantRun:
         omni.close()
         del omni
         gc.collect()
-        if torch.cuda.is_available():
-            torch.accelerator.empty_cache()
+        current_omni_platform.empty_cache()
 
     if not measured_results:
         raise RuntimeError("No measured results were produced.")
