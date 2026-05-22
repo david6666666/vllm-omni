@@ -101,14 +101,20 @@ class HunyuanVideo15RotaryPosEmbed(nn.Module):
         self.patch_size_t = patch_size_t
         self.rope_dim = rope_dim
         self.theta = theta
+        self._freqs_cache: dict[
+            tuple[torch.device, torch.dtype, tuple[int, int, int]],
+            tuple[torch.Tensor, torch.Tensor],
+        ] = {}
 
-    def forward(self, hidden_states: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        batch_size, num_channels, num_frames, height, width = hidden_states.shape
-        rope_sizes = [num_frames // self.patch_size_t, height // self.patch_size, width // self.patch_size]
-
+    def _compute_freqs(
+        self,
+        device: torch.device,
+        dtype: torch.dtype,
+        rope_sizes: tuple[int, int, int],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         axes_grids = []
         for i in range(len(rope_sizes)):
-            grid = torch.arange(0, rope_sizes[i], device=hidden_states.device, dtype=torch.float32)
+            grid = torch.arange(0, rope_sizes[i], device=device, dtype=torch.float32)
             axes_grids.append(grid)
         grid = torch.meshgrid(*axes_grids, indexing="ij")
         grid = torch.stack(grid, dim=0)  # [3, T', H', W']
@@ -120,8 +126,33 @@ class HunyuanVideo15RotaryPosEmbed(nn.Module):
             freq_cis = get_1d_rotary_pos_embed(self.rope_dim[i], grid[i].reshape(-1), self.theta, use_real=False)
             freqs.append((freq_cis.real, freq_cis.imag))
 
-        freqs_cos = torch.cat([f[0] for f in freqs], dim=1).float()
-        freqs_sin = torch.cat([f[1] for f in freqs], dim=1).float()
+        freqs_cos = torch.cat([f[0] for f in freqs], dim=1).to(dtype=dtype)
+        freqs_sin = torch.cat([f[1] for f in freqs], dim=1).to(dtype=dtype)
+        return freqs_cos, freqs_sin
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        dtype: torch.dtype | None = None,
+        use_cache: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        batch_size, num_channels, num_frames, height, width = hidden_states.shape
+        del batch_size, num_channels
+        dtype = dtype or torch.float32
+        rope_sizes = (
+            num_frames // self.patch_size_t,
+            height // self.patch_size,
+            width // self.patch_size,
+        )
+        cache_key = (hidden_states.device, dtype, rope_sizes)
+        if use_cache:
+            cached = self._freqs_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+        freqs_cos, freqs_sin = self._compute_freqs(hidden_states.device, dtype, rope_sizes)
+        if use_cache:
+            self._freqs_cache[cache_key] = (freqs_cos, freqs_sin)
         return freqs_cos, freqs_sin
 
 
@@ -641,6 +672,47 @@ class HunyuanVideo15Transformer3DModel(nn.Module):
         self.norm_out = AdaLayerNormContinuous(inner_dim, inner_dim, elementwise_affine=False, eps=1e-6)
         self.proj_out = nn.Linear(inner_dim, patch_size_t * patch_size * patch_size * self.out_channels)
 
+    def prepare_image_encoder_states(
+        self,
+        image_embeds: torch.Tensor,
+        image_embeds_mask: torch.Tensor | None,
+        encoder_attention_mask: torch.Tensor,
+        image_embeds_are_zero: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        batch_size = image_embeds.shape[0]
+        if image_embeds_are_zero:
+            encoder_hidden_states_3 = image_embeds.new_zeros(batch_size, image_embeds.shape[1], self.inner_dim)
+            encoder_attention_mask_3 = torch.zeros(
+                (batch_size, encoder_hidden_states_3.shape[1]),
+                dtype=encoder_attention_mask.dtype,
+                device=encoder_attention_mask.device,
+            )
+        else:
+            encoder_hidden_states_3 = self.image_embedder(image_embeds)
+            if image_embeds_mask is not None:
+                encoder_attention_mask_3 = image_embeds_mask
+            else:
+                # Fallback: detect T2V by checking if image_embeds are all zeros.
+                is_t2v = torch.all(image_embeds == 0)
+                if is_t2v:
+                    encoder_hidden_states_3 = encoder_hidden_states_3 * 0.0
+                    encoder_attention_mask_3 = torch.zeros(
+                        (batch_size, encoder_hidden_states_3.shape[1]),
+                        dtype=encoder_attention_mask.dtype,
+                        device=encoder_attention_mask.device,
+                    )
+                else:
+                    encoder_attention_mask_3 = torch.ones(
+                        (batch_size, encoder_hidden_states_3.shape[1]),
+                        dtype=encoder_attention_mask.dtype,
+                        device=encoder_attention_mask.device,
+                    )
+
+        encoder_hidden_states_3_cond_emb = self.cond_type_embed(
+            2 * torch.ones_like(encoder_hidden_states_3[:, :, 0], dtype=torch.long)
+        )
+        return encoder_hidden_states_3 + encoder_hidden_states_3_cond_emb, encoder_attention_mask_3
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -652,6 +724,7 @@ class HunyuanVideo15Transformer3DModel(nn.Module):
         encoder_attention_mask_2: torch.Tensor | None = None,
         image_embeds: torch.Tensor | None = None,
         image_embeds_mask: torch.Tensor | None = None,
+        image_embeds_are_zero: bool = False,
         attention_kwargs: dict[str, Any] | None = None,
         return_dict: bool = True,
     ) -> torch.Tensor | Transformer2DModelOutput:
@@ -693,29 +766,12 @@ class HunyuanVideo15Transformer3DModel(nn.Module):
         )
         encoder_hidden_states_2 = encoder_hidden_states_2 + encoder_hidden_states_2_cond_emb
 
-        encoder_hidden_states_3 = self.image_embedder(image_embeds)
-        if image_embeds_mask is not None:
-            encoder_attention_mask_3 = image_embeds_mask
-        else:
-            # Fallback: detect T2V by checking if image_embeds are all zeros
-            is_t2v = torch.all(image_embeds == 0)
-            if is_t2v:
-                encoder_hidden_states_3 = encoder_hidden_states_3 * 0.0
-                encoder_attention_mask_3 = torch.zeros(
-                    (batch_size, encoder_hidden_states_3.shape[1]),
-                    dtype=encoder_attention_mask.dtype,
-                    device=encoder_attention_mask.device,
-                )
-            else:
-                encoder_attention_mask_3 = torch.ones(
-                    (batch_size, encoder_hidden_states_3.shape[1]),
-                    dtype=encoder_attention_mask.dtype,
-                    device=encoder_attention_mask.device,
-                )
-        encoder_hidden_states_3_cond_emb = self.cond_type_embed(
-            2 * torch.ones_like(encoder_hidden_states_3[:, :, 0], dtype=torch.long)
+        encoder_hidden_states_3, encoder_attention_mask_3 = self.prepare_image_encoder_states(
+            image_embeds,
+            image_embeds_mask,
+            encoder_attention_mask,
+            image_embeds_are_zero=image_embeds_are_zero,
         )
-        encoder_hidden_states_3 = encoder_hidden_states_3 + encoder_hidden_states_3_cond_emb
 
         # Token reordering: [valid_image, valid_byte5, valid_mllm, padding]
         encoder_attention_mask = encoder_attention_mask.bool()

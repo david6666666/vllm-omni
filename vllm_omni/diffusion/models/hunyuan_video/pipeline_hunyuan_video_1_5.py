@@ -174,6 +174,7 @@ class HunyuanVideo15Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, Diff
         self._guidance_scale = None
         self._num_timesteps = None
         self._current_timestep = None
+        self._scheduler_timesteps_cache: dict[tuple[Any, ...], tuple[torch.Tensor, torch.Tensor]] = {}
 
         self.setup_diffusion_pipeline_profiler(
             enable_diffusion_pipeline_profiler=self.od_config.enable_diffusion_pipeline_profiler
@@ -361,6 +362,72 @@ class HunyuanVideo15Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, Diff
         mask = torch.zeros(batch, 1, frames, height, width, dtype=dtype, device=device)
         return cond_latents, mask
 
+    def prepare_t2v_latent_model_input(self, latents: torch.Tensor) -> torch.Tensor:
+        batch, channels, frames, height, width = latents.shape
+        latent_model_input = latents.new_zeros(batch, channels * 2 + 1, frames, height, width)
+        latent_model_input[:, :channels].copy_(latents)
+        return latent_model_input
+
+    def update_t2v_latent_model_input(self, latent_model_input: torch.Tensor, latents: torch.Tensor) -> torch.Tensor:
+        latent_model_input[:, : latents.shape[1]].copy_(latents)
+        return latent_model_input
+
+    def prepare_t2v_image_embeds(
+        self,
+        batch_size: int,
+        dtype: torch.dtype,
+        device: torch.device,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        image_embeds = torch.zeros(
+            batch_size,
+            self.vision_num_semantic_tokens,
+            self.vision_states_dim,
+            dtype=dtype,
+            device=device,
+        )
+        image_embeds_mask = torch.zeros(
+            batch_size,
+            self.vision_num_semantic_tokens,
+            dtype=dtype,
+            device=device,
+        )
+        return image_embeds, image_embeds_mask
+
+    def get_scheduler_timesteps(self, num_steps: int, device: torch.device) -> torch.Tensor:
+        scheduler = self.scheduler
+        config = scheduler.config
+        device = torch.device(device)
+        cache = getattr(self, "_scheduler_timesteps_cache", None)
+        if cache is None:
+            cache = self._scheduler_timesteps_cache = {}
+
+        cache_key = (
+            num_steps,
+            device.type,
+            device.index,
+            float(getattr(scheduler, "shift", getattr(scheduler, "_shift", 1.0))),
+            bool(getattr(config, "use_dynamic_shifting", False)),
+            bool(getattr(config, "shift_terminal", False)),
+            bool(getattr(config, "use_karras_sigmas", False)),
+            bool(getattr(config, "use_exponential_sigmas", False)),
+            bool(getattr(config, "use_beta_sigmas", False)),
+            bool(getattr(config, "invert_sigmas", False)),
+            int(getattr(config, "num_train_timesteps", 1000)),
+        )
+
+        cached = cache.get(cache_key)
+        if cached is not None:
+            scheduler.timesteps, scheduler.sigmas = cached
+            scheduler.num_inference_steps = num_steps
+            scheduler._step_index = None
+            scheduler._begin_index = None
+            return scheduler.timesteps
+
+        sigmas = np.linspace(1.0, 0.0, num_steps + 1)[:-1]
+        scheduler.set_timesteps(sigmas=sigmas, device=device)
+        cache[cache_key] = (scheduler.timesteps, scheduler.sigmas)
+        return scheduler.timesteps
+
     def predict_noise(self, **kwargs: Any) -> torch.Tensor:
         return self.transformer(**kwargs)[0]
 
@@ -432,30 +499,19 @@ class HunyuanVideo15Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, Diff
             generator=generator,
             latents=req.sampling_params.latents,
         )
-        cond_latents, mask = self.prepare_cond_latents_and_mask(latents, dtype, device)
-
-        # Image embeds (zeros for T2V, no mask — let the transformer detect T2V
-        # via the all-zeros check, matching the diffusers reference behaviour)
-        image_embeds = torch.zeros(
-            batch_size,
-            self.vision_num_semantic_tokens,
-            self.vision_states_dim,
-            dtype=dtype,
-            device=device,
-        )
+        latent_model_input = self.prepare_t2v_latent_model_input(latents)
+        image_embeds, image_embeds_mask = self.prepare_t2v_image_embeds(batch_size, dtype, device)
 
         # Timesteps — the scheduler handles flow_shift via its config (`shift` param).
         # We just provide unshifted linear sigmas, matching the diffusers reference.
-        sigmas = np.linspace(1.0, 0.0, num_steps + 1)[:-1]
-        self.scheduler.set_timesteps(sigmas=sigmas, device=device)
-        timesteps = self.scheduler.timesteps
+        timesteps = self.get_scheduler_timesteps(num_steps, device)
         self._num_timesteps = len(timesteps)
 
         with self.progress_bar(total=len(timesteps)) as pbar:
             for i, t in enumerate(timesteps):
                 self._current_timestep = t
 
-                latent_model_input = torch.cat([latents, cond_latents, mask], dim=1)
+                latent_model_input = self.update_t2v_latent_model_input(latent_model_input, latents)
                 timestep = t.expand(latent_model_input.shape[0]).to(latent_model_input.dtype)
 
                 timestep_r = None
@@ -475,6 +531,8 @@ class HunyuanVideo15Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, Diff
                     "encoder_hidden_states_2": prompt_embeds_2,
                     "encoder_attention_mask_2": prompt_embeds_mask_2,
                     "image_embeds": image_embeds,
+                    "image_embeds_mask": image_embeds_mask,
+                    "image_embeds_are_zero": True,
                     "return_dict": False,
                 }
 
@@ -489,6 +547,8 @@ class HunyuanVideo15Pipeline(nn.Module, CFGParallelMixin, ProgressBarMixin, Diff
                         "encoder_hidden_states_2": negative_prompt_embeds_2,
                         "encoder_attention_mask_2": negative_prompt_embeds_mask_2,
                         "image_embeds": image_embeds,
+                        "image_embeds_mask": image_embeds_mask,
+                        "image_embeds_are_zero": True,
                         "return_dict": False,
                     }
 

@@ -1,0 +1,176 @@
+{
+  "baseline_repeat_calibration": {
+    "changed_frame_count": 33,
+    "changed_frame_indices_first20": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19
+    ],
+    "exact_equal": false,
+    "frame_sha256": {
+      "baseline": "4eeb3d3b5a50bab964e637eaee76ecdfe6b7fea7990d0360150c02e43f7149c9",
+      "repeat": "ba5a185422d3267df65e29dad59725e5e476c4f42dfe7ec0b4f8279a43ff1157"
+    },
+    "global_max_abs_diff": 211,
+    "global_mean_abs_diff": 25.461327846777067,
+    "note": "Same unoptimized code path rerun with identical prompt, fixed CPU latents, seed, resolution, and steps. This calibrates current full-pipeline/video-decode nondeterminism.",
+    "output_metrics": {
+      "all_frames_metrics": {
+        "cosine_similarity": 0.940330636883684,
+        "l2": 229241.6574948803,
+        "mae": 25.461327846777067,
+        "max_abs": 211.0,
+        "mse": 1329.1907843205695,
+        "psnr_db": 16.89493039345045,
+        "relative_l2": 0.3445245280570097,
+        "rmse": 36.45806885067515
+      },
+      "frame0_metrics": {
+        "cosine_similarity": 0.9347968457617859,
+        "l2": 38772.257504561174,
+        "mae": 23.340875400641025,
+        "max_abs": 209.0,
+        "mse": 1254.7475560897435,
+        "psnr_db": 17.145240024016598,
+        "relative_l2": 0.3589912584225493,
+        "rmse": 35.42241601147137
+      },
+      "mid_frame_index": 16,
+      "mid_frame_metrics": {
+        "cosine_similarity": 0.942451825606573,
+        "l2": 40506.45438692456,
+        "mae": 26.269603866185896,
+        "max_abs": 202.0,
+        "mse": 1369.5019088875533,
+        "psnr_db": 16.76517718933824,
+        "relative_l2": 0.33714062530047373,
+        "rmse": 37.00678193098602
+      },
+      "num_frames": 33
+    },
+    "repeat_file_sha256": "6f29b359594f1da3e8ffcbd9ec337e629b7b9c9113dbbf235846773794d53ef9",
+    "repeat_generation_time_ms": 99235.1,
+    "repeat_path": "/home/zjy/code/david/tmp/hv15_full_compare/baseline_33f_repeat.mp4",
+    "shape": [
+      33,
+      480,
+      832,
+      3
+    ]
+  },
+  "changed_frame_count": 33,
+  "changed_frame_indices_first20": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19
+  ],
+  "exact_equal": false,
+  "frame_sha256": {
+    "baseline": "4eeb3d3b5a50bab964e637eaee76ecdfe6b7fea7990d0360150c02e43f7149c9",
+    "optimized": "f95066487193b5c77833fea948e02c58ff80b8d77c38e09eb4464a32828b1a9d"
+  },
+  "global_max_abs_diff": 211,
+  "global_mean_abs_diff": 26.15104386715715,
+  "model": "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v",
+  "output_metrics": {
+    "all_frames_metrics": {
+      "cosine_similarity": 0.9372001809261314,
+      "l2": 232980.82356494493,
+      "mae": 26.15104386715715,
+      "max_abs": 211.0,
+      "mse": 1372.9053391739915,
+      "psnr_db": 16.754397668879875,
+      "relative_l2": 0.3501440757417257,
+      "rmse": 37.0527372696538
+    },
+    "frame0_metrics": {
+      "cosine_similarity": 0.932359519804853,
+      "l2": 39204.23414632659,
+      "mae": 23.922301515758548,
+      "max_abs": 205.0,
+      "mse": 1282.862559261485,
+      "psnr_db": 17.04900230565992,
+      "relative_l2": 0.36299091818490054,
+      "rmse": 35.817070780027294
+    },
+    "mid_frame_index": 16,
+    "mid_frame_metrics": {
+      "cosine_similarity": 0.9390078342008163,
+      "l2": 41388.44925821696,
+      "mae": 27.15909622061966,
+      "max_abs": 204.0,
+      "mse": 1429.7907752403846,
+      "psnr_db": 16.578078701206906,
+      "relative_l2": 0.34448158631322817,
+      "rmse": 37.8125743006263
+    },
+    "num_frames": 33
+  },
+  "outputs": {
+    "baseline": {
+      "file_sha256": "a599e7f87cbafb360f230996f2f38881564502d8da7607e95ce2e15a61700986",
+      "generation_time_ms": 99277.8,
+      "path": "benchmarks/diffusion/hunyuan_video_1_5_480p_single_gpu/baseline_33f.mp4",
+      "size_bytes": 270336
+    },
+    "optimized": {
+      "file_sha256": "0ac6923395b5cb66a537b44f81efa74ca70f4210c4c20afd2c41f3b033771851",
+      "generation_time_ms": 99179.13,
+      "path": "benchmarks/diffusion/hunyuan_video_1_5_480p_single_gpu/optimized_33f.mp4",
+      "size_bytes": 282328
+    }
+  },
+  "prompt": "A cat walks through a sunlit garden, flowers swaying gently in the breeze.",
+  "sampling_kwargs": {
+    "fixed_cpu_latents": true,
+    "flow_shift": 5.0,
+    "fps": 24,
+    "guidance_scale": 6.0,
+    "height": 480,
+    "num_frames": 33,
+    "num_inference_steps": 50,
+    "task": "t2v",
+    "width": 832
+  },
+  "seed": 1234,
+  "shape": [
+    33,
+    480,
+    832,
+    3
+  ]
+}
