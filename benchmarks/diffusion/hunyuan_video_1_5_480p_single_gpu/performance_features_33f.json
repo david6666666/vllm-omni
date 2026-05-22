@@ -1,0 +1,153 @@
+{
+  "features": {
+    "rope_cos_sin_cache": {
+      "baseline": "recompute cos/sin from arange/meshgrid/cat each call",
+      "baseline_ms": {
+        "max_ms": 0.22795703262090683,
+        "mean_ms": 0.19785797223448753,
+        "median_ms": 0.19591592717915773,
+        "min_ms": 0.18575601279735565,
+        "repeat": 50,
+        "warmup": 10
+      },
+      "input_shape": [
+        1,
+        65,
+        9,
+        30,
+        52
+      ],
+      "optimized": "cache cos/sin by shape/device/dtype",
+      "optimized_ms": {
+        "max_ms": 0.012470176443457603,
+        "mean_ms": 0.005444693379104137,
+        "median_ms": 0.005349982529878616,
+        "min_ms": 0.004970002919435501,
+        "repeat": 200,
+        "warmup": 10
+      },
+      "speedup": 36.33959866203573
+    },
+    "scheduler_timesteps_sigmas_cache": {
+      "baseline": "scheduler.set_timesteps(sigmas=np.linspace(...), device=device) per request",
+      "baseline_ms": {
+        "max_ms": 0.09928806684911251,
+        "mean_ms": 0.032220006454735994,
+        "median_ms": 0.031589996069669724,
+        "min_ms": 0.029359012842178345,
+        "repeat": 500,
+        "warmup": 50
+      },
+      "num_inference_steps": 50,
+      "optimized": "reuse cached scheduler.timesteps/sigmas for identical scheduler settings",
+      "optimized_ms": {
+        "max_ms": 0.013071112334728241,
+        "mean_ms": 0.0049934424459934235,
+        "median_ms": 0.004970002919435501,
+        "min_ms": 0.004519941285252571,
+        "repeat": 500,
+        "warmup": 50
+      },
+      "speedup": 6.4524637668725475
+    },
+    "t2v_explicit_image_embeds_mask": {
+      "baseline": "run image projection, then torch.all(image_embeds == 0) fallback detection",
+      "baseline_ms": {
+        "max_ms": 0.14635687693953514,
+        "mean_ms": 0.12595510731140772,
+        "median_ms": 0.12408697512000799,
+        "min_ms": 0.1183878630399704,
+        "repeat": 60,
+        "warmup": 10
+      },
+      "image_embeds_shape": [
+        1,
+        729,
+        1152
+      ],
+      "optimized": "pass explicit all-zero image_embeds_mask and skip torch.all fallback detection",
+      "optimized_ms": {
+        "max_ms": 0.09346799924969673,
+        "mean_ms": 0.08021936131020387,
+        "median_ms": 0.07913855370134115,
+        "min_ms": 0.07595913484692574,
+        "repeat": 60,
+        "warmup": 10
+      },
+      "speedup": 1.5701335095943514
+    },
+    "t2v_latent_model_input_reuse": {
+      "baseline": "torch.cat([latents, cond_latents, mask], dim=1) each denoise step",
+      "baseline_ms": {
+        "max_ms": 0.02365000545978546,
+        "mean_ms": 0.01836216387649377,
+        "median_ms": 0.017964979633688927,
+        "min_ms": 0.01685996539890766,
+        "repeat": 300,
+        "warmup": 50
+      },
+      "latent_shape": [
+        1,
+        32,
+        9,
+        30,
+        52
+      ],
+      "model_input_shape": [
+        1,
+        65,
+        9,
+        30,
+        52
+      ],
+      "optimized": "preallocate concatenated input and copy current latents into the first slice",
+      "optimized_ms": {
+        "max_ms": 0.018439022824168205,
+        "mean_ms": 0.011439102236181498,
+        "median_ms": 0.011335010640323162,
+        "min_ms": 0.010519986972212791,
+        "repeat": 300,
+        "warmup": 50
+      },
+      "speedup": 1.605210225188377
+    },
+    "t2v_zero_image_projection_fast_path": {
+      "baseline": "run image projection for all-zero T2V image_embeds",
+      "baseline_ms": {
+        "max_ms": 0.09346799924969673,
+        "mean_ms": 0.08021936131020387,
+        "median_ms": 0.07913855370134115,
+        "min_ms": 0.07595913484692574,
+        "repeat": 60,
+        "warmup": 10
+      },
+      "image_embeds_shape": [
+        1,
+        729,
+        1152
+      ],
+      "optimized": "construct zero projected states and add cond_type_embed without image_embedder",
+      "optimized_ms": {
+        "max_ms": 0.05336897447705269,
+        "mean_ms": 0.043216674821451306,
+        "median_ms": 0.042564584873616695,
+        "min_ms": 0.040668994188308716,
+        "repeat": 200,
+        "warmup": 10
+      },
+      "speedup": 1.8562131779371807
+    }
+  },
+  "full_generation_33f": {
+    "baseline_ms": 99277.8,
+    "delta_ms": -98.66999999999825,
+    "optimized_ms": 99179.13,
+    "speedup": 1.0009948665611403
+  },
+  "model": "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v",
+  "notes": [
+    "Microbenchmarks isolate per-step invariant-work/allocation changes; they are not additive end-to-end speedups.",
+    "Full-generation timing is from the committed 33-frame review run in similarity_33f.json."
+  ],
+  "scenario": "single GPU, CUDA_VISIBLE_DEVICES=3, 480x832, 33 frames, batch size 1"
+}
