@@ -50,6 +50,7 @@ SERVER_CASES = [
                 "--flow-shift",
                 str(FLOW_SHIFT),
             ],
+            env_dict={"VLLM_OMNI_STORAGE_PATH": str(RESULT_ROOT / "storage")},
             use_omni=True,
         ),
         id="hunyuanvideo15_i2v_default",
