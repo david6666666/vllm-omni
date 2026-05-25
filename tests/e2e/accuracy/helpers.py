@@ -203,6 +203,24 @@ def build_online_image_reference(source: str) -> str:
     return f"data:{mime_type};base64,{encoded}"
 
 
+def materialize_image_source(source: str, output_dir: Path) -> str:
+    if not is_remote_image_source(source):
+        return source
+
+    from diffusers.utils import load_image
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    source_name = Path(urlparse(source).path).name or "input.png"
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", source_name)
+    if "." not in safe_name:
+        safe_name = f"{safe_name}.png"
+    image_path = output_dir / safe_name
+    if not image_path.exists():
+        image = load_image(source).convert("RGB")
+        image.save(image_path)
+    return str(image_path)
+
+
 def video_artifact_dir(result_root: Path, source: str) -> Path:
     if is_remote_image_source(source):
         source_name = Path(urlparse(source).path).stem or "remote"

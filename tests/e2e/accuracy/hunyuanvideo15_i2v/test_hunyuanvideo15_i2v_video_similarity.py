@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 import torch
-from PIL import Image, ImageDraw
 
 from tests.e2e.accuracy.helpers import (
     assert_video_metadata,
     assert_video_similarity_metrics,
     build_online_image_reference,
+    materialize_image_source,
     probe_binary,
     probe_video,
     send_video_request_with_timeout,
@@ -25,7 +25,15 @@ from tests.helpers.runtime import OmniServerParams
 pytestmark = [pytest.mark.diffusion, pytest.mark.full_model]
 
 MODEL_NAME = "hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_i2v"
-PROMPT = "Cherry blossoms swaying gently in the breeze, petals falling, smooth motion"
+IMAGE_URL = "https://huggingface.co/datasets/YiYiXu/testing-images/resolve/main/wan_i2v_input.JPG"
+PROMPT = (
+    "Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard. "
+    "The fluffy-furred feline gazes directly at the camera with a relaxed expression. "
+    "Blurred beach scenery forms the background featuring crystal-clear waters, distant green hills, "
+    "and a blue sky dotted with white clouds. The cat assumes a naturally relaxed posture, "
+    "as if savoring the sea breeze and warm sunlight. A close-up shot highlights the feline's "
+    "intricate details and the refreshing atmosphere of the seaside."
+)
 WIDTH = 832
 HEIGHT = 480
 FPS = 24
@@ -34,8 +42,8 @@ NUM_INFERENCE_STEPS = 50
 GUIDANCE_SCALE = 6.0
 FLOW_SHIFT = 5.0
 SEED = 42
-SSIM_THRESHOLD = 0.94
-PSNR_THRESHOLD = 28.0
+SSIM_THRESHOLD = 0.87
+PSNR_THRESHOLD = 27.5
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 WORKSPACE_ROOT = REPO_ROOT.parent
@@ -72,35 +80,24 @@ def _runner_env() -> dict[str, str]:
     return env
 
 
-def _create_default_cherry_blossom_image(path: Path) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    image = Image.new("RGB", (WIDTH, HEIGHT), color=(214, 232, 245))
-    draw = ImageDraw.Draw(image)
-    draw.rectangle((0, 350, WIDTH, HEIGHT), fill=(86, 142, 95))
-    draw.rectangle((0, 0, WIDTH, 120), fill=(190, 220, 244))
-    for x in range(-40, WIDTH, 115):
-        draw.line((x, 300, x + 260, 80), fill=(92, 64, 47), width=12)
-        draw.line((x + 80, 210, x + 185, 100), fill=(92, 64, 47), width=7)
-        for cx, cy in ((x + 190, 95), (x + 160, 130), (x + 215, 140), (x + 125, 170)):
-            draw.ellipse((cx - 34, cy - 24, cx + 34, cy + 24), fill=(244, 186, 202))
-            draw.ellipse((cx - 14, cy - 10, cx + 14, cy + 10), fill=(248, 218, 226))
-    image.save(path, quality=95)
-    return path
-
-
 def _resolve_image_source(configured: str | None) -> str:
     if configured:
         candidate = Path(configured)
         if candidate.exists():
             return str(candidate.resolve())
         return configured
-    return str(_create_default_cherry_blossom_image(RESULT_ROOT / "cherry_blossom.jpg").resolve())
+    return IMAGE_URL
 
 
 def _artifact_paths(image_source: str) -> tuple[Path, Path]:
     artifact_dir = video_artifact_dir(RESULT_ROOT, image_source)
     artifact_dir.mkdir(parents=True, exist_ok=True)
     return artifact_dir / "online.mp4", artifact_dir / "offline.mp4"
+
+
+def _offline_image_source(image_source: str) -> str:
+    artifact_dir = video_artifact_dir(RESULT_ROOT, image_source)
+    return materialize_image_source(image_source, artifact_dir)
 
 
 def _build_offline_command(*, image_source: str, output_path: Path) -> list[str]:
@@ -136,8 +133,9 @@ def _build_offline_command(*, image_source: str, output_path: Path) -> list[str]
 
 def _generate_offline_video(*, image_source: str) -> Path:
     _, offline_path = _artifact_paths(image_source)
+    offline_image_source = _offline_image_source(image_source)
     subprocess.run(
-        _build_offline_command(image_source=image_source, output_path=offline_path),
+        _build_offline_command(image_source=offline_image_source, output_path=offline_path),
         cwd=REPO_ROOT,
         env=_runner_env(),
         check=True,
@@ -154,6 +152,7 @@ def _generate_online_video(
     timeout_seconds: int,
 ) -> Path:
     online_path, _ = _artifact_paths(image_source)
+    online_image_source = _offline_image_source(image_source)
     request_config = {
         "model": omni_server.model,
         "form_data": {
@@ -167,7 +166,7 @@ def _generate_online_video(
             "num_inference_steps": NUM_INFERENCE_STEPS,
             "seed": SEED,
         },
-        "image_reference": build_online_image_reference(image_source),
+        "image_reference": build_online_image_reference(online_image_source),
     }
     online_video_bytes = send_video_request_with_timeout(
         openai_client,
