@@ -14,7 +14,6 @@ from vllm_omni.diffusion.data import DiffusionParallelConfig
 from vllm_omni.entrypoints.omni import Omni
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
-from vllm_omni.platforms import current_omni_platform
 
 _MODEL_PRESETS = {
     "wan": {
@@ -267,7 +266,6 @@ def main():
         if getattr(args, key.replace("-", "_"), None) is None:
             setattr(args, key.replace("-", "_"), default_val)
 
-    generator = torch.Generator(device=current_omni_platform.device_type).manual_seed(args.seed)
     # Cache-dit config (Wan2.2 only)
     cache_config = None
     if args.cache_backend == "cache_dit":
@@ -350,7 +348,7 @@ def main():
     sampling_kwargs = dict(
         height=args.height,
         width=args.width,
-        generator=generator,
+        seed=args.seed,
         guidance_scale=args.guidance_scale,
         num_inference_steps=args.num_inference_steps,
         num_frames=args.num_frames,
