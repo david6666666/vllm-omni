@@ -38,8 +38,6 @@ theme:
   features:
     - content.action.edit
     - content.code.copy
-    - navigation.instant
-    - navigation.instant.progress
     - navigation.tracking
     - navigation.tabs
     - navigation.tabs.sticky
@@ -56,6 +54,7 @@ theme:
   custom_dir: docs/mkdocs/overrides
 
 hooks:
+  - docs/mkdocs/hooks/search_index.py
   - docs/mkdocs/hooks/generate_api_readme.py
   - docs/mkdocs/hooks/url_schemes.py
   - docs/mkdocs/hooks/generate_examples.py
@@ -117,6 +116,7 @@ plugins:
             separate_signature: true
             show_overloads: true
             signature_crossrefs: true
+            show_source: false
           inventories:
           - https://docs.python.org/3/objects.inv
           - https://typing-extensions.readthedocs.io/en/latest/objects.inv
@@ -168,8 +168,6 @@ extra_css:
 
 extra_javascript:
   - mkdocs/javascript/mathjax.js
-  - https://unpkg.com/mathjax@3.2.2/es5/tex-mml-chtml.js
-  - https://unpkg.com/mermaid@10/dist/mermaid.min.js
   - mkdocs/javascript/mermaid.js
   - mkdocs/javascript/edit_and_feedback.js
   - mkdocs/javascript/slack_and_forum.js
