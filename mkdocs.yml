@@ -43,6 +43,7 @@ theme:
     - navigation.tabs.sticky
     - navigation.sections
     - navigation.indexes
+    - navigation.prune
     - navigation.top
     - search.suggest
     - search.highlight
@@ -167,6 +168,7 @@ extra_css:
   - mkdocs/stylesheets/extra.css
 
 extra_javascript:
+  - mkdocs/javascript/memory.js
   - mkdocs/javascript/mathjax.js
   - mkdocs/javascript/mermaid.js
   - mkdocs/javascript/edit_and_feedback.js
