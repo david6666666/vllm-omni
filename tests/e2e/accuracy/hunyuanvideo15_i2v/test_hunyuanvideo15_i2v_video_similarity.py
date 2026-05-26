@@ -57,7 +57,6 @@ SERVER_CASES = [
             server_args=[
                 "--flow-shift",
                 str(FLOW_SHIFT),
-                "--enforce-eager",
             ],
             env_dict={"VLLM_OMNI_STORAGE_PATH": str(RESULT_ROOT / "storage")},
             use_omni=True,
@@ -127,7 +126,6 @@ def _build_offline_command(*, image_source: str, output_path: Path) -> list[str]
         str(FPS),
         "--seed",
         str(SEED),
-        "--enforce-eager",
         "--output",
         str(output_path),
     ]

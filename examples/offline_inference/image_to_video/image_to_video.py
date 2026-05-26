@@ -46,6 +46,7 @@ from vllm_omni.diffusion.data import DiffusionParallelConfig
 from vllm_omni.entrypoints.omni import Omni
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
+from vllm_omni.platforms import current_omni_platform
 
 
 def parse_profiler_config(value: str) -> dict[str, Any]:
@@ -262,6 +263,7 @@ def calculate_dimensions(
 
 def main():
     args = parse_args()
+    generator = torch.Generator(device=current_omni_platform.device_type).manual_seed(args.seed)
     model_name = str(args.model).lower() if args.model is not None else ""
     model_class_name = args.model_class_name
     is_ltx2 = "ltx2" in model_name or (model_class_name and "ltx2" in model_class_name.lower())
@@ -390,7 +392,7 @@ def main():
         OmniDiffusionSamplingParams(
             height=height,
             width=width,
-            seed=args.seed,
+            generator=generator,
             guidance_scale=guidance_scale,
             guidance_scale_2=args.guidance_scale_high,
             boundary_ratio=args.boundary_ratio,
