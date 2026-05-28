@@ -627,6 +627,115 @@ def test_video_job_persists_profiler_metadata(test_client, mocker: MockerFixture
 
     assert completed["stage_durations"] == {"diffuse": 2.5, "vae.decode": 0.3}
     assert completed["peak_memory_mb"] == 4096.5
+    assert completed["action"] is None
+
+
+def test_video_generation_response_exposes_action_payload(mocker: MockerFixture):
+    engine = FakeAsyncOmni()
+    handler = OmniOpenAIServingVideo.for_diffusion(
+        diffusion_engine=engine,
+        model_name="Cosmos3-8B-UVA",
+    )
+
+    async def _generate(prompt, request_id, sampling_params_list):
+        del prompt, request_id, sampling_params_list
+        import numpy as np
+
+        yield MockVideoResult(
+            [object()],
+            custom_output={
+                "action": np.array([[[1.5, 2.5], [3.5, 4.5]]], dtype=np.float32),
+                "raw_action_dim": 2,
+                "action_mode": "policy",
+                "domain_id": 7,
+            },
+        )
+
+    engine.generate = _generate
+    mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video.encode_video_base64",
+        return_value="encoded-video",
+    )
+
+    response = asyncio.run(
+        handler.generate_videos(
+            VideoGenerationRequest(prompt="predict actions"),
+            "action-json",
+        )
+    )
+
+    action = response.data[0].action
+    assert action is not None
+    assert action.data == [[1.5, 2.5], [3.5, 4.5]]
+    assert action.shape == [2, 2]
+    assert action.dtype == "float32"
+    assert action.raw_action_dim == 2
+    assert action.action_mode == "policy"
+    assert action.domain_id == 7
+    assert response.model_dump(mode="json")["data"][0]["action"]["data"] == [[1.5, 2.5], [3.5, 4.5]]
+
+
+def test_video_job_persists_action_metadata(test_client, mocker: MockerFixture):
+    engine = test_client.app.state.openai_serving_video._engine_client
+
+    async def _generate(prompt, request_id, sampling_params_list):
+        import numpy as np
+
+        engine.captured_prompt = prompt
+        engine.captured_sampling_params_list = sampling_params_list
+        yield MockVideoResult(
+            [object()],
+            custom_output={
+                "action": np.array([[[1.0, 2.0], [3.0, 4.0]]], dtype=np.float32),
+                "raw_action_dim": 2,
+                "action_mode": "policy",
+                "domain_id": 7,
+            },
+        )
+
+    engine.generate = _generate
+    mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video._encode_video_bytes",
+        return_value=b"fake-video",
+    )
+
+    response = test_client.post("/v1/videos", data={"prompt": "profile me"})
+    assert response.status_code == 200
+    video_id = response.json()["id"]
+    completed = _wait_for_status(test_client, video_id, VideoGenerationStatus.COMPLETED.value)
+
+    expected_action = {
+        "data": [[1.0, 2.0], [3.0, 4.0]],
+        "shape": [2, 2],
+        "dtype": "float32",
+        "raw_action_dim": 2,
+        "action_mode": "policy",
+        "domain_id": 7,
+    }
+    assert completed["action"] == expected_action
+
+    listed = test_client.get("/v1/videos").json()
+    assert listed["data"][0]["action"] == expected_action
+
+
+def test_action_extraction_accepts_unbatched_action():
+    import numpy as np
+
+    result = MockVideoResult(
+        [object()],
+        custom_output={
+            "action": np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
+            "raw_action_dim": 2,
+            "action_mode": "policy",
+            "domain_id": 7,
+        },
+    )
+
+    actions = OmniOpenAIServingVideo._extract_action_outputs(result, expected_count=1)
+
+    assert actions[0] is not None
+    assert actions[0].data == [[1.0, 2.0], [3.0, 4.0]]
+    assert actions[0].shape == [2, 2]
 
 
 def test_missing_handler_returns_503():
