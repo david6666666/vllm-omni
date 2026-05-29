@@ -251,12 +251,14 @@ class DiffusionEngine:
         custom_output = output.custom_output or {}
         model_audio_sample_rate = None
         model_fps = None
+        has_video_payload = False
         if isinstance(outputs, dict):
             audio_payload = outputs.get("audio")
             custom_output.update(outputs.get("custom_output") or {})
             model_audio_sample_rate = outputs.get("audio_sample_rate")
             model_fps = outputs.get("fps")
-            outputs = outputs.get("video", outputs)
+            has_video_payload = "video" in outputs and outputs["video"] is not None
+            outputs = outputs["video"] if has_video_payload else outputs
         postprocess_time = time.perf_counter() - postprocess_start_time
         logger.debug("Post-processing completed in %.4f seconds", postprocess_time)
 
@@ -291,6 +293,7 @@ class DiffusionEngine:
 
         # Handle single request or multiple requests
         is_audio_output = supports_audio_output(self.od_config.model_class_name)
+        is_audio_only_output = is_audio_output and not has_video_payload
         if is_audio_output and model_audio_sample_rate is None:
             model_cls = DiffusionModelRegistry._try_load_model_cls(self.od_config.model_class_name)
             model_audio_sample_rate = getattr(model_cls, "audio_sample_rate", None)
@@ -319,7 +322,7 @@ class DiffusionEngine:
                         peak_memory_mb=output.peak_memory_mb,
                     ),
                 ]
-            if is_audio_output:
+            if is_audio_only_output:
                 request_audio_payload = outputs[0] if len(outputs) == 1 else outputs
                 return [
                     OmniRequestOutput.from_diffusion(
@@ -378,7 +381,7 @@ class DiffusionEngine:
                 request_outputs = outputs[start_idx:end_idx] if output_idx < len(outputs) else []
                 output_idx = end_idx
 
-                if is_audio_output:
+                if is_audio_only_output:
                     request_audio_payload = request_outputs[0] if len(request_outputs) == 1 else request_outputs
                     results.append(
                         OmniRequestOutput.from_diffusion(
