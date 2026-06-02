@@ -59,7 +59,7 @@ from .action import (
     pad_action_to_dim,
     resolve_domain_id,
 )
-from .transformer_cosmos3 import Cosmos3VFMTransformer
+from .transformer_cosmos3 import Cosmos3VFMTransformer, resolve_sound_gen
 
 logger = init_logger(__name__)
 
@@ -414,10 +414,22 @@ class Cosmos3OmniDiffusersPipeline(
         self.vae_scale_factor_temporal = int(self.vae.config.scale_factor_temporal)
         self.vae_scale_factor_spatial = getattr(self.vae.config, "scale_factor_spatial", 16)
 
+        sound_gen = resolve_sound_gen(od_config)
+        sound_dim = None
+        sound_latent_fps = None
+        self._sound_tokenizer = None
+        if sound_gen:
+            self._sound_tokenizer = self._get_sound_tokenizer()
+            sound_dim = self._sound_tokenizer.latent_ch
+            sound_latent_fps = self._sound_tokenizer.latent_fps
+
         # --- Transformer (weights loaded later via weights_sources) ---
         self.transformer = Cosmos3VFMTransformer(
             od_config=od_config,
             temporal_compression_factor=self.vae_scale_factor_temporal,
+            sound_gen=sound_gen,
+            sound_dim=sound_dim,
+            sound_latent_fps=sound_latent_fps,
         )
 
         # --- Scheduler ---
@@ -457,9 +469,6 @@ class Cosmos3OmniDiffusersPipeline(
 
         self._guidance_scale = None
         self._num_timesteps = None
-        self._sound_tokenizer = None
-        if getattr(self.transformer, "sound_gen", False):
-            self._get_sound_tokenizer()
 
         # Set True by ``enable_cache_for_cosmos3`` when cache-dit is enabled on
         # this pipeline. Tells the sequential-CFG loop to keep paired
@@ -700,15 +709,7 @@ class Cosmos3OmniDiffusersPipeline(
 
     @classmethod
     def _is_sound_request(cls, prompt_data, sp) -> bool:
-        keys = (
-            "sound_gen",
-            "generate_sound",
-            "enable_sound_generation",
-            "return_audio",
-            "output_audio",
-            "generate_audio",
-        )
-        for key in keys:
+        for key in ("generate_sound", "sound_gen"):
             if cls._truthy(cls._get_prompt_param(prompt_data, key, None)):
                 return True
             if cls._truthy(cls._get_sp_param(sp, key, None)):
@@ -722,8 +723,6 @@ class Cosmos3OmniDiffusersPipeline(
         )
 
     def _get_sound_tokenizer(self):
-        if not hasattr(self, "_sound_tokenizer"):
-            self._sound_tokenizer = None
         if self._sound_tokenizer is None:
             from .sound_tokenizer import Cosmos3SoundTokenizer
 
@@ -1341,6 +1340,9 @@ class Cosmos3OmniDiffusersPipeline(
             lo, hi = guidance_interval
             return lo <= t_scalar <= hi
 
+        # Joint scheduler step over multiple modalities. Safe for flow-matching schedulers
+        # because the update is linear per element; revisit this if Cosmos3 adopts a
+        # scheduler with cross-element dependencies (e.g. per-modality timestep).
         def _pack_joint(
             video_tensor: torch.Tensor,
             action_tensor: torch.Tensor | None = None,

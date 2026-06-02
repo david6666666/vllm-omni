@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import torch
@@ -136,10 +137,14 @@ def test_sound_and_action_modules_follow_config() -> None:
     tiny = _tiny_cosmos3_config()
     no_modal = Cosmos3VFMTransformer(SimpleNamespace(tf_model_config=tiny, dtype=torch.float32))
     with_sound = Cosmos3VFMTransformer(
+        SimpleNamespace(tf_model_config=tiny, dtype=torch.float32),
+        sound_gen=True,
+        sound_dim=5,
+        sound_latent_fps=40.0,
+    )
+    with_action = Cosmos3VFMTransformer(
         SimpleNamespace(
-            tf_model_config={**tiny, "sound_gen": True},
-            model_config={"sound_tokenizer": {"io_channels": 5, "sample_rate": 32000, "hop_size": 800}},
-            custom_pipeline_args={},
+            tf_model_config={**tiny, "action_gen": True, "max_action_dim": 6, "num_embodiment_domains": 9},
             dtype=torch.float32,
         )
     )
@@ -159,6 +164,24 @@ def test_sound_and_action_modules_follow_config() -> None:
     assert with_sound.audio_proj_in.in_features == 5
     assert with_action.action_dim == 6
     assert with_action.action_proj_in.num_domains == 9
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"sound_gen": True},
+        {"sound_gen": True, "sound_dim": 5},
+        {"sound_gen": True, "sound_latent_fps": 40.0},
+    ],
+)
+def test_transformer_requires_sound_dim_and_fps_when_sound_gen_true(kwargs: dict[str, Any]) -> None:
+    from vllm_omni.diffusion.models.cosmos3.transformer_cosmos3 import Cosmos3VFMTransformer
+
+    with pytest.raises(ValueError, match=r"requires an explicit sound_dim and sound_latent_fps"):
+        Cosmos3VFMTransformer(
+            SimpleNamespace(tf_model_config=_tiny_cosmos3_config(), dtype=torch.float32),
+            **kwargs,
+        )
 
 
 def test_sound_and_action_pack_unpack_validate_shapes() -> None:
@@ -181,15 +204,17 @@ def test_sound_and_action_pack_unpack_validate_shapes() -> None:
 
 
 @pytest.mark.parametrize(
-    ("config", "extra_kwargs", "expected_shapes"),
+    ("config", "transformer_kwargs", "extra_kwargs", "expected_shapes"),
     [
         (
-            _tiny_cosmos3_config(sound_gen=True, sound_dim=3, sound_latent_fps=24.0),
+            _tiny_cosmos3_config(),
+            {"sound_gen": True, "sound_dim": 3, "sound_latent_fps": 24.0},
             {"sound_latents": torch.zeros(1, 3, 4)},
             [(1, 2, 1, 2, 2), (1, 3, 4)],
         ),
         (
             _tiny_cosmos3_config(action_gen=True, max_action_dim=3, num_embodiment_domains=4),
+            {},
             {"action_latents": torch.zeros(1, 5, 3), "action_domain_ids": torch.tensor([2])},
             [(1, 2, 1, 2, 2), (1, 5, 3)],
         ),
@@ -198,6 +223,7 @@ def test_sound_and_action_pack_unpack_validate_shapes() -> None:
 def test_forward_returns_video_plus_optional_modality_predictions(
     monkeypatch: pytest.MonkeyPatch,
     config,
+    transformer_kwargs,
     extra_kwargs,
     expected_shapes,
 ) -> None:
@@ -206,7 +232,8 @@ def test_forward_returns_video_plus_optional_modality_predictions(
     monkeypatch.setattr(transformer_cosmos3, "_get_ulysses_state", lambda: (1, 0, None))
 
     output = transformer_cosmos3.Cosmos3VFMTransformer(
-        SimpleNamespace(tf_model_config=config, dtype=torch.float32)
+        SimpleNamespace(tf_model_config=config, dtype=torch.float32),
+        **transformer_kwargs,
     )(
         hidden_states=torch.zeros(1, 2, 1, 2, 2),
         timestep=torch.tensor([1.0]),
@@ -226,7 +253,10 @@ def test_forward_with_sound_ulysses_error_mentions_combined_sequence(monkeypatch
     import vllm_omni.diffusion.models.cosmos3.transformer_cosmos3 as cosmos3_module
 
     model = cosmos3_module.Cosmos3VFMTransformer(
-        SimpleNamespace(tf_model_config=_tiny_cosmos3_config(sound_gen=True, sound_dim=3), dtype=torch.float32)
+        SimpleNamespace(tf_model_config=_tiny_cosmos3_config(), dtype=torch.float32),
+        sound_gen=True,
+        sound_dim=3,
+        sound_latent_fps=40.0,
     )
     monkeypatch.setattr(cosmos3_module, "_get_ulysses_state", lambda: (2, 0, None))
 
