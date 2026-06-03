@@ -4,8 +4,6 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -181,13 +179,12 @@ def pad_action_to_dim(action: torch.Tensor, action_dim: int) -> torch.Tensor:
     return torch.cat([action, padding], dim=-1)
 
 
-def load_action_tensor(action: Any = None, action_path: str | Path | None = None) -> torch.Tensor:
-    if action is None and action_path is None:
-        raise ValueError(
-            "Cosmos3 forward_dynamics action mode requires extra_args['action'] or extra_args['action_path']."
-        )
+def load_action_tensor(action: Any = None) -> torch.Tensor:
     if action is None:
-        action = json.loads(Path(str(action_path)).read_text())
+        raise ValueError(
+            "Cosmos3 forward_dynamics action mode requires extra_args['action'] "
+            "(a JSON array / nested list / tensor of shape [T, D])."
+        )
     if isinstance(action, torch.Tensor):
         tensor = action.detach().to(dtype=torch.float32)
     else:

@@ -1238,10 +1238,7 @@ class Cosmos3OmniDiffusersPipeline(
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
         action_dim = int(getattr(self.transformer, "action_dim", 64))
         if mode == ACTION_MODE_FORWARD_DYNAMICS:
-            action = load_action_tensor(
-                self._get_sp_param(sp, "action", None),
-                self._get_sp_param(sp, "action_path", None),
-            )
+            action = load_action_tensor(self._get_sp_param(sp, "action", None))
             if action.shape[0] < action_chunk_size:
                 pad = action[-1:].repeat(action_chunk_size - action.shape[0], 1)
                 action = torch.cat([action, pad], dim=0)

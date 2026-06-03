@@ -164,7 +164,20 @@ class OmniOpenAIServingVideo:
                 )
             # Merge extra_params into extra_args
             gen_params.extra_args.update(request.extra_params)
-            logger.info("Applied extra_params: %s", request.extra_params)
+
+            # Redact the inline ``action`` array (hundreds of floats) when
+            # logging so it doesn't flood the logs; everything else is logged
+            # verbatim.
+            loggable = request.extra_params
+            action_val = loggable.get("action")
+            if action_val is not None:
+                summary = (
+                    f"<{type(action_val).__name__} len={len(action_val)}>"
+                    if hasattr(action_val, "__len__")
+                    else f"<{type(action_val).__name__}>"
+                )
+                loggable = {**loggable, "action": summary}
+            logger.info("Applied extra_params: %s", loggable)
 
         self._apply_lora(request.lora, gen_params)
 

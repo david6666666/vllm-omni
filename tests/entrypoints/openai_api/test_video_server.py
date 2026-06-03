@@ -1147,6 +1147,31 @@ def test_sample_solver_forwarded_via_extra_params(test_client, mocker: MockerFix
     assert captured.extra_args["sample_solver"] == "euler"
 
 
+def test_extra_params_allows_inline_action(test_client, mocker: MockerFixture):
+    """Inline ``action`` data is accepted and forwarded verbatim to
+    ``extra_args`` (the supported way to pass forward-dynamics actions)."""
+    mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video._encode_video_bytes",
+        return_value=b"fake-video",
+    )
+    action = [[0.1, 0.2], [0.3, 0.4]]
+    response = test_client.post(
+        "/v1/videos",
+        data={
+            "prompt": "forward dynamics inline",
+            "extra_params": json.dumps({"action_mode": "forward_dynamics", "action": action}),
+        },
+    )
+
+    assert response.status_code == 200
+    video_id = response.json()["id"]
+    _wait_for_status(test_client, video_id, VideoGenerationStatus.COMPLETED.value)
+    engine = test_client.app.state.openai_serving_video._engine_client
+    captured = engine.captured_sampling_params_list[0]
+    assert captured.extra_args["action"] == action
+    assert captured.extra_args["action_mode"] == "forward_dynamics"
+
+
 # ---------------------------------------------------------------------------
 # Sync endpoint tests (POST /v1/videos/sync)
 # ---------------------------------------------------------------------------
