@@ -6,7 +6,7 @@
 
 - Vendor: NVIDIA
 - Model: `nvidia/Cosmos3-Nano`
-- Task: Text-to-image (T2I), text-to-video (T2V), and image-to-video (I2V) generation, with optional synchronized audio (video + sound)
+- Task: Text-to-image (T2I), text-to-video (T2V), and image-to-video (I2V) generation, with optional synchronized audio (video + sound), action policy
 - Mode: Online serving with the OpenAI-compatible image/video APIs, plus offline generation via the `Omni` API
 - Maintainer: Community
 
@@ -20,9 +20,10 @@ the mode is selected per request:
 - **T2V** — `POST /v1/videos/sync` with `num_frames > 1` and no reference image.
 - **I2V** — `POST /v1/videos/sync` with a reference image (`input_reference` file
   upload, or `image_reference` JSON).
-- **T2VS / I2VS** — add `generate_sound=true` (and optional `sound_duration`) to a
-  T2V/I2V `/v1/videos/sync` request to also generate synchronized audio, muxed into
-  the mp4 as AAC 48 kHz stereo. See the official model card's "Video + Audio" examples.
+- **Video + sound** — add `generate_sound=true` (and optional `sound_duration`)
+  to any T2V/I2V `/v1/videos/sync` request to also generate synchronized audio,
+  muxed into the mp4 as AAC 48 kHz stereo. Params and example prompts are in the
+  official model card's "Text/Image to Video + Audio" examples.
 
 ## References
 
