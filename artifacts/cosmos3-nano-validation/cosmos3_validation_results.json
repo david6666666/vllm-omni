@@ -1,0 +1,181 @@
+[
+  {
+    "case": "t2i",
+    "ok": true,
+    "latency_s": 4.436,
+    "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/cosmos3_t2i.png",
+    "params": "1024x1024, 50 steps, seed 42",
+    "media": {
+      "width": 1024,
+      "height": 1024,
+      "mode": "RGB",
+      "bytes": 3147861
+    }
+  },
+  {
+    "case": "t2v",
+    "ok": true,
+    "latency_s": 189.421,
+    "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/cosmos3_t2v.mp4",
+    "params": "1280x720, 189 frames, 35 steps, seed 123",
+    "media": {
+      "programs": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "codec_type": "video",
+          "width": 1280,
+          "height": 720,
+          "avg_frame_rate": "24/1",
+          "nb_frames": "189"
+        }
+      ],
+      "format": {
+        "duration": "7.875000",
+        "size": "7877216"
+      }
+    }
+  },
+  {
+    "case": "i2v",
+    "ok": true,
+    "latency_s": 193.354,
+    "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/cosmos3_i2v.mp4",
+    "params": "1280x720, 189 frames, 35 steps, seed 1111",
+    "media": {
+      "programs": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "codec_type": "video",
+          "width": 1280,
+          "height": 720,
+          "avg_frame_rate": "24/1",
+          "nb_frames": "189"
+        }
+      ],
+      "format": {
+        "duration": "7.875000",
+        "size": "19982640"
+      }
+    }
+  },
+  {
+    "case": "t2vs",
+    "ok": true,
+    "latency_s": 189.783,
+    "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/cosmos3_t2vs.mp4",
+    "params": "1280x720, 189 frames, 35 steps, sound, seed 0",
+    "media": {
+      "programs": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "codec_type": "video",
+          "width": 1280,
+          "height": 720,
+          "avg_frame_rate": "24/1",
+          "nb_frames": "189"
+        },
+        {
+          "codec_name": "aac",
+          "codec_type": "audio",
+          "sample_rate": "48000",
+          "channels": 2,
+          "avg_frame_rate": "0/0",
+          "nb_frames": "371"
+        }
+      ],
+      "format": {
+        "duration": "7.896333",
+        "size": "3850428"
+      }
+    }
+  },
+  {
+    "case": "i2vs",
+    "ok": true,
+    "latency_s": 194.408,
+    "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/cosmos3_i2vs.mp4",
+    "params": "1280x720, 189 frames, 35 steps, sound, seed 2222",
+    "media": {
+      "programs": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "codec_type": "video",
+          "width": 1280,
+          "height": 720,
+          "avg_frame_rate": "24/1",
+          "nb_frames": "189"
+        },
+        {
+          "codec_name": "aac",
+          "codec_type": "audio",
+          "sample_rate": "48000",
+          "channels": 2,
+          "avg_frame_rate": "0/0",
+          "nb_frames": "371"
+        }
+      ],
+      "format": {
+        "duration": "7.896333",
+        "size": "18189598"
+      }
+    }
+  },
+  {
+    "case": "forward_dynamics",
+    "ok": true,
+    "latency_s": 2.991,
+    "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/cosmos3_forward_dynamics.mp4",
+    "params": "640x480, 17 frames, 30 steps, AgiBotWorld action chunk",
+    "media": {
+      "programs": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "codec_type": "video",
+          "width": 640,
+          "height": 480,
+          "avg_frame_rate": "10/1",
+          "nb_frames": "17"
+        }
+      ],
+      "format": {
+        "duration": "1.700000",
+        "size": "611207"
+      }
+    }
+  },
+  {
+    "case": "policy_async",
+    "ok": true,
+    "latency_s": 4.084,
+    "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/cosmos3_policy.mp4",
+    "action_output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/cosmos3_policy_action.json",
+    "params": "640x480, 17 frames, 30 steps, async policy",
+    "action_shape": [
+      16,
+      10
+    ],
+    "action_dtype": "torch.bfloat16",
+    "media": {
+      "programs": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "codec_type": "video",
+          "width": 640,
+          "height": 480,
+          "avg_frame_rate": "5/1",
+          "nb_frames": "17"
+        }
+      ],
+      "format": {
+        "duration": "3.400000",
+        "size": "964938"
+      }
+    }
+  }
+]
