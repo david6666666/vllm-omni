@@ -1,0 +1,62 @@
+[
+  {
+    "case": "hf_forward_dynamics_4chunk",
+    "ok": true,
+    "latency_s": 8.059,
+    "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/cosmos3_hf_action_fd_agibotworld_4chunk.mp4",
+    "chunk_outputs": [
+      "/home/zjy/code/david/tmp/cosmos3_nano_validation/cosmos3_hf_action_fd_chunk_00.mp4",
+      "/home/zjy/code/david/tmp/cosmos3_nano_validation/cosmos3_hf_action_fd_chunk_01.mp4",
+      "/home/zjy/code/david/tmp/cosmos3_nano_validation/cosmos3_hf_action_fd_chunk_02.mp4",
+      "/home/zjy/code/david/tmp/cosmos3_nano_validation/cosmos3_hf_action_fd_chunk_03.mp4"
+    ],
+    "chunk_latencies_s": [
+      1.997,
+      1.747,
+      1.736,
+      1.734
+    ],
+    "params": "HF model card AgiBotWorld 4 chunks, 640x720, 64 generated frames, 30 steps/chunk",
+    "media": {
+      "programs": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "codec_type": "video",
+          "width": 640,
+          "height": 720,
+          "avg_frame_rate": "10/1",
+          "nb_frames": "64"
+        }
+      ],
+      "format": {
+        "duration": "6.400000",
+        "size": "703904"
+      }
+    }
+  },
+  {
+    "case": "hf_inverse_dynamics_av_0",
+    "ok": true,
+    "latency_s": 8.323,
+    "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/cosmos3_hf_action_id_av_0.json",
+    "params": "HF model card AV inverse dynamics example_action_id_av_0_input.mp4, 61 frames, 30 steps",
+    "action_shape": [
+      60,
+      9
+    ],
+    "action_dtype": "torch.bfloat16"
+  },
+  {
+    "case": "hf_inverse_dynamics_av_1",
+    "ok": true,
+    "latency_s": 8.297,
+    "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/cosmos3_hf_action_id_av_1.json",
+    "params": "HF model card AV inverse dynamics example_action_id_av_1_input.mp4, 61 frames, 30 steps",
+    "action_shape": [
+      60,
+      9
+    ],
+    "action_dtype": "torch.bfloat16"
+  }
+]
