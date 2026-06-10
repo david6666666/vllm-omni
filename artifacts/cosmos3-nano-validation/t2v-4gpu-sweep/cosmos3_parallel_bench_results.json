@@ -1,0 +1,951 @@
+[
+  {
+    "id": "usp4",
+    "notes": "USP=4, no VAE patch parallel",
+    "server_args": [
+      "--ulysses-degree",
+      "4",
+      "--enable-diffusion-pipeline-profiler"
+    ],
+    "gpu_set": "1,2,3,4",
+    "ok": true,
+    "warmup": {
+      "steps": 2,
+      "elapsed_ms": 13780.132,
+      "status": 200,
+      "content_type": "video/mp4",
+      "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/parallel_bench/usp4_warmup_2step.mp4",
+      "media": {
+        "programs": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 1280,
+            "height": 720,
+            "avg_frame_rate": "24/1",
+            "nb_frames": "189"
+          }
+        ],
+        "format": {
+          "duration": "7.875000",
+          "size": "2244964"
+        }
+      }
+    },
+    "measured": {
+      "steps": 35,
+      "elapsed_ms": 36799.075,
+      "status": 200,
+      "content_type": "video/mp4",
+      "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/parallel_bench/usp4_measured_35step.mp4",
+      "media": {
+        "programs": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 1280,
+            "height": 720,
+            "avg_frame_rate": "24/1",
+            "nb_frames": "189"
+          }
+        ],
+        "format": {
+          "duration": "7.875000",
+          "size": "7967262"
+        }
+      }
+    },
+    "stage_s_all": {
+      "Cosmos3OmniDiffusersPipeline.vae.encode": [
+        0.379392,
+        0.369931,
+        0.380066,
+        0.385009
+      ],
+      "Cosmos3OmniDiffusersPipeline.diffuse": [
+        8.573351,
+        8.556553,
+        8.575096,
+        8.569847,
+        2.641282,
+        2.640567,
+        2.640883,
+        2.641784,
+        25.718178,
+        25.718288,
+        25.718414,
+        25.718586
+      ],
+      "Cosmos3OmniDiffusersPipeline.vae.decode": [
+        0.101537,
+        0.107073,
+        0.142027,
+        0.146908,
+        6.073767,
+        6.077166,
+        6.099267,
+        6.135318,
+        6.075387,
+        6.089142,
+        6.1186,
+        6.144394
+      ],
+      "Cosmos3OmniDiffusersPipeline.forward": [
+        9.203016,
+        9.213031,
+        9.250732,
+        9.255678,
+        8.723297,
+        8.726872,
+        8.74986,
+        8.784869,
+        31.798162,
+        31.81225,
+        31.841823,
+        31.867312
+      ]
+    },
+    "stage_s_last": {
+      "Cosmos3OmniDiffusersPipeline.vae.encode": 0.385009,
+      "Cosmos3OmniDiffusersPipeline.diffuse": 25.718586,
+      "Cosmos3OmniDiffusersPipeline.vae.decode": 6.144394,
+      "Cosmos3OmniDiffusersPipeline.forward": 31.867312
+    },
+    "video_decoded_s_all": [
+      0.1,
+      6.1,
+      6.12
+    ],
+    "video_decoded_s_last": 6.12,
+    "pipeline_s_all": [
+      9.2,
+      8.75,
+      31.84
+    ],
+    "pipeline_s_last": 31.84,
+    "response_encode_ms_all": [
+      1760.12,
+      1770.35
+    ],
+    "response_encode_ms_last": 1770.35,
+    "oom": false,
+    "log_path": "/home/zjy/code/david/tmp/cosmos3_nano_validation/parallel_bench/usp4_server.log"
+  },
+  {
+    "id": "usp4_vaepp4",
+    "notes": "USP=4, VAE patch parallel=4 (tiling auto-enabled)",
+    "server_args": [
+      "--ulysses-degree",
+      "4",
+      "--vae-patch-parallel-size",
+      "4",
+      "--enable-diffusion-pipeline-profiler"
+    ],
+    "gpu_set": "1,2,3,4",
+    "ok": true,
+    "warmup": {
+      "steps": 2,
+      "elapsed_ms": 11540.973,
+      "status": 200,
+      "content_type": "video/mp4",
+      "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/parallel_bench/usp4_vaepp4_warmup_2step.mp4",
+      "media": {
+        "programs": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 1280,
+            "height": 720,
+            "avg_frame_rate": "24/1",
+            "nb_frames": "189"
+          }
+        ],
+        "format": {
+          "duration": "7.875000",
+          "size": "2281329"
+        }
+      }
+    },
+    "measured": {
+      "steps": 35,
+      "elapsed_ms": 34285.629,
+      "status": 200,
+      "content_type": "video/mp4",
+      "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/parallel_bench/usp4_vaepp4_measured_35step.mp4",
+      "media": {
+        "programs": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 1280,
+            "height": 720,
+            "avg_frame_rate": "24/1",
+            "nb_frames": "189"
+          }
+        ],
+        "format": {
+          "duration": "7.875000",
+          "size": "7934945"
+        }
+      }
+    },
+    "stage_s_all": {
+      "Cosmos3OmniDiffusersPipeline.vae.encode": [
+        2.517685,
+        2.499764,
+        2.51583,
+        2.509248
+      ],
+      "Cosmos3OmniDiffusersPipeline.diffuse": [
+        7.376342,
+        7.379547,
+        7.38117,
+        7.382482,
+        2.73697,
+        2.732934,
+        2.736657,
+        2.736789,
+        25.636843,
+        25.636956,
+        25.637038,
+        25.636963
+      ],
+      "Cosmos3OmniDiffusersPipeline.vae.decode": [
+        0.133618,
+        0.132256,
+        0.134669,
+        0.146647,
+        3.92986,
+        3.929711,
+        3.929829,
+        3.966721,
+        3.907665,
+        3.907579,
+        3.907808,
+        3.9446
+      ],
+      "Cosmos3OmniDiffusersPipeline.forward": [
+        10.163628,
+        10.163647,
+        10.1637,
+        10.17222,
+        6.67526,
+        6.675225,
+        6.675265,
+        6.712518,
+        29.549263,
+        29.549275,
+        29.549269,
+        29.586454
+      ]
+    },
+    "stage_s_last": {
+      "Cosmos3OmniDiffusersPipeline.vae.encode": 2.509248,
+      "Cosmos3OmniDiffusersPipeline.diffuse": 25.636963,
+      "Cosmos3OmniDiffusersPipeline.vae.decode": 3.9446,
+      "Cosmos3OmniDiffusersPipeline.forward": 29.586454
+    },
+    "video_decoded_s_all": [
+      0.15,
+      3.97,
+      3.95
+    ],
+    "video_decoded_s_last": 3.95,
+    "pipeline_s_all": [
+      10.17,
+      6.71,
+      29.59
+    ],
+    "pipeline_s_last": 29.59,
+    "response_encode_ms_all": [
+      1598.97,
+      1621.58
+    ],
+    "response_encode_ms_last": 1621.58,
+    "oom": false,
+    "log_path": "/home/zjy/code/david/tmp/cosmos3_nano_validation/parallel_bench/usp4_vaepp4_server.log"
+  },
+  {
+    "id": "cfg2_usp2",
+    "notes": "CFG=2 x USP=2, no VAE patch parallel",
+    "server_args": [
+      "--cfg-parallel-size",
+      "2",
+      "--ulysses-degree",
+      "2",
+      "--enable-diffusion-pipeline-profiler"
+    ],
+    "gpu_set": "1,2,3,4",
+    "ok": true,
+    "warmup": {
+      "steps": 2,
+      "elapsed_ms": 20060.114,
+      "status": 200,
+      "content_type": "video/mp4",
+      "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/parallel_bench/cfg2_usp2_warmup_2step.mp4",
+      "media": {
+        "programs": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 1280,
+            "height": 720,
+            "avg_frame_rate": "24/1",
+            "nb_frames": "189"
+          }
+        ],
+        "format": {
+          "duration": "7.875000",
+          "size": "2256112"
+        }
+      }
+    },
+    "measured": {
+      "steps": 35,
+      "elapsed_ms": 35837.104,
+      "status": 200,
+      "content_type": "video/mp4",
+      "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/parallel_bench/cfg2_usp2_measured_35step.mp4",
+      "media": {
+        "programs": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 1280,
+            "height": 720,
+            "avg_frame_rate": "24/1",
+            "nb_frames": "189"
+          }
+        ],
+        "format": {
+          "duration": "7.875000",
+          "size": "7997077"
+        }
+      }
+    },
+    "stage_s_all": {
+      "Cosmos3OmniDiffusersPipeline.vae.encode": [
+        0.383961,
+        0.381798,
+        0.374961,
+        0.38727
+      ],
+      "Cosmos3OmniDiffusersPipeline.diffuse": [
+        5.435837,
+        5.453968,
+        5.554483,
+        5.548583,
+        9.254788,
+        9.254975,
+        9.254494,
+        9.254967,
+        24.705456,
+        24.705753,
+        24.705587,
+        24.706041
+      ],
+      "Cosmos3OmniDiffusersPipeline.vae.decode": [
+        0.107327,
+        0.112316,
+        0.123766,
+        0.133309,
+        6.086294,
+        6.092409,
+        6.108032,
+        6.14977,
+        6.068563,
+        6.089839,
+        6.116395,
+        6.147902
+      ],
+      "Cosmos3OmniDiffusersPipeline.forward": [
+        6.078575,
+        6.088701,
+        6.197717,
+        6.210251,
+        15.349054,
+        15.355437,
+        15.371184,
+        15.412748,
+        30.779197,
+        30.800296,
+        30.82717,
+        30.858467
+      ]
+    },
+    "stage_s_last": {
+      "Cosmos3OmniDiffusersPipeline.vae.encode": 0.38727,
+      "Cosmos3OmniDiffusersPipeline.diffuse": 24.706041,
+      "Cosmos3OmniDiffusersPipeline.vae.decode": 6.147902,
+      "Cosmos3OmniDiffusersPipeline.forward": 30.858467
+    },
+    "video_decoded_s_all": [
+      0.13,
+      6.11,
+      6.12
+    ],
+    "video_decoded_s_last": 6.12,
+    "pipeline_s_all": [
+      6.2,
+      15.37,
+      30.83
+    ],
+    "pipeline_s_last": 30.83,
+    "response_encode_ms_all": [
+      1587.19,
+      1598.39
+    ],
+    "response_encode_ms_last": 1598.39,
+    "oom": false,
+    "log_path": "/home/zjy/code/david/tmp/cosmos3_nano_validation/parallel_bench/cfg2_usp2_server.log"
+  },
+  {
+    "id": "cfg2_usp2_vaepp4",
+    "notes": "CFG=2 x USP=2, VAE patch parallel=4",
+    "server_args": [
+      "--cfg-parallel-size",
+      "2",
+      "--ulysses-degree",
+      "2",
+      "--vae-patch-parallel-size",
+      "4",
+      "--enable-diffusion-pipeline-profiler"
+    ],
+    "gpu_set": "1,2,3,4",
+    "ok": true,
+    "warmup": {
+      "steps": 2,
+      "elapsed_ms": 14456.044,
+      "status": 200,
+      "content_type": "video/mp4",
+      "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/parallel_bench/cfg2_usp2_vaepp4_warmup_2step.mp4",
+      "media": {
+        "programs": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 1280,
+            "height": 720,
+            "avg_frame_rate": "24/1",
+            "nb_frames": "189"
+          }
+        ],
+        "format": {
+          "duration": "7.875000",
+          "size": "2270981"
+        }
+      }
+    },
+    "measured": {
+      "steps": 35,
+      "elapsed_ms": 33622.678,
+      "status": 200,
+      "content_type": "video/mp4",
+      "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/parallel_bench/cfg2_usp2_vaepp4_measured_35step.mp4",
+      "media": {
+        "programs": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 1280,
+            "height": 720,
+            "avg_frame_rate": "24/1",
+            "nb_frames": "189"
+          }
+        ],
+        "format": {
+          "duration": "7.875000",
+          "size": "7980675"
+        }
+      }
+    },
+    "stage_s_all": {
+      "Cosmos3OmniDiffusersPipeline.vae.encode": [
+        2.624249,
+        2.599539,
+        2.615002,
+        2.632566
+      ],
+      "Cosmos3OmniDiffusersPipeline.diffuse": [
+        4.11155,
+        4.115547,
+        4.165064,
+        4.170829,
+        5.676547,
+        5.676093,
+        5.677058,
+        5.676146,
+        24.781397,
+        24.781423,
+        24.781249,
+        24.781406
+      ],
+      "Cosmos3OmniDiffusersPipeline.vae.decode": [
+        0.190538,
+        0.194594,
+        0.135303,
+        0.149978,
+        3.950411,
+        3.950434,
+        3.950337,
+        3.987103,
+        3.911078,
+        3.911562,
+        3.911544,
+        3.948358
+      ],
+      "Cosmos3OmniDiffusersPipeline.forward": [
+        7.080292,
+        7.080302,
+        7.080348,
+        7.089524,
+        9.635907,
+        9.635987,
+        9.635955,
+        9.673157,
+        28.697327,
+        28.697444,
+        28.697467,
+        28.73449
+      ]
+    },
+    "stage_s_last": {
+      "Cosmos3OmniDiffusersPipeline.vae.encode": 2.632566,
+      "Cosmos3OmniDiffusersPipeline.diffuse": 24.781406,
+      "Cosmos3OmniDiffusersPipeline.vae.decode": 3.948358,
+      "Cosmos3OmniDiffusersPipeline.forward": 28.73449
+    },
+    "video_decoded_s_all": [
+      0.15,
+      3.99,
+      3.95
+    ],
+    "video_decoded_s_last": 3.95,
+    "pipeline_s_all": [
+      7.09,
+      9.67,
+      28.73
+    ],
+    "pipeline_s_last": 28.73,
+    "response_encode_ms_all": [
+      1567.08,
+      1799.46
+    ],
+    "response_encode_ms_last": 1799.46,
+    "oom": false,
+    "log_path": "/home/zjy/code/david/tmp/cosmos3_nano_validation/parallel_bench/cfg2_usp2_vaepp4_server.log"
+  },
+  {
+    "id": "tp4",
+    "notes": "TP=4, no VAE patch parallel",
+    "server_args": [
+      "--tensor-parallel-size",
+      "4",
+      "--enable-diffusion-pipeline-profiler"
+    ],
+    "gpu_set": "1,2,3,4",
+    "ok": true,
+    "warmup": {
+      "steps": 2,
+      "elapsed_ms": 14017.006,
+      "status": 200,
+      "content_type": "video/mp4",
+      "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/parallel_bench/tp4_warmup_2step.mp4",
+      "media": {
+        "programs": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 1280,
+            "height": 720,
+            "avg_frame_rate": "24/1",
+            "nb_frames": "189"
+          }
+        ],
+        "format": {
+          "duration": "7.875000",
+          "size": "2219944"
+        }
+      }
+    },
+    "measured": {
+      "steps": 35,
+      "elapsed_ms": 40135.368,
+      "status": 200,
+      "content_type": "video/mp4",
+      "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/parallel_bench/tp4_measured_35step.mp4",
+      "media": {
+        "programs": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 1280,
+            "height": 720,
+            "avg_frame_rate": "24/1",
+            "nb_frames": "189"
+          }
+        ],
+        "format": {
+          "duration": "7.875000",
+          "size": "8010673"
+        }
+      }
+    },
+    "stage_s_all": {
+      "Cosmos3OmniDiffusersPipeline.vae.encode": [
+        0.370007,
+        0.385608,
+        0.362274,
+        0.382052
+      ],
+      "Cosmos3OmniDiffusersPipeline.diffuse": [
+        4.357906,
+        4.373717,
+        4.363,
+        4.35804,
+        2.845841,
+        2.845486,
+        2.845929,
+        2.846758,
+        29.001302,
+        29.001225,
+        29.001469,
+        29.000977
+      ],
+      "Cosmos3OmniDiffusersPipeline.vae.decode": [
+        0.101691,
+        0.103962,
+        0.104315,
+        0.106138,
+        6.073798,
+        6.075853,
+        6.097511,
+        6.135485,
+        6.077071,
+        6.086169,
+        6.111684,
+        6.142093
+      ],
+      "Cosmos3OmniDiffusersPipeline.forward": [
+        4.946784,
+        4.950743,
+        4.951292,
+        4.956115,
+        8.928983,
+        8.930842,
+        8.953032,
+        8.99057,
+        35.08302,
+        35.092378,
+        35.117951,
+        35.148024
+      ]
+    },
+    "stage_s_last": {
+      "Cosmos3OmniDiffusersPipeline.vae.encode": 0.382052,
+      "Cosmos3OmniDiffusersPipeline.diffuse": 29.000977,
+      "Cosmos3OmniDiffusersPipeline.vae.decode": 6.142093,
+      "Cosmos3OmniDiffusersPipeline.forward": 35.148024
+    },
+    "video_decoded_s_all": [
+      0.11,
+      6.1,
+      6.11
+    ],
+    "video_decoded_s_last": 6.11,
+    "pipeline_s_all": [
+      4.95,
+      8.95,
+      35.12
+    ],
+    "pipeline_s_last": 35.12,
+    "response_encode_ms_all": [
+      1761.52,
+      1618.34
+    ],
+    "response_encode_ms_last": 1618.34,
+    "oom": false,
+    "log_path": "/home/zjy/code/david/tmp/cosmos3_nano_validation/parallel_bench/tp4_server.log"
+  },
+  {
+    "id": "tp4_vaepp4",
+    "notes": "TP=4, VAE patch parallel=4",
+    "server_args": [
+      "--tensor-parallel-size",
+      "4",
+      "--vae-patch-parallel-size",
+      "4",
+      "--enable-diffusion-pipeline-profiler"
+    ],
+    "gpu_set": "1,2,3,4",
+    "ok": true,
+    "warmup": {
+      "steps": 2,
+      "elapsed_ms": 11608.681,
+      "status": 200,
+      "content_type": "video/mp4",
+      "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/parallel_bench/tp4_vaepp4_warmup_2step.mp4",
+      "media": {
+        "programs": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 1280,
+            "height": 720,
+            "avg_frame_rate": "24/1",
+            "nb_frames": "189"
+          }
+        ],
+        "format": {
+          "duration": "7.875000",
+          "size": "2247218"
+        }
+      }
+    },
+    "measured": {
+      "steps": 35,
+      "elapsed_ms": 37884.811,
+      "status": 200,
+      "content_type": "video/mp4",
+      "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/parallel_bench/tp4_vaepp4_measured_35step.mp4",
+      "media": {
+        "programs": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 1280,
+            "height": 720,
+            "avg_frame_rate": "24/1",
+            "nb_frames": "189"
+          }
+        ],
+        "format": {
+          "duration": "7.875000",
+          "size": "7967863"
+        }
+      }
+    },
+    "stage_s_all": {
+      "Cosmos3OmniDiffusersPipeline.vae.encode": [
+        2.674115,
+        2.664317,
+        2.663328,
+        2.669339
+      ],
+      "Cosmos3OmniDiffusersPipeline.diffuse": [
+        3.166152,
+        3.165866,
+        3.166379,
+        3.168067,
+        2.903971,
+        2.90442,
+        2.904991,
+        2.905632,
+        29.037846,
+        29.037739,
+        29.037658,
+        29.037723
+      ],
+      "Cosmos3OmniDiffusersPipeline.vae.decode": [
+        0.133788,
+        0.133117,
+        0.131527,
+        0.142925,
+        3.93577,
+        3.935662,
+        3.935573,
+        3.972474,
+        3.912935,
+        3.912901,
+        3.912894,
+        3.949603
+      ],
+      "Cosmos3OmniDiffusersPipeline.forward": [
+        6.07616,
+        6.076243,
+        6.076443,
+        6.08559,
+        6.849066,
+        6.84926,
+        6.848976,
+        6.886199,
+        32.955347,
+        32.955286,
+        32.955281,
+        32.992157
+      ]
+    },
+    "stage_s_last": {
+      "Cosmos3OmniDiffusersPipeline.vae.encode": 2.669339,
+      "Cosmos3OmniDiffusersPipeline.diffuse": 29.037723,
+      "Cosmos3OmniDiffusersPipeline.vae.decode": 3.949603,
+      "Cosmos3OmniDiffusersPipeline.forward": 32.992157
+    },
+    "video_decoded_s_all": [
+      0.14,
+      3.97,
+      3.95
+    ],
+    "video_decoded_s_last": 3.95,
+    "pipeline_s_all": [
+      6.09,
+      6.89,
+      32.99
+    ],
+    "pipeline_s_last": 32.99,
+    "response_encode_ms_all": [
+      1595.52,
+      1764.74
+    ],
+    "response_encode_ms_last": 1764.74,
+    "oom": false,
+    "log_path": "/home/zjy/code/david/tmp/cosmos3_nano_validation/parallel_bench/tp4_vaepp4_server.log"
+  },
+  {
+    "id": "hsdp4",
+    "notes": "standalone HSDP shard size=4",
+    "server_args": [
+      "--use-hsdp",
+      "--hsdp-shard-size",
+      "4",
+      "--enable-diffusion-pipeline-profiler"
+    ],
+    "gpu_set": "1,2,3,4",
+    "ok": true,
+    "warmup": {
+      "steps": 2,
+      "elapsed_ms": 17904.216,
+      "status": 200,
+      "content_type": "video/mp4",
+      "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/parallel_bench/hsdp4_warmup_2step.mp4",
+      "media": {
+        "programs": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 1280,
+            "height": 720,
+            "avg_frame_rate": "24/1",
+            "nb_frames": "189"
+          }
+        ],
+        "format": {
+          "duration": "7.875000",
+          "size": "2341372"
+        }
+      }
+    },
+    "measured": {
+      "steps": 35,
+      "elapsed_ms": 113102.0,
+      "status": 200,
+      "content_type": "video/mp4",
+      "output": "/home/zjy/code/david/tmp/cosmos3_nano_validation/parallel_bench/hsdp4_measured_35step.mp4",
+      "media": {
+        "programs": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 1280,
+            "height": 720,
+            "avg_frame_rate": "24/1",
+            "nb_frames": "189"
+          }
+        ],
+        "format": {
+          "duration": "7.875000",
+          "size": "8323888"
+        }
+      }
+    },
+    "stage_s_all": {
+      "Cosmos3OmniDiffusersPipeline.vae.encode": [
+        0.452279,
+        0.449439,
+        0.446872,
+        0.464306
+      ],
+      "Cosmos3OmniDiffusersPipeline.diffuse": [
+        2.585045,
+        2.573809,
+        2.56863,
+        2.574208,
+        6.918835,
+        6.924366,
+        6.935653,
+        6.938133,
+        102.069645,
+        102.082066,
+        102.085864,
+        102.088416
+      ],
+      "Cosmos3OmniDiffusersPipeline.vae.decode": [
+        0.076248,
+        0.07816,
+        0.079076,
+        0.079884,
+        6.075926,
+        6.087321,
+        6.106001,
+        6.139648,
+        6.082863,
+        6.094032,
+        6.109964,
+        6.144845
+      ],
+      "Cosmos3OmniDiffusersPipeline.forward": [
+        3.217653,
+        3.219981,
+        3.220262,
+        3.222145,
+        13.008857,
+        13.014677,
+        13.051684,
+        13.086683,
+        108.15706,
+        108.180425,
+        108.200625,
+        108.237662
+      ]
+    },
+    "stage_s_last": {
+      "Cosmos3OmniDiffusersPipeline.vae.encode": 0.464306,
+      "Cosmos3OmniDiffusersPipeline.diffuse": 102.088416,
+      "Cosmos3OmniDiffusersPipeline.vae.decode": 6.144845,
+      "Cosmos3OmniDiffusersPipeline.forward": 108.237662
+    },
+    "video_decoded_s_all": [
+      0.08,
+      6.11,
+      6.11
+    ],
+    "video_decoded_s_last": 6.11,
+    "pipeline_s_all": [
+      3.22,
+      13.05,
+      108.2
+    ],
+    "pipeline_s_last": 108.2,
+    "response_encode_ms_all": [
+      1584.59,
+      1638.29
+    ],
+    "response_encode_ms_last": 1638.29,
+    "oom": false,
+    "log_path": "/home/zjy/code/david/tmp/cosmos3_nano_validation/parallel_bench/hsdp4_server.log"
+  }
+]
