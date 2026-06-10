@@ -249,22 +249,12 @@ curl -sS -L "http://localhost:8000/v1/videos/$VIDEO_ID/content" -o cosmos3_inver
 
 #### Notes
 
-- **Measured e2e latency (1x B300, bf16, guardrails off, `upstream/main`
-  `73df8326`, vLLM 0.22.0):**
-
-  | Use case | Endpoint | Shape / settings | e2e latency |
-  |---|---|---|---:|
-  | T2I | `/v1/images/generations` | 1024×1024, 50 steps, seed 42 | 4.436 s |
-  | T2V | `/v1/videos/sync` | 1280×720, 189 frames, 35 steps, seed 123 | 189.421 s |
-  | I2V | `/v1/videos/sync` | 1280×720, 189 frames, 35 steps, seed 1111 | 193.354 s |
-  | T2V + sound | `/v1/videos/sync` | 1280×720, 189 frames, 35 steps, AAC audio, seed 0 | 189.783 s |
-  | I2V + sound | `/v1/videos/sync` | 1280×720, 189 frames, 35 steps, AAC audio, seed 2222 | 194.408 s |
-  | Action forward dynamics | `/v1/videos/sync` | HF model-card AgiBotWorld 4-chunk rollout, 640×720, 64 generated frames, 30 steps/chunk | 8.059 s |
-  | Action inverse dynamics (AV 0) | `/v1/videos` | HF model-card AV clip, 61 frames, 30 steps, action shape `[60, 9]` | 8.323 s |
-  | Action inverse dynamics (AV 1) | `/v1/videos` | HF model-card AV clip, 61 frames, 30 steps, action shape `[60, 9]` | 8.297 s |
-
-  The sound cases mux AAC 48 kHz stereo into the returned MP4. The inverse
-  dynamics cases returned `torch.bfloat16` action tensors with shape `[60, 9]`.
+- **Measured latency (1x B300, bf16, guardrails off):**
+  - T2I 1024² — 10 / 25 / 50 steps → ~0.4 / 0.7 / **1.3 s**
+  - T2V 1280×720 @ 35 steps — 25 / 49 / 93 / **189** frames → ~7 / 15 / 33 / **~93 s**
+  - I2V 1280×720, 189 frames @ 35 steps → ~**99 s**
+  - Action 640×480 @ 30 steps — forward-dynamics 61f ~**4 s**, policy 17f ~**1–3 s**.
+  - Guardrails-on overhead: ~8% on T2I, negligible on video.
 - **Memory:** transformer ~17 GiB (bf16); peak ~46 GiB for 720p video on 1 GPU;
   full repo (transformer + Wan VAE + Qwen3-VL vision encoder + audio tokenizer)
   ~33 GB on disk.
@@ -279,9 +269,6 @@ curl -sS -L "http://localhost:8000/v1/videos/$VIDEO_ID/content" -o cosmos3_inver
   guardrails enabled (it cannot re-enable them on a `--no-guardrails` server).
   `use_resolution_template` / `use_duration_template` are off by default and only
   needed when not using upsampled prompts that already encode resolution/duration.
-  Async video endpoints store generated files under `VLLM_OMNI_STORAGE_PATH`
-  (default `/tmp/storage`); set this to a writable directory if the default path
-  was created by another user.
   For V2V, `condition_frame_indexes_vision` selects the clean conditioned latent
   frame indexes (default `[0, 1]`), and `condition_video_keep` selects whether the
   API decodes the first or last needed reference frames (`"first"` by default).
