@@ -42,6 +42,11 @@ class _QuantizedPackedModelOptModel(nn.Module):
         )
 
 
+class _CustomRemapModelOptModel(_PackedModelOptModel):
+    def _remap_ckpt_key(self, name: str) -> str | None:
+        return name
+
+
 def _make_source() -> SimpleNamespace:
     return SimpleNamespace(
         subfolder="transformer",
@@ -91,4 +96,23 @@ def test_modelopt_adapter_keeps_scale_tensors_for_quantized_target():
     assert [name for name, _ in adapted] == [
         "transformer.block.to_q.weight_scale",
         "transformer.block.to_q.input_scale",
+    ]
+
+
+def test_modelopt_adapter_preserves_unresolved_scales_for_custom_remap_model():
+    model = _CustomRemapModelOptModel()
+    adapter = ModelOptFp8CheckpointAdapter(model, _make_source())
+
+    adapted = list(
+        adapter.adapt(
+            iter(
+                [
+                    ("transformer.layers.0.self_attn.to_q.weight_scale_2", torch.tensor([1.0])),
+                ]
+            )
+        )
+    )
+
+    assert [name for name, _ in adapted] == [
+        "transformer.layers.0.self_attn.to_q.weight_scale_2",
     ]

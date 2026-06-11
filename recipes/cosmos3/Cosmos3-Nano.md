@@ -258,6 +258,14 @@ curl -sS -L "http://localhost:8000/v1/videos/$VIDEO_ID/content" -o cosmos3_inver
 - **Memory:** transformer ~17 GiB (bf16); peak ~46 GiB for 720p video on 1 GPU;
   full repo (transformer + Wan VAE + Qwen3-VL vision encoder + audio tokenizer)
   ~33 GB on disk.
+- **ModelOpt NVFP4:** pre-quantized NVFP4 transformer checkpoints can be
+  exported with
+  `examples/quantization/quantize_cosmos3_nano_modelopt_nvfp4.py` and served
+  without `--quantization`; the checkpoint `transformer/config.json` selects
+  `modelopt_fp4`. Use `--linear-backend cutlass` on Blackwell, keep guardrails
+  disabled for benchmark parity unless explicitly measuring guardrail overhead,
+  and compare against BF16 with identical prompt, seed, size, frame count, and
+  scheduler settings.
 - **Determinism:** identical seed reproduces identical output on the same
   hardware; outputs are not bit-identical across different GPU types.
 - **Supported sizes (per model card):** 256p / 480p / 720p at 16:9, 4:3, 1:1,

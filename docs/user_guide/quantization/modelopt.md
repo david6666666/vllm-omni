@@ -77,6 +77,7 @@ backend and quality validation.
 | FLUX.2-klein 4B | `feizhai123/flux2-klein-4b-modelopt-fp8` | Diffusion transformer | Validated for ModelOpt FP8 checkpoints |
 | HunyuanImage-3.0 | `feizhai123/hunyuan-image3-modelopt-fp8` | MoE diffusion transformer | Validated for ModelOpt FP8 checkpoints |
 | HunyuanImage-3.0 | `feizhai123/hunyuan-image3-modelopt-mixed-experts-nvfp4-dense-fp8` | MoE diffusion transformer | Validated for ModelOpt mixed FP8/NVFP4 checkpoints |
+| Cosmos3-Nano | Local export with `examples/quantization/quantize_cosmos3_nano_modelopt_nvfp4.py` | Diffusion transformer | Validated for ModelOpt NVFP4 checkpoints on Blackwell |
 | Wan2.2 | Not available | Diffusion transformer | Not validated |
 
 For full serving commands and benchmark context, see

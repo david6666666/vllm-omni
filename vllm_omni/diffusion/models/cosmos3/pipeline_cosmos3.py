@@ -637,11 +637,11 @@ class Cosmos3OmniDiffusersPipeline(
         self.weights_sources = [
             DiffusersPipelineLoader.ComponentSource(
                 model_or_path=model_path,
-                subfolder=None,
+                subfolder="transformer",
                 revision=None,
                 prefix="transformer.",
                 fall_back_to_pt=True,
-                allow_patterns_overrides=["transformer/*.safetensors"],
+                allow_patterns_overrides=["*.safetensors"],
             ),
         ]
 

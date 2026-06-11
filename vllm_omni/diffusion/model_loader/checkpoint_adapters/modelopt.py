@@ -42,6 +42,7 @@ class ModelOptFp8CheckpointAdapter:
         self._loadable_tensors = self._get_model_loadable_tensors(model)
         self._weights_mapper = self._get_weights_mapper(model)
         self._source_label = getattr(source, "prefix", "") or getattr(source, "subfolder", None) or "model"
+        self._preserve_unresolved_scale_tensors = hasattr(model, "_remap_ckpt_key")
 
     @classmethod
     def is_compatible(
@@ -173,7 +174,10 @@ class ModelOptFp8CheckpointAdapter:
     ) -> Generator[tuple[str, torch.Tensor], None, None]:
         state.scale_tensors[name] = tensor
         if target_name is None:
-            state.skipped_scales += 1
+            if self._preserve_unresolved_scale_tensors:
+                yield name, tensor
+            else:
+                state.skipped_scales += 1
         else:
             yield name, tensor
         yield from self._flush_pending_weights(name, state)
