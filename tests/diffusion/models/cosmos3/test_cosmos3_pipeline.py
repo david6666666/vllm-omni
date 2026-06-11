@@ -325,17 +325,6 @@ def test_pipeline_init_skips_tokenizer_when_sound_disabled(stub_real_pipeline_in
     assert not hasattr(pipeline.transformer, "audio_proj_out")
 
 
-def test_pipeline_loads_transformer_weights_from_transformer_subfolder(stub_real_pipeline_init) -> None:
-    from vllm_omni.diffusion.models.cosmos3.pipeline_cosmos3 import Cosmos3OmniDiffusersPipeline
-
-    pipeline = Cosmos3OmniDiffusersPipeline(od_config=_make_od_config(sound_gen=False))
-
-    source = pipeline.weights_sources[0]
-    assert source.subfolder == "transformer"
-    assert source.prefix == "transformer."
-    assert source.allow_patterns_overrides is None
-
-
 def test_pipeline_init_passes_tokenizer_attrs_into_transformer(
     stub_real_pipeline_init,
     monkeypatch: pytest.MonkeyPatch,
@@ -473,17 +462,6 @@ def test_prompt_formatting_and_checkpoint_key_remap(make_cosmos3_pipeline) -> No
         ),
     }
     assert {key: Cosmos3OmniDiffusersPipeline._remap_ckpt_key(key) for key in remaps} == remaps
-
-
-def test_load_weights_accepts_adapter_emitted_target_keys(make_cosmos3_pipeline) -> None:
-    pipeline = make_cosmos3_pipeline()
-    pipeline.transformer.proj_out = nn.Linear(1, 1)
-    pipeline.transformer.post_load_weights = lambda: None
-
-    loaded = pipeline.load_weights([("transformer.proj_out.bias", torch.tensor([3.0]))])
-
-    assert "transformer.proj_out.bias" in loaded
-    torch.testing.assert_close(pipeline.transformer.proj_out.bias, torch.tensor([3.0]))
 
 
 def test_prepare_latents_for_video_image_sound_and_action(make_cosmos3_pipeline) -> None:

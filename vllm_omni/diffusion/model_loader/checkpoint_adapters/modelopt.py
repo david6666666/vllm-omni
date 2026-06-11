@@ -35,15 +35,13 @@ class _AdaptState:
     pending_weights: dict[str, list[tuple[str, torch.Tensor, torch.dtype]]] = field(default_factory=dict)
     skipped_scales: int = 0
     dequantized_weights: int = 0
-    initialized_scales: int = 0
 
 
 class ModelOptFp8CheckpointAdapter:
-    def __init__(self, model: nn.Module, source: object, quant_config: object | None = None):
+    def __init__(self, model: nn.Module, source: object):
         self._loadable_tensors = self._get_model_loadable_tensors(model)
         self._weights_mapper = self._get_weights_mapper(model)
         self._source_label = getattr(source, "prefix", "") or getattr(source, "subfolder", None) or "model"
-        self._allow_unscaled_fp8_weights = bool(getattr(quant_config, "_omni_unscaled_fp8_checkpoint", False))
 
     @classmethod
     def is_compatible(
@@ -202,11 +200,9 @@ class ModelOptFp8CheckpointAdapter:
     ) -> torch.Tensor | None:
         scale_name = self._get_weight_scale_name(name)
         if scale_name is None:
-            return tensor.to(dtype=target_dtype)
+            raise ValueError(f"Missing ModelOpt FP8 weight_scale name for weight {name!r}")
 
         if scale_name not in state.scale_tensors:
-            if self._allow_unscaled_fp8_weights:
-                return tensor.to(dtype=target_dtype)
             state.pending_weights.setdefault(scale_name, []).append((name, tensor, target_dtype))
             return None
 
@@ -221,31 +217,15 @@ class ModelOptFp8CheckpointAdapter:
         missing_scale_names = ", ".join(repr(name) for name in sorted(state.pending_weights))
         raise ValueError(f"Missing ModelOpt FP8 weight_scale for full-precision target weights: {missing_scale_names}")
 
-    def _initialize_missing_unscaled_fp8_scales(
-        self,
-        state: _AdaptState,
-    ) -> Generator[tuple[str, torch.Tensor], None, None]:
-        if not self._allow_unscaled_fp8_weights:
-            return
-
-        for name, target in self._loadable_tensors.items():
-            if not self._is_scale(name) or name in state.scale_tensors:
-                continue
-            state.scale_tensors[name] = torch.ones_like(target)
-            state.initialized_scales += 1
-            yield name, state.scale_tensors[name]
-
     def _log_adaptation_summary(self, state: _AdaptState) -> None:
-        if not state.skipped_scales and not state.dequantized_weights and not state.initialized_scales:
+        if not state.skipped_scales and not state.dequantized_weights:
             return
 
         logger.info_once(
-            "Adapted ModelOpt FP8 %s weights: dequantized %d full-precision weights, "
-            "skipped %d scale tensors, initialized %d missing scale tensors",
+            "Adapted ModelOpt FP8 %s weights: dequantized %d full-precision weights, skipped %d scale tensors",
             self._source_label,
             state.dequantized_weights,
             state.skipped_scales,
-            state.initialized_scales,
         )
 
     def adapt(
@@ -268,7 +248,6 @@ class ModelOptFp8CheckpointAdapter:
             yield name, tensor
 
         self._check_pending_weights(state)
-        yield from self._initialize_missing_unscaled_fp8_scales(state)
         self._log_adaptation_summary(state)
 
 

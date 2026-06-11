@@ -16,11 +16,11 @@ def get_checkpoint_adapter(
     use_safetensors: bool,
 ) -> ModelOptFp8CheckpointAdapter | ModelOptNvFp4CheckpointAdapter | ModelOptMixedPrecisionCheckpointAdapter | None:
     if ModelOptFp8CheckpointAdapter.is_compatible(source, quant_config, use_safetensors):
-        return ModelOptFp8CheckpointAdapter(model, source, quant_config)
+        return ModelOptFp8CheckpointAdapter(model, source)
     if ModelOptNvFp4CheckpointAdapter.is_compatible(source, quant_config, use_safetensors):
-        return ModelOptNvFp4CheckpointAdapter(model, source, quant_config)
+        return ModelOptNvFp4CheckpointAdapter(model, source)
     if ModelOptMixedPrecisionCheckpointAdapter.is_compatible(source, quant_config, use_safetensors):
-        return ModelOptMixedPrecisionCheckpointAdapter(model, source, quant_config)
+        return ModelOptMixedPrecisionCheckpointAdapter(model, source)
     return None
 
 

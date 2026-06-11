@@ -637,10 +637,11 @@ class Cosmos3OmniDiffusersPipeline(
         self.weights_sources = [
             DiffusersPipelineLoader.ComponentSource(
                 model_or_path=model_path,
-                subfolder="transformer",
-                revision=getattr(od_config, "revision", None),
+                subfolder=None,
+                revision=None,
                 prefix="transformer.",
                 fall_back_to_pt=True,
+                allow_patterns_overrides=["transformer/*.safetensors"],
             ),
         ]
 
@@ -784,11 +785,6 @@ class Cosmos3OmniDiffusersPipeline(
             total = kept = 0
             for name, tensor in weights:
                 total += 1
-                if name in allowed or name in tp_aware:
-                    kept += 1
-                    yield name, tensor
-                    continue
-
                 remapped = self._remap_ckpt_key(name)
                 if remapped is not None and (remapped in allowed or remapped in tp_aware):
                     kept += 1
