@@ -233,6 +233,23 @@ def test_transformer_config_auto_detects_modelopt_fp8():
     assert config.quant_method == "modelopt"
 
 
+def test_transformer_config_auto_detects_float8_checkpoint_as_modelopt_fp8():
+    from vllm.model_executor.layers.quantization.modelopt import ModelOptFp8Config
+
+    from vllm_omni.diffusion.data import TransformerConfig
+
+    config = TransformerConfig.from_dict(
+        {
+            "_class_name": "Cosmos3OmniTransformer",
+            "dtype": "float8",
+        }
+    )
+
+    assert isinstance(config.quant_config, ModelOptFp8Config)
+    assert config.quant_method == "modelopt"
+    assert config.quant_config.is_checkpoint_fp8_serialized
+
+
 def test_supported_methods_includes_vllm():
     from vllm_omni.quantization import SUPPORTED_QUANTIZATION_METHODS
 

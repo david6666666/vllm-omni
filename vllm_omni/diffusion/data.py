@@ -261,8 +261,30 @@ class TransformerConfig:
             quant_config = build_quant_config(disk_qc)
             if quant_config is not None:
                 quant_method = raw_quant_method if raw_quant_method is not None else quant_config.get_name()
+        elif cls._is_float8_checkpoint_config(params):
+            quant_method = "modelopt"
+            quant_config = build_quant_config(
+                {
+                    "quant_method": quant_method,
+                    "quant_algo": "FP8",
+                    "is_checkpoint_fp8_serialized": True,
+                    "producer": {"name": "modelopt"},
+                }
+            )
+            if quant_config is not None:
+                setattr(quant_config, "_omni_unscaled_fp8_checkpoint", True)
 
         return cls(params=params, quant_method=quant_method, quant_config=quant_config)
+
+    @staticmethod
+    def _is_float8_checkpoint_config(params: Mapping[str, Any]) -> bool:
+        dtype = params.get("dtype")
+        return isinstance(dtype, str) and dtype.lower() in {
+            "float8",
+            "float8_e4m3fn",
+            "float8_e5m2",
+            "fp8",
+        }
 
     def to_dict(self) -> dict[str, Any]:
         return dict(self.params)
