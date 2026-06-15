@@ -115,38 +115,31 @@ class TestEncodeTileSplit:
         first_task = tiletask_list[0]
         assert len(first_task.tensor) == 2  # 2 temporal chunks
 
-    def test_split_with_patch_size_scales_coordinates(self):
-        """Test that patch_size properly scales tile coordinates."""
+    def test_split_with_patch_size_keeps_diffusers_tile_coordinates(self):
+        """Test patchified inputs use the same tile grid as diffusers tiled_encode."""
         encode_tile_split = _import_encode_tile_split()
 
-        # Without patch_size
-        vae_no_patch = _DummyWanVae(
-            config=_DummyConfig(patch_size=None, scale_factor_temporal=4),
-            spatial_compression_ratio=8,
-            tile_sample_min_height=256,
-            tile_sample_min_width=256,
-            tile_sample_stride_height=128,
-            tile_sample_stride_width=128,
-        )
-
-        # With patch_size=2 (simulating patchified input)
-        vae_with_patch = _DummyWanVae(
+        vae = _DummyWanVae(
             config=_DummyConfig(patch_size=2, scale_factor_temporal=4),
-            spatial_compression_ratio=8,
+            spatial_compression_ratio=16,
             tile_sample_min_height=256,
             tile_sample_min_width=256,
-            tile_sample_stride_height=128,
-            tile_sample_stride_width=128,
+            tile_sample_stride_height=192,
+            tile_sample_stride_width=192,
         )
 
-        # Same patchified input size
-        x = torch.randn(1, 3, 5, 256, 256)
+        # Parent AutoencoderKLWan._encode patchifies a 720x1280 video before
+        # calling tiled_encode, so encode_tile_split sees 360x640 coordinates.
+        x = torch.randn(1, 12, 189, 360, 640)
 
-        tasks_no_patch, _ = encode_tile_split(vae_no_patch, x)
-        tasks_with_patch, _ = encode_tile_split(vae_with_patch, x)
+        tiletask_list, grid_spec = encode_tile_split(vae, x)
 
-        # With patch_size=2, stride becomes 128//2=64, so more tiles
-        assert len(tasks_with_patch) >= len(tasks_no_patch)
+        assert len(tiletask_list) == 8
+        assert grid_spec.grid_shape == (2, 4)
+        assert grid_spec.tile_spec["latent_height"] == 45
+        assert grid_spec.tile_spec["latent_width"] == 80
+        assert grid_spec.tile_spec["tile_latent_stride_height"] == 24
+        assert grid_spec.tile_spec["tile_latent_stride_width"] == 24
 
     def test_temporal_compression_from_config(self):
         """Test that temporal compression ratio is read from config."""

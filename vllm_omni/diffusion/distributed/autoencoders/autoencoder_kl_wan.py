@@ -124,7 +124,6 @@ class DistributedAutoencoderKLWan(OmniAutoencoderKLWan, DistributedVaeMixin):
     def encode_tile_split(self, x: torch.Tensor) -> tuple[list[TileTask], GridSpec]:
         _, _, num_frames, height, width = x.shape
         encode_spatial_compression_ratio = self.spatial_compression_ratio
-        # Scale tile parameters for patchified coordinate system
         tile_sample_min_height = self.tile_sample_min_height
         tile_sample_min_width = self.tile_sample_min_width
         tile_sample_stride_height = self.tile_sample_stride_height
@@ -132,11 +131,6 @@ class DistributedAutoencoderKLWan(OmniAutoencoderKLWan, DistributedVaeMixin):
         if self.config.patch_size is not None:
             assert encode_spatial_compression_ratio % self.config.patch_size == 0
             encode_spatial_compression_ratio = self.spatial_compression_ratio // self.config.patch_size
-            # When input is patchified, scale tile parameters accordingly
-            tile_sample_min_height = tile_sample_min_height // self.config.patch_size
-            tile_sample_min_width = tile_sample_min_width // self.config.patch_size
-            tile_sample_stride_height = tile_sample_stride_height // self.config.patch_size
-            tile_sample_stride_width = tile_sample_stride_width // self.config.patch_size
 
         latent_height = height // encode_spatial_compression_ratio
         latent_width = width // encode_spatial_compression_ratio
