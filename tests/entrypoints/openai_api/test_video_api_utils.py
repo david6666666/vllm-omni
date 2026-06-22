@@ -48,6 +48,45 @@ def test_encode_video_bytes_exports_frames_without_interpolation(monkeypatch):
     assert mux_calls[0]["audio"] is None
 
 
+def test_encode_video_bytes_uses_direct_tensor_path(monkeypatch):
+    mux_calls = []
+    _install_fake_video_mux(monkeypatch, mux_calls)
+
+    def _unexpected_stack(*args, **kwargs):
+        raise AssertionError("tensor video path should not materialize a frame list with np.stack")
+
+    monkeypatch.setattr(video_api_utils.np, "stack", _unexpected_stack)
+    video = torch.linspace(0, 1, steps=3 * 5 * 2 * 2, dtype=torch.float32).reshape(3, 5, 2, 2)
+    video_bytes = video_api_utils._encode_video_bytes(video, fps=8)
+
+    assert video_bytes == b"fake-video"
+    frames = mux_calls[0]["frames"]
+    assert frames.shape == (5, 2, 2, 3)
+    assert frames.dtype == np.uint8
+    assert frames.flags.c_contiguous
+    assert frames[0, 0, 0, 0] == 0
+    assert frames[-1, -1, -1, -1] == 255
+
+
+def test_encode_video_bytes_direct_tensor_preserves_raw_minus_one_to_one_range(monkeypatch):
+    mux_calls = []
+    _install_fake_video_mux(monkeypatch, mux_calls)
+
+    video = torch.tensor(
+        [
+            [[[-1.0]], [[1.0]]],
+            [[[-1.0]], [[1.0]]],
+            [[[-1.0]], [[1.0]]],
+        ]
+    )
+    video_api_utils._encode_video_bytes(video, fps=8)
+
+    frames = mux_calls[0]["frames"]
+    assert frames.shape == (2, 1, 1, 3)
+    assert frames[0, 0, 0].tolist() == [0, 0, 0]
+    assert frames[1, 0, 0].tolist() == [255, 255, 255]
+
+
 def test_rife_model_inference_runs_on_dummy_tensors():
     model = rife_interpolator.Model().eval()
     img0 = torch.rand(1, 3, 32, 32)

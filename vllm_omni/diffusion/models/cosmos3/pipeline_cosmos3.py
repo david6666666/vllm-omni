@@ -496,6 +496,11 @@ def get_cosmos3_post_process_func(od_config: OmniDiffusionConfig):
             fps_value = 24.0
         return int(fps_value) if fps_value.is_integer() else fps_value
 
+    def _postprocess_video_tensor(video: torch.Tensor) -> torch.Tensor:
+        # Match SGLang's fast video path: keep the decoded video as a tensor
+        # through serving and only normalize in-place before MP4 encoding.
+        return video.mul_(0.5).add_(0.5).clamp_(0, 1)
+
     def post_process_func(
         output: torch.Tensor | dict[str, torch.Tensor] | tuple,
         output_type: str = "np",
@@ -543,9 +548,14 @@ def get_cosmos3_post_process_func(od_config: OmniDiffusionConfig):
                 checked = check_video_safety(image.unsqueeze(2))
                 image = checked.squeeze(2)
             return video_processor.postprocess(image, output_type="pil")
-        if is_guardrails_enabled(od_config, sampling_params):
+        guardrails_enabled = is_guardrails_enabled(od_config, sampling_params)
+        if guardrails_enabled:
             video = check_video_safety(video)
-        processed_video = video_processor.postprocess_video(video, output_type=output_type)
+            processed_video = video_processor.postprocess_video(video, output_type=output_type)
+        elif output_type in ("np", "pt"):
+            processed_video = _postprocess_video_tensor(video)
+        else:
+            processed_video = video_processor.postprocess_video(video, output_type=output_type)
         if audio is None:
             return processed_video
         if isinstance(audio, torch.Tensor):
