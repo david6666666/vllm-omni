@@ -303,19 +303,56 @@ async def decode_input_reference(
     return None
 
 
-def _normalize_video_tensor(video_tensor: torch.Tensor) -> np.ndarray:
-    """Normalize a torch video tensor into a numpy array of frames (F, H, W, C)."""
-    video_tensor = video_tensor.detach().cpu()
+def _prepare_video_tensor_for_encoding(video_tensor: torch.Tensor) -> torch.Tensor:
+    """Return a single video tensor in frame-major channel-last layout."""
+    video_tensor = video_tensor.detach()
     if video_tensor.dim() == 5:
-        raise ValueError("Batched video tensors are not supported for single-video encoding.")
-    elif video_tensor.dim() == 4 and video_tensor.shape[0] in (3, 4):
+        if video_tensor.shape[0] != 1:
+            raise ValueError("Batched video tensors are not supported for single-video encoding.")
+        video_tensor = video_tensor[0]
+    if video_tensor.dim() == 4 and video_tensor.shape[0] in (3, 4) and video_tensor.shape[-1] not in (3, 4):
         # [C, F, H, W] -> [F, H, W, C]
         video_tensor = video_tensor.permute(1, 2, 3, 0)
+    elif video_tensor.dim() == 4 and video_tensor.shape[1] in (3, 4) and video_tensor.shape[-1] not in (3, 4):
+        # [F, C, H, W] -> [F, H, W, C]
+        video_tensor = video_tensor.permute(0, 2, 3, 1)
+    return video_tensor
 
+
+def _video_tensor_to_uint8_frames(video_tensor: torch.Tensor) -> np.ndarray:
+    """Convert a single video tensor directly to contiguous uint8 frames."""
+    # Keep tensor payloads off the generic frame-list path; do one contiguous
+    # CPU transfer after layout normalization and uint8 conversion.
+    video_tensor = _prepare_video_tensor_for_encoding(video_tensor)
+    if video_tensor.dim() != 4:
+        raise ValueError(f"Unsupported video tensor shape: {tuple(video_tensor.shape)}")
+    if video_tensor.shape[-1] == 4:
+        video_tensor = video_tensor[..., :3]
+    if video_tensor.dtype == torch.uint8:
+        frames = video_tensor.contiguous().cpu().numpy()
+        return np.ascontiguousarray(frames)
+    if video_tensor.is_floating_point():
+        video_tensor = video_tensor.float()
+        # Preserve the legacy behavior for raw model tensors in [-1, 1], while
+        # keeping already-postprocessed tensors in [0, 1] on the fast path.
+        if video_tensor.min().item() < 0.0 or video_tensor.max().item() > 1.0:
+            video_tensor = video_tensor.clamp(-1.0, 1.0).mul(0.5).add(0.5)
+        else:
+            video_tensor = video_tensor.clamp(0.0, 1.0)
+        video_tensor = video_tensor.mul(255.0).round().to(torch.uint8)
+    else:
+        video_tensor = video_tensor.to(torch.float32).div(255.0).clamp(0.0, 1.0).mul(255.0).round().to(torch.uint8)
+    frames = video_tensor.contiguous().cpu().numpy()
+    return np.ascontiguousarray(frames)
+
+
+def _normalize_video_tensor(video_tensor: torch.Tensor) -> np.ndarray:
+    """Normalize a torch video tensor into a numpy array of frames (F, H, W, C)."""
+    video_tensor = _prepare_video_tensor_for_encoding(video_tensor).cpu()
     if video_tensor.is_floating_point():
         # Cast to float32 first: bf16 (e.g. SANA-WM's refiner output) has no
         # numpy dtype, so ``.numpy()`` below raises on it.
-        video_tensor = video_tensor.float().clamp(-1, 1) * 0.5 + 0.5
+        video_tensor = video_tensor.float()
     else:
         video_tensor = video_tensor.to(torch.float32) / 255.0
     video_array = video_tensor.numpy()
@@ -425,6 +462,25 @@ def _coerce_audio_to_numpy(audio: Any) -> np.ndarray:
 
 def _coerce_video_to_uint8_frames(video: Any) -> np.ndarray:
     """Convert a video payload into contiguous uint8 frames shaped (F, H, W, 3)."""
+    if isinstance(video, torch.Tensor):
+        return _video_tensor_to_uint8_frames(video)
+
+    if isinstance(video, np.ndarray) and video.ndim in (4, 5):
+        video_array = _normalize_video_array(video)
+        if isinstance(video_array, list):
+            if len(video_array) != 1:
+                raise ValueError("Batched video arrays must be split before encoding.")
+            video_array = video_array[0]
+        if video_array.ndim == 3:
+            video_array = video_array[None, ...]
+        if video_array.shape[-1] == 4:
+            video_array = video_array[..., :3]
+        if video_array.dtype == np.uint8:
+            frames_u8 = video_array
+        else:
+            frames_u8 = np.round(np.clip(video_array, 0.0, 1.0) * 255.0).astype(np.uint8)
+        return np.ascontiguousarray(frames_u8)
+
     frames = _coerce_video_to_frames(video)
     if not frames:
         raise ValueError("No frames found to encode.")

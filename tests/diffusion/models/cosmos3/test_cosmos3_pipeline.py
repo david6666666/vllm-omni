@@ -698,16 +698,19 @@ def test_postprocess_handles_image_video_audio_and_validation() -> None:
 
     assert func(video, output_type="latent") is video
     assert func({"image": video})[0].size == (4, 4)
-    # Video-only postprocess returns the bare processed video (not a dict),
-    # matching the image/latent branches and peer audio-capable pipelines.
-    assert not isinstance(func({"video": video}), dict)
-    assert (
-        func(
-            {"video": video, "audio": torch.ones(1, 2, 16), "audio_sample_rate": 48000},
-            sampling_params=SimpleNamespace(extra_args={"resolved_frame_rate": 12}),
-        )["audio_sample_rate"]
-        == 48000
+    # Video-only postprocess returns a tensor fast path (not a dict),
+    # matching the decode stage and avoiding Diffusers postprocess_video copies.
+    processed_video = func({"video": video.clone()})
+    assert isinstance(processed_video, torch.Tensor)
+    assert processed_video.shape == video.shape
+    torch.testing.assert_close(processed_video, torch.full_like(video, 0.5))
+
+    video_audio = func(
+        {"video": video.clone(), "audio": torch.ones(1, 2, 16), "audio_sample_rate": 48000},
+        sampling_params=SimpleNamespace(extra_args={"resolved_frame_rate": 12}),
     )
+    assert isinstance(video_audio["video"], torch.Tensor)
+    assert video_audio["audio_sample_rate"] == 48000
 
     with pytest.raises(ValueError, match="text-to-image postprocess expects"):
         func({"image": torch.zeros(1, 3, 2, 4, 4)})
