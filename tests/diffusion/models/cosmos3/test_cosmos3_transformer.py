@@ -163,16 +163,18 @@ def test_forward_accepts_transfer_control_latents(monkeypatch: pytest.MonkeyPatc
         )
 
 
-def test_forward_gathers_gen_tokens_before_unpatchify(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_forward_gathers_patch_tokens_before_unpatchify(monkeypatch: pytest.MonkeyPatch) -> None:
     from vllm_omni.diffusion.models.cosmos3 import transformer_cosmos3
 
     class RecordingGather(nn.Module):
         def __init__(self) -> None:
             super().__init__()
             self.calls = 0
+            self.last_shape: tuple[int, ...] | None = None
 
         def forward(self, hidden_gen: torch.Tensor) -> torch.Tensor:
             self.calls += 1
+            self.last_shape = tuple(hidden_gen.shape)
             return hidden_gen
 
     monkeypatch.setattr(transformer_cosmos3, "_get_ulysses_state", lambda: (1, 0, None))
@@ -192,6 +194,7 @@ def test_forward_gathers_gen_tokens_before_unpatchify(monkeypatch: pytest.Monkey
     )
 
     assert gather.calls == 1
+    assert gather.last_shape == (1, 4, model.patch_latent_dim)
     assert tuple(output.shape) == (1, 2, 1, 2, 2)
 
 

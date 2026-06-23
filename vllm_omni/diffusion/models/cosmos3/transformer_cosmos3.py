@@ -1606,12 +1606,15 @@ class Cosmos3VFMTransformer(nn.Module):
                 if isinstance(hidden_gen, tuple):
                     hidden_gen = hidden_gen[0]
 
-        hidden_gen = self.gen_sp_gather(hidden_gen)
-
-        # Final norm and project back to latent space
+        # Final norm and projection are per-token operations.  Run them before
+        # the SP gather on the video-only path so the collective moves compact
+        # patch tokens instead of hidden-size GEN states.
         hidden_gen = self.norm_moe_gen(hidden_gen)
         if not has_action and not has_sound and not has_control:
-            return self.unpatchify(self.proj_out(hidden_gen), t, h, w)
+            hidden_gen = self.gen_sp_gather(self.proj_out(hidden_gen))
+            return self.unpatchify(hidden_gen, t, h, w)
+
+        hidden_gen = self.gen_sp_gather(hidden_gen)
 
         split_sizes = []
         if has_control:
