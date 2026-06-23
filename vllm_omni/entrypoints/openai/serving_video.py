@@ -79,6 +79,7 @@ class OmniOpenAIServingVideo:
         self._engine_client = engine_client
         self._model_name = model_name
         self._stage_configs = stage_configs
+        self._is_cosmos3_model_cache: bool | None = None
 
     @property
     def model_name(self) -> str | None:
@@ -91,6 +92,7 @@ class OmniOpenAIServingVideo:
     def set_stage_configs_if_missing(self, stage_configs: list[Any] | None) -> None:
         if self._stage_configs is None and stage_configs is not None:
             self._stage_configs = stage_configs
+            self._is_cosmos3_model_cache = None
 
     @classmethod
     def for_diffusion(
@@ -347,14 +349,15 @@ class OmniOpenAIServingVideo:
         return video_bytes, artifacts.stage_durations, artifacts.peak_memory_mb, artifacts.actions[0]
 
     def _video_tensor_encoding_options(self, video: Any) -> dict[str, bool]:
+        if not self._is_cosmos3_model():
+            return {}
+        options = {"use_pinned_host_transfer": True}
         if self._should_skip_video_tensor_range_check(video):
-            return {"assume_unit_interval_tensor": True}
-        return {}
+            options["assume_unit_interval_tensor"] = True
+        return options
 
     def _should_skip_video_tensor_range_check(self, video: Any) -> bool:
         """Return whether tensor encode can skip synchronizing min/max probes."""
-        if not self._is_cosmos3_model():
-            return False
         is_floating_point = getattr(video, "is_floating_point", None)
         if not callable(is_floating_point):
             return False
@@ -364,6 +367,8 @@ class OmniOpenAIServingVideo:
             return False
 
     def _is_cosmos3_model(self) -> bool:
+        if self._is_cosmos3_model_cache is not None:
+            return self._is_cosmos3_model_cache
         candidates: list[Any] = [self._model_name]
         stage_configs = self._stage_configs or getattr(self._engine_client, "stage_configs", None) or []
         for stage_cfg in stage_configs:
@@ -375,7 +380,9 @@ class OmniOpenAIServingVideo:
                     self._config_get(engine_args, "model"),
                 )
             )
-        return any("cosmos3" in str(candidate).lower() for candidate in candidates if candidate is not None)
+        is_cosmos3 = any("cosmos3" in str(candidate).lower() for candidate in candidates if candidate is not None)
+        self._is_cosmos3_model_cache = is_cosmos3
+        return is_cosmos3
 
     @staticmethod
     def _config_get(config: Any, key: str, default: Any = None) -> Any:

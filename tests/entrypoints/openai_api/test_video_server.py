@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import torch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -427,6 +428,30 @@ def test_decode_video_bytes_can_keep_last_frames():
     red_means = [np.asarray(frame)[:, :, 0].mean() for frame in frames]
     assert red_means[0] > 100
     assert red_means[1] > red_means[0]
+
+
+def test_cosmos3_video_tensor_encoding_options_enable_pinned_transfer():
+    handler = OmniOpenAIServingVideo.for_diffusion(
+        diffusion_engine=FakeAsyncOmni(),
+        model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+        stage_configs=_cosmos3_stage_configs(),
+    )
+
+    options = handler._video_tensor_encoding_options(torch.zeros(3, 2, 4, 4))
+
+    assert options == {
+        "assume_unit_interval_tensor": True,
+        "use_pinned_host_transfer": True,
+    }
+
+
+def test_non_cosmos3_video_tensor_encoding_options_stay_default():
+    handler = OmniOpenAIServingVideo.for_diffusion(
+        diffusion_engine=FakeAsyncOmni(),
+        model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+    )
+
+    assert handler._video_tensor_encoding_options(torch.zeros(3, 2, 4, 4)) == {}
 
 
 def test_cosmos3_reference_video_limit_uses_v2v_condition_frames():
