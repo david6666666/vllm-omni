@@ -319,7 +319,34 @@ def _prepare_video_tensor_for_encoding(video_tensor: torch.Tensor) -> torch.Tens
     return video_tensor
 
 
-def _video_tensor_to_uint8_frames(video_tensor: torch.Tensor, *, assume_unit_interval: bool = False) -> np.ndarray:
+def _copy_video_tensor_to_numpy(
+    video_tensor: torch.Tensor,
+    *,
+    use_pinned_host_transfer: bool = False,
+) -> np.ndarray:
+    video_tensor = video_tensor.contiguous()
+    if use_pinned_host_transfer and video_tensor.device.type == "cuda":
+        try:
+            host_tensor = torch.empty(
+                video_tensor.shape,
+                dtype=video_tensor.dtype,
+                device="cpu",
+                pin_memory=True,
+            )
+            host_tensor.copy_(video_tensor, non_blocking=True)
+            torch.cuda.current_stream(video_tensor.device).synchronize()
+            return host_tensor.numpy()
+        except (RuntimeError, TypeError):
+            pass
+    return video_tensor.cpu().numpy()
+
+
+def _video_tensor_to_uint8_frames(
+    video_tensor: torch.Tensor,
+    *,
+    assume_unit_interval: bool = False,
+    use_pinned_host_transfer: bool = False,
+) -> np.ndarray:
     """Convert a single video tensor directly to contiguous uint8 frames."""
     video_tensor = _prepare_video_tensor_for_encoding(video_tensor)
     if video_tensor.dim() != 4:
@@ -327,7 +354,7 @@ def _video_tensor_to_uint8_frames(video_tensor: torch.Tensor, *, assume_unit_int
     if video_tensor.shape[-1] == 4:
         video_tensor = video_tensor[..., :3]
     if video_tensor.dtype == torch.uint8:
-        frames = video_tensor.contiguous().cpu().numpy()
+        frames = _copy_video_tensor_to_numpy(video_tensor, use_pinned_host_transfer=use_pinned_host_transfer)
         return np.ascontiguousarray(frames)
     if video_tensor.is_floating_point():
         video_tensor = video_tensor.float()
@@ -343,7 +370,7 @@ def _video_tensor_to_uint8_frames(video_tensor: torch.Tensor, *, assume_unit_int
         video_tensor = video_tensor.mul(255.0).round().to(torch.uint8)
     else:
         video_tensor = video_tensor.to(torch.float32).div(255.0).clamp(0.0, 1.0).mul(255.0).round().to(torch.uint8)
-    frames = video_tensor.contiguous().cpu().numpy()
+    frames = _copy_video_tensor_to_numpy(video_tensor, use_pinned_host_transfer=use_pinned_host_transfer)
     return np.ascontiguousarray(frames)
 
 
@@ -468,12 +495,17 @@ def _encode_video_bytes(
     audio_sample_rate: int | None = None,
     video_codec_options: dict[str, str] | None = None,
     assume_unit_interval_tensor: bool = False,
+    use_pinned_host_transfer: bool = False,
 ) -> bytes:
     """Encode a video payload into MP4 bytes, optionally muxing audio."""
     from vllm_omni.diffusion.utils.media_utils import mux_video_audio_bytes
 
     if isinstance(video, torch.Tensor):
-        frames_u8 = _video_tensor_to_uint8_frames(video, assume_unit_interval=assume_unit_interval_tensor)
+        frames_u8 = _video_tensor_to_uint8_frames(
+            video,
+            assume_unit_interval=assume_unit_interval_tensor,
+            use_pinned_host_transfer=use_pinned_host_transfer,
+        )
     elif isinstance(video, np.ndarray) and video.ndim in (4, 5):
         video_array = _normalize_video_array(video)
         if isinstance(video_array, list):
@@ -525,6 +557,7 @@ def encode_video_base64(
     audio_sample_rate: int | None = None,
     video_codec_options: dict[str, str] | None = None,
     assume_unit_interval_tensor: bool = False,
+    use_pinned_host_transfer: bool = False,
 ) -> str:
     """Encode a video (frames/array/tensor) to base64 MP4."""
     video_bytes = _encode_video_bytes(
@@ -534,5 +567,6 @@ def encode_video_base64(
         audio_sample_rate=audio_sample_rate,
         video_codec_options=video_codec_options,
         assume_unit_interval_tensor=assume_unit_interval_tensor,
+        use_pinned_host_transfer=use_pinned_host_transfer,
     )
     return base64.b64encode(video_bytes).decode("utf-8")
