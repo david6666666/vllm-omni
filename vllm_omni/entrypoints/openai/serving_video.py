@@ -270,7 +270,12 @@ class OmniOpenAIServingVideo:
         video_data = [
             VideoData(
                 b64_json=(
-                    encode_video_base64(video, fps=artifacts.output_fps, video_codec_options=video_codec_options)
+                    encode_video_base64(
+                        video,
+                        fps=artifacts.output_fps,
+                        video_codec_options=video_codec_options,
+                        **self._video_tensor_encoding_options(video),
+                    )
                     if artifacts.audios[idx] is None
                     else encode_video_base64(
                         video,
@@ -278,6 +283,7 @@ class OmniOpenAIServingVideo:
                         audio=artifacts.audios[idx],
                         audio_sample_rate=artifacts.audio_sample_rate,
                         video_codec_options=video_codec_options,
+                        **self._video_tensor_encoding_options(video),
                     )
                 ),
                 action=artifacts.actions[idx],
@@ -334,10 +340,48 @@ class OmniOpenAIServingVideo:
             fps=artifacts.output_fps,
             **({"audio": audio, "audio_sample_rate": artifacts.audio_sample_rate} if audio is not None else {}),
             video_codec_options=video_codec_options,
+            **self._video_tensor_encoding_options(artifacts.videos[0]),
         )
         _t_encode_ms = (time.perf_counter() - _t_encode_start) * 1000
         logger.info("Video response encoding (MP4 bytes): %.2f ms", _t_encode_ms)
         return video_bytes, artifacts.stage_durations, artifacts.peak_memory_mb, artifacts.actions[0]
+
+    def _video_tensor_encoding_options(self, video: Any) -> dict[str, bool]:
+        if self._should_skip_video_tensor_range_check(video):
+            return {"assume_unit_interval_tensor": True}
+        return {}
+
+    def _should_skip_video_tensor_range_check(self, video: Any) -> bool:
+        """Return whether tensor encode can skip synchronizing min/max probes."""
+        if not self._is_cosmos3_model():
+            return False
+        is_floating_point = getattr(video, "is_floating_point", None)
+        if not callable(is_floating_point):
+            return False
+        try:
+            return bool(is_floating_point())
+        except TypeError:
+            return False
+
+    def _is_cosmos3_model(self) -> bool:
+        candidates: list[Any] = [self._model_name]
+        stage_configs = self._stage_configs or getattr(self._engine_client, "stage_configs", None) or []
+        for stage_cfg in stage_configs:
+            engine_args = self._config_get(stage_cfg, "engine_args", {}) or {}
+            candidates.extend(
+                (
+                    self._config_get(stage_cfg, "model_class_name"),
+                    self._config_get(engine_args, "model_class_name"),
+                    self._config_get(engine_args, "model"),
+                )
+            )
+        return any("cosmos3" in str(candidate).lower() for candidate in candidates if candidate is not None)
+
+    @staticmethod
+    def _config_get(config: Any, key: str, default: Any = None) -> Any:
+        if isinstance(config, Mapping):
+            return config.get(key, default)
+        return getattr(config, key, default)
 
     @staticmethod
     def _resolve_video_fps_multiplier(result: Any) -> int:

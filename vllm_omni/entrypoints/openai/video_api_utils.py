@@ -319,7 +319,7 @@ def _prepare_video_tensor_for_encoding(video_tensor: torch.Tensor) -> torch.Tens
     return video_tensor
 
 
-def _video_tensor_to_uint8_frames(video_tensor: torch.Tensor) -> np.ndarray:
+def _video_tensor_to_uint8_frames(video_tensor: torch.Tensor, *, assume_unit_interval: bool = False) -> np.ndarray:
     """Convert a single video tensor directly to contiguous uint8 frames."""
     video_tensor = _prepare_video_tensor_for_encoding(video_tensor)
     if video_tensor.dim() != 4:
@@ -333,10 +333,13 @@ def _video_tensor_to_uint8_frames(video_tensor: torch.Tensor) -> np.ndarray:
         video_tensor = video_tensor.float()
         # Preserve the legacy behavior for raw model tensors in [-1, 1], while
         # keeping already-postprocessed tensors in [0, 1] on the fast path.
-        if video_tensor.min().item() < 0.0 or video_tensor.max().item() > 1.0:
-            video_tensor = video_tensor.clamp(-1.0, 1.0).mul(0.5).add(0.5)
-        else:
+        if assume_unit_interval:
             video_tensor = video_tensor.clamp(0.0, 1.0)
+        else:
+            if video_tensor.min().item() < 0.0 or video_tensor.max().item() > 1.0:
+                video_tensor = video_tensor.clamp(-1.0, 1.0).mul(0.5).add(0.5)
+            else:
+                video_tensor = video_tensor.clamp(0.0, 1.0)
         video_tensor = video_tensor.mul(255.0).round().to(torch.uint8)
     else:
         video_tensor = video_tensor.to(torch.float32).div(255.0).clamp(0.0, 1.0).mul(255.0).round().to(torch.uint8)
@@ -464,12 +467,13 @@ def _encode_video_bytes(
     audio: Any | None = None,
     audio_sample_rate: int | None = None,
     video_codec_options: dict[str, str] | None = None,
+    assume_unit_interval_tensor: bool = False,
 ) -> bytes:
     """Encode a video payload into MP4 bytes, optionally muxing audio."""
     from vllm_omni.diffusion.utils.media_utils import mux_video_audio_bytes
 
     if isinstance(video, torch.Tensor):
-        frames_u8 = _video_tensor_to_uint8_frames(video)
+        frames_u8 = _video_tensor_to_uint8_frames(video, assume_unit_interval=assume_unit_interval_tensor)
     elif isinstance(video, np.ndarray) and video.ndim in (4, 5):
         video_array = _normalize_video_array(video)
         if isinstance(video_array, list):
@@ -520,9 +524,15 @@ def encode_video_base64(
     audio: Any | None = None,
     audio_sample_rate: int | None = None,
     video_codec_options: dict[str, str] | None = None,
+    assume_unit_interval_tensor: bool = False,
 ) -> str:
     """Encode a video (frames/array/tensor) to base64 MP4."""
     video_bytes = _encode_video_bytes(
-        video, fps=fps, audio=audio, audio_sample_rate=audio_sample_rate, video_codec_options=video_codec_options
+        video,
+        fps=fps,
+        audio=audio,
+        audio_sample_rate=audio_sample_rate,
+        video_codec_options=video_codec_options,
+        assume_unit_interval_tensor=assume_unit_interval_tensor,
     )
     return base64.b64encode(video_bytes).decode("utf-8")

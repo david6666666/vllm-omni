@@ -68,6 +68,29 @@ def test_encode_video_bytes_uses_direct_tensor_path(monkeypatch):
     assert frames[-1, -1, -1, -1] == 255
 
 
+def test_encode_video_bytes_can_skip_tensor_range_probe(monkeypatch):
+    mux_calls = []
+    _install_fake_video_mux(monkeypatch, mux_calls)
+
+    def _unexpected_item(*args, **kwargs):
+        raise AssertionError("unit interval tensor path should not call Tensor.item")
+
+    monkeypatch.setattr(torch.Tensor, "item", _unexpected_item)
+    video = torch.linspace(0, 1, steps=3 * 5 * 2 * 2, dtype=torch.float32).reshape(3, 5, 2, 2)
+    video_bytes = video_api_utils._encode_video_bytes(
+        video,
+        fps=8,
+        assume_unit_interval_tensor=True,
+    )
+
+    assert video_bytes == b"fake-video"
+    frames = mux_calls[0]["frames"]
+    assert frames.shape == (5, 2, 2, 3)
+    assert frames.dtype == np.uint8
+    assert frames[0, 0, 0, 0] == 0
+    assert frames[-1, -1, -1, -1] == 255
+
+
 def test_encode_video_bytes_direct_tensor_preserves_raw_minus_one_to_one_range(monkeypatch):
     mux_calls = []
     _install_fake_video_mux(monkeypatch, mux_calls)
