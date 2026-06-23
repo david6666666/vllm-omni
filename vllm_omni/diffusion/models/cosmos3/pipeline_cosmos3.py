@@ -497,7 +497,7 @@ def get_cosmos3_post_process_func(od_config: OmniDiffusionConfig):
         return int(fps_value) if fps_value.is_integer() else fps_value
 
     def _postprocess_video_tensor(video: torch.Tensor) -> torch.Tensor:
-        # Match SGLang's fast video path: keep the decoded video as a tensor
+        # Match the A-framework fast video path: keep the decoded video as a tensor
         # through serving and only normalize in-place before MP4 encoding.
         return video.mul_(0.5).add_(0.5).clamp_(0, 1)
 
