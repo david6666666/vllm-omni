@@ -596,7 +596,7 @@ def test_postprocess_handles_image_video_audio_and_validation() -> None:
     assert func(video, output_type="latent") is video
     assert func({"image": video})[0].size == (4, 4)
     # Video-only postprocess returns a tensor fast path (not a dict), matching
-    # SGLang's decode stage and avoiding Diffusers postprocess_video copies.
+    # A-framework decode stage and avoiding Diffusers postprocess_video copies.
     processed_video = func({"video": video.clone()})
     assert isinstance(processed_video, torch.Tensor)
     assert processed_video.shape == video.shape
