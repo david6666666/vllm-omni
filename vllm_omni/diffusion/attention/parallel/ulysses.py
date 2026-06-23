@@ -11,7 +11,7 @@ import torch.nn.functional as F
 
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.parallel.base import ParallelAttentionContext
-from vllm_omni.diffusion.distributed.comm import SeqAllToAll4D
+from vllm_omni.diffusion.distributed.comm import SeqAllToAll4D, SeqAllToAll5D
 from vllm_omni.diffusion.distributed.group_coordinator import SequenceParallelGroupCoordinator
 from vllm_omni.diffusion.forward_context import get_ulysses_mode
 
@@ -99,6 +99,45 @@ def _ulysses_all_to_all_any_qkv(
     # (S_global, B, H_local, D) -> (B, S_global, H_local, D)
     out = out.permute(1, 0, 2, 3).contiguous()
     return out, orig_head_cnt
+
+
+def _map_4d_idx_to_qkv5d(idx: int) -> int:
+    # QKV packing inserts a type dimension before the head dimension.
+    return idx + 1 if idx >= 2 else idx
+
+
+def _ulysses_strict_all_to_all_qkv(
+    pg: dist.ProcessGroup,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    scatter_idx: int,
+    gather_idx: int,
+    use_sync: bool,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Packed strict Ulysses all-to-all for Q/K/V with identical layouts.
+
+    Cosmos3 uses same-shaped Q/K/V tensors. Packing them converts three NCCL
+    all-to-all launches plus three transpose materializations into one larger
+    all-to-all. GQA/MQA shapes fall back to the original per-tensor path.
+    """
+    if query.shape != key.shape or query.shape != value.shape:
+        return (
+            SeqAllToAll4D.apply(pg, query, scatter_idx, gather_idx, use_sync),
+            SeqAllToAll4D.apply(pg, key, scatter_idx, gather_idx, use_sync),
+            SeqAllToAll4D.apply(pg, value, scatter_idx, gather_idx, use_sync),
+        )
+
+    qkv = torch.stack((query, key, value), dim=2)
+    qkv = SeqAllToAll5D.apply(
+        pg,
+        qkv,
+        _map_4d_idx_to_qkv5d(scatter_idx),
+        _map_4d_idx_to_qkv5d(gather_idx),
+        use_sync,
+    )
+    query, key, value = qkv.unbind(dim=2)
+    return query.contiguous(), key.contiguous(), value.contiguous()
 
 
 def _ulysses_all_to_all_any_o(
@@ -328,10 +367,18 @@ class UlyssesParallelAttention:
                         f"Try ulysses_degree in {supported}, or set ulysses_mode='advanced_uaa'."
                     )
 
-            # (bs, seq_len/P, head_cnt, head_size) -> (bs, seq_len, head_cnt/P, head_size)
-            query = SeqAllToAll4D.apply(self._ulysses_pg, query, self._scatter_idx, self._gather_idx, self._use_sync)
-            key = SeqAllToAll4D.apply(self._ulysses_pg, key, self._scatter_idx, self._gather_idx, self._use_sync)
-            value = SeqAllToAll4D.apply(self._ulysses_pg, value, self._scatter_idx, self._gather_idx, self._use_sync)
+            # (bs, seq_len/P, head_cnt, head_size) -> (bs, seq_len, head_cnt/P, head_size).
+            # Pack same-shaped Q/K/V into one 5D all-to-all to reduce NCCL launch
+            # fragmentation in denoising attention.
+            query, key, value = _ulysses_strict_all_to_all_qkv(
+                self._ulysses_pg,
+                query,
+                key,
+                value,
+                self._scatter_idx,
+                self._gather_idx,
+                self._use_sync,
+            )
             seq_lens = []
             local_seq_len = 0
             orig_head_cnt = 0
