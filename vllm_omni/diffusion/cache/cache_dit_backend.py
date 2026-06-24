@@ -248,6 +248,7 @@ def enable_cache_for_wan22(pipeline: Any, cache_config: Any) -> RefreshCacheCont
     """
     # Build DBCacheConfig with optional SCM support
     db_cache_config = _build_db_cache_config(cache_config)
+    calibrator_config = _resolve_calibrator_config(cache_config)
 
     if getattr(pipeline, "transformer_2", None) is None:
         logger.info("transformer_2 not found, enabling cache-dit for single transformer mode")
@@ -257,11 +258,12 @@ def enable_cache_for_wan22(pipeline: Any, cache_config: Any) -> RefreshCacheCont
                 blocks=[pipeline.transformer.blocks],
                 forward_pattern=[ForwardPattern.Pattern_2],
                 params_modifiers=[
-                    ParamsModifier(cache_config=db_cache_config),
+                    ParamsModifier(cache_config=db_cache_config, calibrator_config=calibrator_config),
                 ],
                 has_separate_cfg=True,
             ),
             cache_config=db_cache_config,
+            calibrator_config=calibrator_config,
         )
         return build_cache_context_refresh(cache_config)
 
@@ -286,17 +288,20 @@ def enable_cache_for_wan22(pipeline: Any, cache_config: Any) -> RefreshCacheCont
                         max_warmup_steps=cache_config.max_warmup_steps,
                         max_cached_steps=cache_config.max_cached_steps,
                     ),
+                    calibrator_config=calibrator_config,
                 ),
                 ParamsModifier(
                     cache_config=DBCacheConfig().reset(
                         max_warmup_steps=2,
                         max_cached_steps=20,
                     ),
+                    calibrator_config=calibrator_config,
                 ),
             ],
             has_separate_cfg=True,
         ),
         cache_config=db_cache_config,
+        calibrator_config=calibrator_config,
     )
 
     refresh_trans_one = build_cache_context_refresh(cache_config)
@@ -965,6 +970,7 @@ CUSTOM_DIT_ENABLERS.update(
         "Wan22Pipeline": enable_cache_for_wan22,
         "Wan22I2VPipeline": enable_cache_for_wan22,
         "Wan22TI2VPipeline": enable_cache_for_wan22,
+        "Wan22VACEPipeline": enable_cache_for_wan22,
         "Wan22S2VPipeline": enable_cache_for_wan22_s2v,
         "Cosmos3OmniDiffusersPipeline": enable_cache_for_cosmos3,
     }
