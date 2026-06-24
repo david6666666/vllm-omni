@@ -14,8 +14,10 @@ Covers the two pure functions that the original-format path relies on:
 
 import pytest
 
+from vllm_omni.diffusion.data import resolve_model_class_name
 from vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2_vace import convert_original_vace_config
 from vllm_omni.diffusion.models.wan2_2.wan2_2_transformer import convert_original_to_diffusers_key
+from vllm_omni.diffusion.utils.hf_utils import is_diffusion_model
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu, pytest.mark.diffusion]
 
@@ -114,3 +116,46 @@ def test_convert_original_vace_config_translates_original_fields() -> None:
         "vace_layers": [0, 1],
         "vace_in_channels": 12,
     }
+
+
+def test_original_vace_is_detected_as_diffusion_model(monkeypatch) -> None:
+    is_diffusion_model.cache_clear()
+
+    def fake_get_hf_file_to_dict(path: str, model: str):
+        assert model == "alibaba-pai/Wan2.2-VACE-Fun-A14B"
+        if path == "high_noise_model/config.json":
+            return {"model_type": "vace"}
+        raise OSError(path)
+
+    monkeypatch.setattr(
+        "vllm_omni.diffusion.utils.hf_utils.get_hf_file_to_dict",
+        fake_get_hf_file_to_dict,
+    )
+    monkeypatch.setattr(
+        "vllm_omni.diffusion.utils.hf_utils.load_diffusers_config",
+        lambda _model: (_ for _ in ()).throw(ValueError("not diffusers")),
+    )
+
+    try:
+        assert is_diffusion_model("alibaba-pai/Wan2.2-VACE-Fun-A14B") is True
+    finally:
+        is_diffusion_model.cache_clear()
+
+
+def test_original_vace_resolves_pipeline_class_name(monkeypatch) -> None:
+    def fake_get_hf_file_to_dict(path: str, model: str):
+        assert model == "alibaba-pai/Wan2.2-VACE-Fun-A14B"
+        if path == "high_noise_model/config.json":
+            return {"model_type": "vace"}
+        raise OSError(path)
+
+    monkeypatch.setattr(
+        "vllm.transformers_utils.config.get_hf_file_to_dict",
+        fake_get_hf_file_to_dict,
+    )
+    monkeypatch.setattr(
+        "vllm_omni.diffusion.utils.hf_utils.get_hf_file_to_dict",
+        fake_get_hf_file_to_dict,
+    )
+
+    assert resolve_model_class_name("alibaba-pai/Wan2.2-VACE-Fun-A14B") == "Wan22VACEPipeline"

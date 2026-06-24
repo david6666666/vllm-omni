@@ -7,7 +7,7 @@
 - Vendor: alibaba-pai
 - Model: `alibaba-pai/Wan2.2-VACE-Fun-A14B`
 - Task: VACE video generation & editing (T2V / I2V / R2V / V2V / inpainting)
-- Mode: Offline inference
+- Mode: Offline inference and OpenAI-compatible online serving
 - Maintainer: Community
 
 ## When to use this recipe
@@ -32,7 +32,7 @@ keys are remapped to the pipeline's diffusers-format VACE transformer on load.
 - Upstream model card: <https://huggingface.co/alibaba-pai/Wan2.2-VACE-Fun-A14B>
 - Related example: [`examples/offline_inference/vace/vace_video_generation.md`](../../examples/offline_inference/vace/vace_video_generation.md)
 - Related issue: [vllm-project/vllm-omni#4206](https://github.com/vllm-project/vllm-omni/issues/4206)
-- PR: [vllm-project/vllm-omni#4249](https://github.com/vllm-project/vllm-omni/pull/4249)
+- PR: [vllm-project/vllm-omni#4667](https://github.com/vllm-project/vllm-omni/pull/4667)
 
 ## Hardware Support
 
@@ -93,3 +93,49 @@ The run produces a coherent `vace_orig_full.mp4`. Check:
     transformer below it; both experts are loaded and driven across the denoise.
 - **Known limitations:**
   - Validated on NVIDIA only; other platforms are not covered by this recipe.
+
+### Online Serving
+
+#### Server
+
+```bash
+vllm serve alibaba-pai/Wan2.2-VACE-Fun-A14B --omni \
+  --model-class-name Wan22VACEPipeline \
+  --vae-use-tiling \
+  --enforce-eager \
+  --port 8091
+```
+
+For multi-GPU sequence-parallel serving, add the same parallelism flags you would
+use offline, for example `--ulysses-degree 4`. The original checkpoint is also
+auto-detected as a diffusion model, so the explicit `--model-class-name` is mainly
+for readability.
+
+#### Client
+
+```bash
+no_proxy=127.0.0.1 \
+curl -X POST http://127.0.0.1:8091/v1/videos/sync \
+  -F "prompt=Summer beach vacation style, a white cat wearing sunglasses sits on a surfboard" \
+  -F "input_reference=@/absolute/path/to/i2v_input.JPG" \
+  -F "width=832" \
+  -F "height=480" \
+  -F "num_frames=81" \
+  -F "fps=16" \
+  -F "num_inference_steps=30" \
+  -F "guidance_scale=5.0" \
+  --output vace_orig_i2v_serve.mp4
+```
+
+For video-to-video or inpainting-style requests, upload the reference video with
+`input_reference=@/absolute/path/to/input.mp4` or use `video_reference` with a URL
+or JSON-safe data URI.
+
+#### Cache-DiT / TaylorSeer Notes
+
+`Wan22VACEPipeline` uses the shared Wan2.2 Cache-DiT enabler for both the
+high-noise and low-noise transformers. The adapter intentionally wraps only the
+main denoising `blocks`. VACE `vace_blocks` form a conditioning branch: each step
+they combine the current latent with the VACE context to produce hints that are
+then injected into selected main blocks. Recomputing that branch preserves the
+control signal; caching the main backbone still gives the acceleration target.

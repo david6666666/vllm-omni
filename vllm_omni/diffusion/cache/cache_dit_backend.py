@@ -255,6 +255,11 @@ def enable_cache_for_wan22(pipeline: Any, cache_config: Any) -> RefreshCacheCont
         cache_dit.enable_cache(
             BlockAdapter(
                 transformer=pipeline.transformer,
+                # For VACE, cache only the main denoising blocks. The
+                # conditioning branch (vace_blocks) has a different forward
+                # contract and produces per-step hints from the current latent
+                # plus vace_context; keeping it outside CacheDiT preserves the
+                # control signal while still accelerating the repeated backbone.
                 blocks=[pipeline.transformer.blocks],
                 forward_pattern=[ForwardPattern.Pattern_2],
                 params_modifiers=[
@@ -274,6 +279,9 @@ def enable_cache_for_wan22(pipeline: Any, cache_config: Any) -> RefreshCacheCont
                 pipeline.transformer_2,
             ],
             blocks=[
+                # See the single-transformer branch above: VACE conditioning
+                # blocks are intentionally recomputed each step and are not
+                # wrapped by CacheDiT's main-block Pattern_2 adapter.
                 pipeline.transformer.blocks,
                 pipeline.transformer_2.blocks,
             ],

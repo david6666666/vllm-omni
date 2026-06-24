@@ -107,7 +107,11 @@ def is_diffusion_model(model_name: str) -> bool:
     except Exception as e:
         logger.debug("Failed to load diffusers config via DiffusionPipeline: %s", e)
 
-        # Bagel and DreamZero are not diffusers pipelines (no model_index.json),
-        # but are still diffusion-style models in vllm-omni. Detect them via
-        # config.json.
-    return _looks_like_bagel(model_name) or _looks_like_dreamzero(model_name)
+    # Bagel, DreamZero, and the original Wan2.2 VACE release are not diffusers
+    # pipelines (no model_index.json), but are still diffusion-style models in
+    # vllm-omni. Detect them via their native configs.
+    return (
+        _looks_like_bagel(model_name)
+        or _looks_like_dreamzero(model_name)
+        or _looks_like_wan2_2_vace_original(model_name)
+    )

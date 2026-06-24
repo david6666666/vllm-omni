@@ -488,6 +488,11 @@ def resolve_model_class_name(model: str | None, diffusion_load_format: str = "de
         from vllm_omni.diffusion.utils.hf_utils import _looks_like_dreamzero
 
         return "DreamZeroPipeline" if _looks_like_dreamzero(model) else None
+    if model_type is None:
+        from vllm_omni.diffusion.utils.hf_utils import _looks_like_wan2_2_vace_original
+
+        if _looks_like_wan2_2_vace_original(model):
+            return "Wan22VACEPipeline"
     if len(architectures) == 1:
         return architectures[0]
     return None
