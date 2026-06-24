@@ -469,6 +469,10 @@ def get_cosmos3_pre_process_func(od_config: OmniDiffusionConfig):
     return pre_process_func
 
 
+def _postprocess_video_to_uint8_tensor(video: torch.Tensor) -> torch.Tensor:
+    return video.mul_(0.5).add_(0.5).clamp_(0, 1).float().mul(255.0).round().to(torch.uint8)
+
+
 def get_cosmos3_post_process_func(od_config: OmniDiffusionConfig):
     from .guardrails import check_video_safety, is_guardrails_enabled
 
@@ -496,10 +500,15 @@ def get_cosmos3_post_process_func(od_config: OmniDiffusionConfig):
             fps_value = 24.0
         return int(fps_value) if fps_value.is_integer() else fps_value
 
-    def _postprocess_video_tensor(video: torch.Tensor) -> torch.Tensor:
-        # Match the A-framework fast video path: keep the decoded video as a tensor
-        # through serving and only normalize in-place before MP4 encoding.
-        return video.mul_(0.5).add_(0.5).clamp_(0, 1)
+    def _postprocess_video_tensor(video: torch.Tensor, output_type: str) -> torch.Tensor:
+        # The regular video path may already quantize frames before worker-to-server
+        # IPC. In that case serving can consume the tensor directly.
+        if video.dtype == torch.uint8:
+            return video
+        video = video.mul_(0.5).add_(0.5).clamp_(0, 1)
+        if output_type == "np":
+            return video.float().mul(255.0).round().to(torch.uint8)
+        return video
 
     def post_process_func(
         output: torch.Tensor | dict[str, torch.Tensor] | tuple,
@@ -553,7 +562,7 @@ def get_cosmos3_post_process_func(od_config: OmniDiffusionConfig):
             video = check_video_safety(video)
             processed_video = video_processor.postprocess_video(video, output_type=output_type)
         elif output_type in ("np", "pt"):
-            processed_video = _postprocess_video_tensor(video)
+            processed_video = _postprocess_video_tensor(video, output_type)
         else:
             processed_video = video_processor.postprocess_video(video, output_type=output_type)
         if audio is None:
@@ -3174,4 +3183,6 @@ class Cosmos3OmniDiffusersPipeline(
             }
             return DiffusionOutput(output={"video": video}, custom_output=custom_action_output)
 
-        return DiffusionOutput(output={"image": video} if is_t2i else {"video": video})
+        if is_t2i:
+            return DiffusionOutput(output={"image": video})
+        return DiffusionOutput(output={"video": _postprocess_video_to_uint8_tensor(video)})

@@ -595,18 +595,29 @@ def test_postprocess_handles_image_video_audio_and_validation() -> None:
 
     assert func(video, output_type="latent") is video
     assert func({"image": video})[0].size == (4, 4)
-    # Video-only postprocess returns a tensor fast path (not a dict), matching
-    # A-framework decode stage and avoiding Diffusers postprocess_video copies.
+    # Default video-only postprocess returns uint8 tensor frames before IPC so
+    # serving avoids moving and converting a large float tensor on the CPU side.
     processed_video = func({"video": video.clone()})
     assert isinstance(processed_video, torch.Tensor)
     assert processed_video.shape == video.shape
-    torch.testing.assert_close(processed_video, torch.full_like(video, 0.5))
+    assert processed_video.dtype == torch.uint8
+    torch.testing.assert_close(processed_video, torch.full_like(processed_video, 128))
+
+    prequantized_video = torch.full_like(processed_video, 128)
+    assert func({"video": prequantized_video}) is prequantized_video
+
+    # Keep explicit pt output as normalized floating-point tensor for callers
+    # that ask for tensor semantics rather than encoded frame semantics.
+    processed_video_pt = func({"video": video.clone()}, output_type="pt")
+    assert processed_video_pt.dtype == video.dtype
+    torch.testing.assert_close(processed_video_pt, torch.full_like(video, 0.5))
 
     video_audio = func(
         {"video": video.clone(), "audio": torch.ones(1, 2, 16), "audio_sample_rate": 48000},
         sampling_params=SimpleNamespace(extra_args={"resolved_frame_rate": 12}),
     )
     assert isinstance(video_audio["video"], torch.Tensor)
+    assert video_audio["video"].dtype == torch.uint8
     assert video_audio["audio_sample_rate"] == 48000
 
     with pytest.raises(ValueError, match="text-to-image postprocess expects"):
