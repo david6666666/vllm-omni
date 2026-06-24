@@ -15,37 +15,27 @@ determined by which inputs are provided (no explicit mode flag):
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterable
 from dataclasses import replace
 
 import PIL.Image
 import torch
-
-# Loading the original (non-diffusers) Wan2.2 VACE layout (high_noise_model/
-# low_noise_model + google/umt5-xxl tokenizer + .pth text-encoder/VAE).
-from transformers import AutoTokenizer, UMT5EncoderModel
 from vllm.logger import init_logger
 from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
 from vllm.model_executor.models.utils import AutoWeightsLoader
 
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
-from vllm_omni.diffusion.distributed.autoencoders.autoencoder_kl_wan import DistributedAutoencoderKLWan
 from vllm_omni.diffusion.forward_context import set_forward_context_denoise_step_idx
-from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
 from vllm_omni.diffusion.models.interface import SupportImageInput
 from vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2 import (
     Wan22Pipeline,
-    load_transformer_config,
     retrieve_latents,
 )
 from vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2 import (
     get_wan22_post_process_func as get_wan22_vace_post_process_func,  # noqa: F401
 )
-from vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2_s2v import _WAN_UMT5_CONFIG, _load_wan_t5_as_umt5
 from vllm_omni.diffusion.models.wan2_2.wan2_2_vace_transformer import WanVACETransformer3DModel
 from vllm_omni.diffusion.request import OmniDiffusionRequest
-from vllm_omni.diffusion.utils.hf_utils import _looks_like_wan2_2_vace_original
 from vllm_omni.inputs.data import OmniTextPrompt
 from vllm_omni.platforms import current_omni_platform
 
@@ -99,27 +89,6 @@ def create_vace_transformer_from_config(
         kwargs["prefix"] = prefix
 
     return WanVACETransformer3DModel(**kwargs)
-
-
-def convert_original_vace_config(config: dict) -> dict:
-    """
-    Translate an original ``VaceWanModel`` config into the diffusers keys
-    that ``create_vace_transformer_from_config`` understands.
-    """
-    dim = config["dim"]
-    num_heads = config["num_heads"]
-    return {
-        "num_attention_heads": num_heads,
-        "attention_head_dim": dim // num_heads,  # original config stores dim = num_heads * head_dim
-        "in_channels": config["in_dim"],
-        "out_channels": config["out_dim"],
-        "ffn_dim": config["ffn_dim"],
-        "freq_dim": config["freq_dim"],
-        "num_layers": config["num_layers"],
-        "eps": config["eps"],
-        "vace_layers": config["vace_layers"],
-        "vace_in_channels": config["vace_in_dim"],
-    }
 
 
 def get_wan22_vace_pre_process_func(od_config: OmniDiffusionConfig):
@@ -211,99 +180,12 @@ class Wan22VACEPipeline(Wan22Pipeline, SupportImageInput):
         if od_config.flow_shift is None:
             od_config = replace(od_config, flow_shift=3.0)
 
-        if _looks_like_wan2_2_vace_original(od_config.model):
-            self._init_runtime(od_config)
-            self._load_components_original(od_config)
-            self._finalize(od_config)
-        else:
-            super().__init__(od_config=od_config, prefix=prefix)
+        super().__init__(od_config=od_config, prefix=prefix)
 
     def _create_transformer(self, config: dict) -> WanVACETransformer3DModel:
         """Build VACE transformer. Respects od_config.quantization_config."""
-        if "dim" in config:  # original (non-diffusers) config naming -> diffusers keys
-            config = convert_original_vace_config(config)
         quant_config = getattr(self.od_config, "quantization_config", None)
         return create_vace_transformer_from_config(config, quant_config=quant_config)
-
-    def _load_components_original(self, od_config: OmniDiffusionConfig) -> None:
-        """Load the original (non-diffusers) Wan2.2 VACE A14B layout::
-
-            model/
-            ├── high_noise_model/{config.json, *.safetensors}  -> self.transformer
-            ├── low_noise_model/{config.json, *.safetensors}   -> self.transformer_2
-            ├── google/umt5-xxl/                               -> tokenizer
-            ├── models_t5_umt5-xxl-enc-bf16.pth                -> text_encoder (#4)
-            └── Wan2.1_VAE.pth                                 -> vae        (#4)
-
-        Original-format counterpart to the base ``_load_components``; the shared
-        ``_init_runtime``/``_finalize`` seams (called from ``__init__``) handle the
-        rest. The .pth text-encoder/VAE loaders are reused from the S2V path.
-        """
-        model = od_config.model
-        # Resolve a HF repo ID to its local snapshot dir; the layout below is read
-        # off local files (subfolder configs, tokenizer, .pth). No-op if ``model``
-        # is already a local path.
-        if not os.path.isdir(model):
-            from vllm_omni.model_executor.model_loader.weight_utils import download_weights_from_hf_specific
-
-            model = download_weights_from_hf_specific(
-                model, None, ["high_noise_model/**", "low_noise_model/**", "google/**", "*.pth", "*.json"]
-            )
-        dtype = getattr(od_config, "dtype", torch.bfloat16)
-        self.expand_timesteps = False
-
-        # Two DiT stages: high_noise_model -> transformer, low_noise_model -> transformer_2
-        self.has_transformer_2 = os.path.isdir(os.path.join(model, "low_noise_model"))
-        self.boundary_ratio = od_config.boundary_ratio
-        load_transformer = self.boundary_ratio != 1.0 if self.boundary_ratio is not None else True
-        load_transformer_2 = self.has_transformer_2 and (
-            self.boundary_ratio != 0.0 if self.boundary_ratio is not None else True
-        )
-
-        self.weights_sources = []
-        if load_transformer:
-            self.weights_sources.append(
-                DiffusersPipelineLoader.ComponentSource(
-                    model_or_path=model,
-                    subfolder="high_noise_model",
-                    revision=None,
-                    prefix="transformer.",
-                    fall_back_to_pt=True,
-                )
-            )
-        if load_transformer_2:
-            self.weights_sources.append(
-                DiffusersPipelineLoader.ComponentSource(
-                    model_or_path=model,
-                    subfolder="low_noise_model",
-                    revision=None,
-                    prefix="transformer_2.",
-                    fall_back_to_pt=True,
-                )
-            )
-
-        self.tokenizer = AutoTokenizer.from_pretrained(os.path.join(model, "google", "umt5-xxl"))
-        t5_pth = os.path.join(model, "models_t5_umt5-xxl-enc-bf16.pth")
-        self.text_encoder = _load_wan_t5_as_umt5(UMT5EncoderModel(_WAN_UMT5_CONFIG), t5_pth, dtype=dtype).to(
-            self.device
-        )
-        vae_pth = os.path.join(model, "Wan2.1_VAE.pth")
-        self.vae = DistributedAutoencoderKLWan.from_single_file(vae_pth, torch_dtype=dtype)
-        self.vae.init_distributed()
-        self.vae = self.vae.to(self.device)
-
-        # Transformers (config translated to diffusers keys in _create_transformer).
-        self.transformer = (
-            self._create_transformer(load_transformer_config(model, "high_noise_model", local_files_only=True))
-            if load_transformer
-            else None
-        )
-        self.transformer_2 = (
-            self._create_transformer(load_transformer_config(model, "low_noise_model", local_files_only=True))
-            if load_transformer_2
-            else None
-        )
-        self.transformer_config = (self.transformer or self.transformer_2).config
 
     def diffuse(
         self,
