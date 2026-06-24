@@ -152,6 +152,15 @@ class _MultiBlockModel(nn.Module):
         self.single_transformer_blocks = nn.ModuleList([_DummyBlock() for _ in range(num_single)])
 
 
+class _OptionalBlockGroupModel(nn.Module):
+    _layerwise_offload_blocks_attrs = ["optional_blocks", "blocks"]
+
+    def __init__(self, num_blocks: int = 2):
+        super().__init__()
+        self.optional_blocks = None
+        self.blocks = nn.ModuleList([_DummyBlock() for _ in range(num_blocks)])
+
+
 class _EmptyBlocksModel(nn.Module):
     _layerwise_offload_blocks_attrs = ["blocks"]
 
@@ -195,6 +204,13 @@ class TestGetBlocksFromDit:
         attr_names, blocks = LayerWiseOffloadBackend.get_blocks_from_dit(model)
         assert set(attr_names) == {"transformer_blocks", "single_transformer_blocks"}
         assert len(blocks) == 5
+        assert all(isinstance(b, _DummyBlock) for b in blocks)
+
+    def test_get_blocks_from_dit_skips_none_optional_block_group(self):
+        model = _OptionalBlockGroupModel(num_blocks=2)
+        attr_names, blocks = LayerWiseOffloadBackend.get_blocks_from_dit(model)
+        assert attr_names == ["optional_blocks", "blocks"]
+        assert len(blocks) == 2
         assert all(isinstance(b, _DummyBlock) for b in blocks)
 
     def test_get_blocks_from_dit_empty_blocks(self):
