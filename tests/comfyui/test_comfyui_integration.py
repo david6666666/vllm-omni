@@ -442,7 +442,7 @@ def mock_async_omni(
 
 
 @pytest.fixture
-def api_server(unused_tcp_port_factory, tmp_path, server_case: ServerCase, mock_async_omni):
+def api_server(unused_tcp_port_factory, server_case: ServerCase, mock_async_omni):
     """Set up a API server in background process from command line with parametrized model name and mocked AsyncOmni."""
     parser = TrackingArgumentParser()
     subparsers = parser.add_subparsers(dest="command")
@@ -451,16 +451,9 @@ def api_server(unused_tcp_port_factory, tmp_path, server_case: ServerCase, mock_
 
     port = unused_tcp_port_factory()
     args = parser.parse_args(["serve", server_case.served_model, "--omni", "--port", str(port)])
-    storage_path = str(tmp_path / "video_storage")
 
     def run_server():
         try:
-            # Keep the background API server independent from a shared /tmp/storage
-            # directory, which may be owned by another CI job or container user.
-            from vllm_omni.entrypoints.openai import api_server as api_server_module
-            from vllm_omni.entrypoints.openai.storage import LocalStorageManager
-
-            api_server_module.STORAGE_MANAGER = LocalStorageManager(storage_path=storage_path)
             cmd.cmd(args)
         except Exception:
             traceback.print_exc()
