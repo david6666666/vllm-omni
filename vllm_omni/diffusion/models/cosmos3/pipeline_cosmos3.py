@@ -524,8 +524,8 @@ def get_cosmos3_post_process_func(od_config: OmniDiffusionConfig):
 
     def _postprocess_video_tensor(video: torch.Tensor) -> torch.Tensor:
         # Keep the decoded video on a fast tensor path through serving and
-        # only normalize in-place before MP4 encoding.
-        return video.mul_(0.5).add_(0.5).clamp_(0, 1)
+        # match Diffusers denormalization semantics before MP4 encoding.
+        return (video * 0.5 + 0.5).clamp(0, 1)
 
     def post_process_func(
         output: torch.Tensor | dict[str, torch.Tensor] | tuple,

@@ -6,7 +6,6 @@ It ensures that
 2. The sampling parameters are correctly passed from the node to AsyncOmni through the API layer.
 """
 
-import asyncio
 import multiprocessing
 import time
 import traceback
@@ -34,7 +33,7 @@ from vllm.outputs import CompletionOutput, RequestOutput
 
 from vllm_omni.entrypoints.async_omni import AsyncOmni as RealAsyncOmni
 from vllm_omni.entrypoints.cli.serve import OmniServeCommand
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniSamplingParams
+from vllm_omni.inputs.data import OmniSamplingParams
 from vllm_omni.outputs import OmniRequestOutput
 from vllm_omni.utils.tracking_parser import TrackingArgumentParser
 
@@ -409,90 +408,41 @@ def mock_async_omni(
         _mock_preprocess_chat,
     )
 
-    class _MockAsyncOmni:
-        def __init__(self):
-            self.generate = _build_mock_outputs(server_case.outputs, sampling_case, server_case)
-            self.stage_list = server_case.stage_list
-            self.stage_configs = server_case.stage_configs
-            self.output_modalities = _build_output_modalities(server_case.stage_configs)
-            self.default_sampling_params_list = [
-                SamplingParams() if _stage_type(stage) != "diffusion" else OmniDiffusionSamplingParams()
-                for stage in server_case.stage_configs
-            ]
-            self.errored = False
-            self.dead_error = RuntimeError("Mock engine error")
-            self.vllm_config = SimpleNamespace(shutdown_timeout=0, kv_transfer_config=None)
-            self.model_config = SimpleNamespace(
-                model=server_case.served_model,
-                max_model_len=4096,
-                io_processor_plugin=None,
-                allowed_local_media_path=None,
-                allowed_media_domains=None,
-                hf_config=SimpleNamespace(
-                    model_type="mock",
-                    codec_frame_rate_hz=24000,
-                    talker_config=SimpleNamespace(speaker_id={"Vivian": 0}),
-                ),
-            )
-            self.renderer = SimpleNamespace()
-            self.io_processor = SimpleNamespace()
-            self.input_processor = SimpleNamespace()
+    mock_instance = mocker.AsyncMock(spec=RealAsyncOmni)
+    mock_instance.generate = _build_mock_outputs(server_case.outputs, sampling_case, server_case)
 
-        async def get_vllm_config(self):
-            return None
-
-        async def get_supported_tasks(self):
-            return ["generate"]
-
-        async def get_tokenizer(self):
-            return None
-
-        async def check_health(self):
-            return None
-
-        def shutdown(self, timeout: float | None = None) -> None:
-            return None
-
-    if sampling_case.kind in {SamplingKind.VIDEO_NONE, SamplingKind.VIDEO_DIFFUSION_SINGLE}:
-        # Video jobs run through FastAPI background tasks. Use a plain fake here
-        # so the async create/status path does not depend on AsyncMock internals.
-        mock_instance = _MockAsyncOmni()
-    else:
-        mock_instance = mocker.AsyncMock(spec=RealAsyncOmni)
-        mock_instance.generate = _build_mock_outputs(server_case.outputs, sampling_case, server_case)
-
-        mock_instance.stage_list = server_case.stage_list
-        mock_instance.stage_configs = server_case.stage_configs
-        mock_instance.output_modalities = _build_output_modalities(server_case.stage_configs)
-        mock_instance.default_sampling_params_list = [
-            SamplingParams() if _stage_type(stage) != "diffusion" else mocker.MagicMock()
-            for stage in server_case.stage_configs
-        ]
-        mock_instance.errored = False
-        mock_instance.dead_error = RuntimeError("Mock engine error")
-        mock_instance.model_config = mocker.MagicMock(
-            max_model_len=4096,
-            io_processor_plugin=None,
-            allowed_local_media_path=None,
-            allowed_media_domains=None,
-        )
-        # Mimic Qwen3-TTS talker speaker config so CustomVoice validation passes.
-        mock_instance.model_config.hf_config = mocker.MagicMock()
-        mock_instance.model_config.hf_config.talker_config = mocker.MagicMock()
-        mock_instance.model_config.hf_config.talker_config.speaker_id = {"Vivian": 0}
-        mock_instance.io_processor = mocker.MagicMock()
-        mock_instance.input_processor = mocker.MagicMock()
-        mock_instance.shutdown = mocker.MagicMock()
-        mock_instance.get_vllm_config = mocker.AsyncMock(return_value=None)
-        mock_instance.get_supported_tasks = mocker.AsyncMock(return_value=["generate"])
-        mock_instance.get_tokenizer = mocker.AsyncMock(return_value=None)
+    mock_instance.stage_list = server_case.stage_list
+    mock_instance.stage_configs = server_case.stage_configs
+    mock_instance.output_modalities = _build_output_modalities(server_case.stage_configs)
+    mock_instance.default_sampling_params_list = [
+        SamplingParams() if _stage_type(stage) != "diffusion" else mocker.MagicMock()
+        for stage in server_case.stage_configs
+    ]
+    mock_instance.errored = False
+    mock_instance.dead_error = RuntimeError("Mock engine error")
+    mock_instance.model_config = mocker.MagicMock(
+        max_model_len=4096,
+        io_processor_plugin=None,
+        allowed_local_media_path=None,
+        allowed_media_domains=None,
+    )
+    # Mimic Qwen3-TTS talker speaker config so CustomVoice validation passes.
+    mock_instance.model_config.hf_config = mocker.MagicMock()
+    mock_instance.model_config.hf_config.talker_config = mocker.MagicMock()
+    mock_instance.model_config.hf_config.talker_config.speaker_id = {"Vivian": 0}
+    mock_instance.io_processor = mocker.MagicMock()
+    mock_instance.input_processor = mocker.MagicMock()
+    mock_instance.shutdown = mocker.MagicMock()
+    mock_instance.get_vllm_config = mocker.AsyncMock(return_value=None)
+    mock_instance.get_supported_tasks = mocker.AsyncMock(return_value=["generate"])
+    mock_instance.get_tokenizer = mocker.AsyncMock(return_value=None)
 
     mock_async_omni_cls.return_value = mock_instance
     yield mock_async_omni_cls
 
 
 @pytest.fixture
-def api_server(unused_tcp_port_factory, tmp_path, server_case: ServerCase, mock_async_omni):
+def api_server(unused_tcp_port_factory, server_case: ServerCase, mock_async_omni):
     """Set up a API server in background process from command line with parametrized model name and mocked AsyncOmni."""
     parser = TrackingArgumentParser()
     subparsers = parser.add_subparsers(dest="command")
@@ -501,14 +451,9 @@ def api_server(unused_tcp_port_factory, tmp_path, server_case: ServerCase, mock_
 
     port = unused_tcp_port_factory()
     args = parser.parse_args(["serve", server_case.served_model, "--omni", "--port", str(port)])
-    storage_path = str(tmp_path / "video_storage")
 
     def run_server():
         try:
-            from vllm_omni.entrypoints.openai import api_server as api_server_module
-            from vllm_omni.entrypoints.openai.storage import LocalStorageManager
-
-            api_server_module.STORAGE_MANAGER = LocalStorageManager(storage_path=storage_path)
             cmd.cmd(args)
         except Exception:
             traceback.print_exc()
@@ -834,9 +779,7 @@ async def test_video_generation_node(api_server: str, model: str, image_input: b
     if sampling_case.lora:
         kwargs["lora"] = sampling_case.lora
 
-    # Keep the ComfyUI node on the async create/status/content/delete API path,
-    # but fail quickly if the mocked background job stops making progress.
-    result = await asyncio.wait_for(node.generate(**kwargs), timeout=30)
+    result = await node.generate(**kwargs)
 
     assert isinstance(result, tuple)
     assert len(result) == 1
