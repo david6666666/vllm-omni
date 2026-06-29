@@ -6,7 +6,6 @@ It ensures that
 2. The sampling parameters are correctly passed from the node to AsyncOmni through the API layer.
 """
 
-import json
 import multiprocessing
 import time
 import traceback
@@ -15,8 +14,6 @@ from enum import StrEnum, auto
 from types import SimpleNamespace
 from typing import Any, NamedTuple
 
-import aiohttp
-import comfyui_vllm_omni.nodes as comfy_nodes
 import pytest
 import requests
 import torch
@@ -28,8 +25,6 @@ from comfyui_vllm_omni.nodes import (
     VLLMOmniUnderstanding,
     VLLMOmniVoiceClone,
 )
-from comfyui_vllm_omni.utils.api_client import url_bytes
-from comfyui_vllm_omni.utils.format import bytes_to_video, image_tensor_to_png_bytes
 from comfyui_vllm_omni.utils.types import AutoregressionSamplingParams, DiffusionSamplingParams, WanModelSpecificParams
 from PIL import Image
 from pytest_mock import MockerFixture
@@ -219,55 +214,6 @@ def _build_diffusion_video_output() -> OmniRequestOutput:
         images=[video_frames],
         final_output_type="video",
     )
-
-
-async def _generate_video_via_sync_endpoint(
-    self,
-    *,
-    model: str,
-    prompt: str,
-    width: int,
-    height: int,
-    num_frames: int,
-    fps: int,
-    negative_prompt: str | None = None,
-    image: torch.Tensor | None = None,
-    sampling_params: dict | None = None,
-    model_params: dict | None = None,
-    lora: dict | None = None,
-    **extra_body,
-) -> VideoInput:
-    form = aiohttp.FormData()
-    form.add_field("model", model)
-    form.add_field("prompt", prompt)
-    form.add_field("width", str(width))
-    form.add_field("height", str(height))
-    form.add_field("num_frames", str(num_frames))
-    form.add_field("fps", str(fps))
-    if negative_prompt:
-        form.add_field("negative_prompt", negative_prompt)
-    if sampling_params is not None:
-        for k, v in sampling_params.items():
-            form.add_field(k, str(v))
-    if model_params is not None:
-        for k, v in model_params.items():
-            form.add_field(k, str(v))
-    if lora is not None:
-        form.add_field("lora", json.dumps(lora, ensure_ascii=False))
-    if extra_body:
-        form.add_field("extra_body", json.dumps(extra_body, ensure_ascii=False))
-    if image is not None:
-        image_filename = "image.png"
-        form.add_field(
-            "input_reference",
-            image_tensor_to_png_bytes(image, image_filename),
-            filename=image_filename,
-            content_type="image/png",
-        )
-
-    async with aiohttp.ClientSession(timeout=self.timeout) as session:
-        video_bytes = await url_bytes(session, f"{self.base_url}/videos/sync", "post", data=form)
-    return bytes_to_video(video_bytes)
 
 
 def _build_diffusion_image_output_for_chat_endpoint() -> OmniRequestOutput:
@@ -812,17 +758,7 @@ async def test_tts_nodes(api_server: str, node_cls, call_kwargs: dict, sampling_
     ],
     indirect=["sampling_case"],
 )
-async def test_video_generation_node(
-    api_server: str,
-    model: str,
-    image_input: bool,
-    sampling_case: SamplingCase,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    # Keep this ComfyUI node test focused on request wiring. The async
-    # create/status video API has its own coverage and can leave this CPU shard
-    # waiting on long-polling if the mocked background job stalls.
-    monkeypatch.setattr(comfy_nodes.VLLMOmniClient, "generate_video", _generate_video_via_sync_endpoint)
+async def test_video_generation_node(api_server: str, model: str, image_input: bool, sampling_case: SamplingCase):
     node = VLLMOmniGenerateVideo()
 
     kwargs = {
