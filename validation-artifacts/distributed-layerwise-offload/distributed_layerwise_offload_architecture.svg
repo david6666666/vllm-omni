@@ -1,0 +1,147 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="960" viewBox="0 0 1440 960" role="img" aria-labelledby="title desc">
+  <title id="title">Distributed Layerwise Offload architecture</title>
+  <desc id="desc">Four pure USP or DP ranks keep one host shard per layer. Two fixed shard staging slots and two fixed full-layer slots overlap host-to-device copies and AllGather with current-layer compute.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07110d"/>
+      <stop offset="1" stop-color="#101d17"/>
+    </linearGradient>
+    <linearGradient id="host" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#13271d"/>
+      <stop offset="1" stop-color="#1d3528"/>
+    </linearGradient>
+    <linearGradient id="device" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101a20"/>
+      <stop offset="1" stop-color="#172b31"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#000" flood-opacity=".28"/>
+    </filter>
+    <marker id="green-arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#b8f34a"/>
+    </marker>
+    <marker id="orange-arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#ffb454"/>
+    </marker>
+    <style>
+      .title{font-family:"DejaVu Sans";font-size:34px;font-weight:700;fill:#f4f8f5}
+      .subtitle{font-family:"DejaVu Sans";font-size:16px;font-weight:400;fill:#a9b9b0}
+      .kicker{font-family:"DejaVu Sans Mono";font-size:13px;font-weight:700;letter-spacing:1.4px;fill:#b8f34a}
+      .section{font-family:"DejaVu Sans";font-size:23px;font-weight:700;fill:#f1f7f3}
+      .box-title{font-family:"DejaVu Sans";font-size:17px;font-weight:700;fill:#f1f7f3}
+      .box-copy{font-family:"DejaVu Sans";font-size:13px;font-weight:400;fill:#b7c5bd}
+      .tiny{font-family:"DejaVu Sans Mono";font-size:12px;font-weight:600;fill:#9fb0a7}
+      .rank{fill:#173123;stroke:#456452;stroke-width:1.5}
+      .slot{fill:#11272c;stroke:#3f6670;stroke-width:1.5}
+      .full{fill:#182d20;stroke:#6b934f;stroke-width:1.5}
+      .event{fill:#342719;stroke:#a77338;stroke-width:1.5}
+      .flow-green{fill:none;stroke:#b8f34a;stroke-width:3;marker-end:url(#green-arrow)}
+      .flow-orange{fill:none;stroke:#ffb454;stroke-width:3;marker-end:url(#orange-arrow)}
+      .dash{fill:none;stroke:#6e8177;stroke-width:1.5;stroke-dasharray:7 7}
+      .warn{fill:#2e1c1c;stroke:#9c5454;stroke-width:1.5}
+      .warn-title{font-family:"DejaVu Sans";font-size:15px;font-weight:700;fill:#ff9ca6}
+      .warn-copy{font-family:"DejaVu Sans";font-size:13px;font-weight:400;fill:#dfb3b7}
+    </style>
+  </defs>
+
+  <rect width="1440" height="960" rx="24" fill="url(#bg)"/>
+  <text x="62" y="68" class="title">Distributed Layerwise Offload</text>
+  <text x="62" y="98" class="subtitle">Per-rank steady-state view · pure USP4 or DP4 weight-shard group · fixed double buffer · eager CUDA/NCCL</text>
+
+  <rect x="48" y="132" width="380" height="616" rx="20" fill="url(#host)" stroke="#304c3c" filter="url(#shadow)"/>
+  <text x="76" y="170" class="kicker">HOST / EACH SHARD RANK</text>
+  <text x="76" y="205" class="section">Persistent CPU weight shards</text>
+  <text x="76" y="231" class="box-copy">Each rank owns approximately W_off / F after sharding.</text>
+
+  <g transform="translate(76 267)">
+    <rect width="324" height="70" rx="10" class="rank"/>
+    <text x="18" y="29" class="box-title">Rank 0 · layer shard</text>
+    <text x="18" y="51" class="box-copy">UND[0:64] + GEN[64:128] · pinned</text>
+  </g>
+  <g transform="translate(76 353)">
+    <rect width="324" height="70" rx="10" class="rank"/>
+    <text x="18" y="29" class="box-title">Rank 1 · layer shard</text>
+    <text x="18" y="51" class="box-copy">Same collective order as every peer</text>
+  </g>
+  <g transform="translate(76 439)">
+    <rect width="324" height="70" rx="10" class="rank"/>
+    <text x="18" y="29" class="box-title">Rank 2 · layer shard</text>
+    <text x="18" y="51" class="box-copy">Group-local rank selects the owned slice</text>
+  </g>
+  <g transform="translate(76 525)">
+    <rect width="324" height="70" rx="10" class="rank"/>
+    <text x="18" y="29" class="box-title">Rank 3 · layer shard</text>
+    <text x="18" y="51" class="box-copy">Padding only at the final shard boundary</text>
+  </g>
+  <g transform="translate(76 626)">
+    <rect width="324" height="88" rx="10" class="warn"/>
+    <text x="18" y="28" class="warn-title">Known startup gap</text>
+    <text x="18" y="52" class="warn-copy">Workers still load a full CPU model first.</text>
+    <text x="18" y="72" class="warn-copy">Direct checkpoint → local-shard loading is future work.</text>
+  </g>
+
+  <rect x="472" y="132" width="920" height="616" rx="20" fill="url(#device)" stroke="#29434a" filter="url(#shadow)"/>
+  <text x="500" y="170" class="kicker">DEVICE / FIXED TWO-SLOT WINDOW</text>
+  <text x="500" y="205" class="section">H2D → AllGather → compute pipeline</text>
+
+  <g transform="translate(508 252)">
+    <rect width="230" height="88" rx="12" class="slot"/>
+    <text x="18" y="32" class="box-title">Shard staging slot 0</text>
+    <text x="18" y="57" class="box-copy">Next local shard · S = ceil(B / F)</text>
+    <text x="18" y="77" class="tiny">copy_stream</text>
+  </g>
+  <g transform="translate(508 391)">
+    <rect width="230" height="88" rx="12" class="slot"/>
+    <text x="18" y="32" class="box-title">Shard staging slot 1</text>
+    <text x="18" y="57" class="box-copy">Alternates by layer parity</text>
+    <text x="18" y="77" class="tiny">copy_stream</text>
+  </g>
+
+  <g transform="translate(790 252)">
+    <rect width="230" height="88" rx="12" class="full"/>
+    <text x="18" y="32" class="box-title">Full-layer slot 0</text>
+    <text x="18" y="57" class="box-copy">Current or prefetched layer · F × S</text>
+    <text x="18" y="77" class="tiny">comm_stream / AllGather</text>
+  </g>
+  <g transform="translate(790 391)">
+    <rect width="230" height="88" rx="12" class="full"/>
+    <text x="18" y="32" class="box-title">Full-layer slot 1</text>
+    <text x="18" y="57" class="box-copy">Roles swap every block · F × S</text>
+    <text x="18" y="77" class="tiny">comm_stream / AllGather</text>
+  </g>
+
+  <g transform="translate(1090 302)">
+    <rect width="240" height="128" rx="14" fill="#26331b" stroke="#7b9d54" stroke-width="1.5"/>
+    <text x="22" y="38" class="box-title">Layer L compute</text>
+    <text x="22" y="66" class="box-copy">current/default stream consumes full slot</text>
+    <text x="22" y="89" class="box-copy">while layer L+1 is prepared</text>
+    <text x="22" y="111" class="tiny">UND ring / GEN ring</text>
+  </g>
+
+  <path d="M402 302 C450 302 460 296 502 296" class="flow-green"/>
+  <path d="M402 440 C450 440 460 435 502 435" class="flow-green"/>
+  <text x="439" y="282" class="tiny">H2D</text>
+  <text x="439" y="420" class="tiny">H2D</text>
+  <path d="M742 296 L784 296" class="flow-orange"/>
+  <path d="M742 435 L784 435" class="flow-orange"/>
+  <text x="747" y="278" class="tiny">AllGather</text>
+  <text x="747" y="417" class="tiny">AllGather</text>
+  <path d="M1024 330 C1050 330 1060 350 1084 350" class="flow-green"/>
+  <path d="M1024 435 C1053 435 1062 405 1084 405" class="flow-green"/>
+
+  <g transform="translate(508 537)">
+    <rect width="822" height="164" rx="14" fill="#0c1719" stroke="#304950"/>
+    <text x="22" y="34" class="kicker">EVENT ORDERING AND SLOT OWNERSHIP</text>
+    <circle cx="46" cy="76" r="8" fill="#b8f34a"/><text x="68" y="81" class="box-copy">copy stream waits ready_event[s] before staging reuse → H2D → copy_done_event[s]</text>
+    <circle cx="46" cy="108" r="8" fill="#ffb454"/><text x="68" y="113" class="box-copy">comm stream waits copy_done_event[s] + compute_done_event[s] → AllGather → ready_event[s]</text>
+    <circle cx="46" cy="140" r="8" fill="#7da7ff"/><text x="68" y="145" class="box-copy">current stream waits ready_event[current] → forward(N) → compute_done_event[current]</text>
+    <path d="M480 74 C544 40 630 40 696 74" class="dash"/>
+    <text x="510" y="101" class="tiny">steady state ≈ max(compute, H2D + AllGather)</text>
+  </g>
+
+  <rect x="48" y="784" width="1344" height="140" rx="16" fill="#101a15" stroke="#304a3b"/>
+  <text x="72" y="819" class="kicker">EXECUTION CONTRACT</text>
+  <text x="72" y="850" class="box-copy">USP4: one request is sequence-sharded across the SP group.  DP4: one logical request is replicated across all weight-shard ranks; only rank 0 transports media.</text>
+  <text x="72" y="874" class="box-copy">F = selected DP or SP group size; B = unpadded block weights; S = padded local shard. HBM weight window ≈ 2×(F×S) + 2×S.</text>
+  <text x="72" y="898" class="box-copy">Supported now: eager CUDA/NCCL, dense contiguous unquantized weights, pure USP or pure DP. CFG, hybrid DP×SP, HSDP/DTensor, compile and streaming are rejected.</text>
+</svg>
