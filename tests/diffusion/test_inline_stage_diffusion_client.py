@@ -146,6 +146,19 @@ def test_inline_executor_failure_marks_engine_dead(client, mock_engine):
         client.get_diffusion_output_nowait()
 
 
+@pytest.mark.asyncio
+async def test_inline_executor_failure_rejects_new_requests(client, mock_engine):
+    callback = mock_engine.executor.register_failure_callback.call_args.args[0]
+    callback()
+
+    with pytest.raises(EngineDeadError, match="inline diffusion engine is dead"):
+        await client.add_request_async(
+            "req-after-death",
+            "A test prompt",
+            OmniDiffusionSamplingParams(),
+        )
+
+
 def test_inline_returns_queued_output_before_engine_dead(client, mock_engine):
     callback = mock_engine.executor.register_failure_callback.call_args.args[0]
     output = OmniRequestOutput.from_diffusion(request_id="req-queued", images=[])

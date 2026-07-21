@@ -172,6 +172,9 @@ class DiffusionSchedulerOutput:
     num_waiting_reqs: int
     # next request to background-prefetch KV
     kv_prefetch_jobs: dict | None = None
+    # DLO pure-DP per-rank assignments. Every entry must be the same logical
+    # request so all weight-shard ranks execute identical collective order.
+    dp_wave_reqs: list[NewRequestData] | None = None
 
     @cached_property
     def scheduled_request_ids(self) -> list[str]:
@@ -186,6 +189,12 @@ class DiffusionSchedulerOutput:
     @property
     def num_scheduled_reqs(self) -> int:
         return len(self.scheduled_request_ids)
+
+    @property
+    def dp_wave_request_ids(self) -> list[str]:
+        if self.dp_wave_reqs is None:
+            return []
+        return [req.request_id for req in self.dp_wave_reqs]
 
     @property
     def is_empty(self) -> bool:

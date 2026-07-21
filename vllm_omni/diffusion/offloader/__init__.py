@@ -8,6 +8,13 @@ from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.platforms import current_omni_platform
 
 from .base import OffloadBackend, OffloadConfig, OffloadStrategy
+from .distributed_layerwise_backend import (
+    DistributedLayerwiseOffloadBackend,
+    DistributedLayerwiseOffloadHook,
+    DistributedLayerwiseWeightController,
+    apply_distributed_block_hook,
+    remove_distributed_block_hook,
+)
 from .layerwise_backend import LayerWiseOffloadBackend
 from .sequential_backend import (
     ModelLevelOffloadBackend,
@@ -22,9 +29,14 @@ __all__ = [
     "OffloadConfig",
     "OffloadStrategy",
     "LayerWiseOffloadBackend",
+    "DistributedLayerwiseOffloadBackend",
+    "DistributedLayerwiseOffloadHook",
+    "DistributedLayerwiseWeightController",
     "ModelLevelOffloadBackend",
     "apply_sequential_offload",
     "remove_sequential_offload",
+    "apply_distributed_block_hook",
+    "remove_distributed_block_hook",
     "get_offload_backend",
 ]
 
@@ -75,6 +87,8 @@ def get_offload_backend(
         return ModelLevelOffloadBackend(config, device)
     elif config.strategy == OffloadStrategy.LAYER_WISE:
         return LayerWiseOffloadBackend(config, device)
+    elif config.strategy == OffloadStrategy.DISTRIBUTED_LAYER_WISE:
+        return DistributedLayerwiseOffloadBackend(config, device)
     else:
         logger.error("Unknown offload strategy: %s", config.strategy)
         return None

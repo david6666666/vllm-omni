@@ -116,7 +116,8 @@ class DiffusersAdapterPipeline(nn.Module, DiffusionPipelineProfilerMixin):
         self._pipeline = DiffusionPipeline.from_pretrained(model_id, **load_kwargs)
         self._pipeline_utils.apply_post_load_updates(self._pipeline, self.od_config)
 
-        self._pipeline.to(self.device)
+        if not getattr(self.od_config, "enable_distributed_layerwise_offload", False):
+            self._pipeline.to(self.device)
 
         # Cache __call__kwargs signature introspection for later input validation
         self._accept_call_kwargs = set(inspect.signature(self._pipeline.__call__).parameters.keys())

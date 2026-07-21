@@ -142,6 +142,12 @@ def parse_args() -> argparse.Namespace:
         help="Number of GPUs used for ulysses sequence parallelism.",
     )
     parser.add_argument(
+        "--data-parallel-size",
+        type=int,
+        default=1,
+        help="Number of GPUs used for diffusion data parallelism.",
+    )
+    parser.add_argument(
         "--ulysses-mode",
         type=str,
         default="strict",
@@ -180,6 +186,18 @@ def parse_args() -> argparse.Namespace:
         "--enable-layerwise-offload",
         action="store_true",
         help="Enable layerwise (blockwise) offloading on DiT modules.",
+    )
+    parser.add_argument(
+        "--enable-distributed-layerwise-offload",
+        action="store_true",
+        help="Enable distributed layerwise offloading with pure USP or pure DP.",
+    )
+    parser.add_argument(
+        "--disable-distributed-layerwise-offload-prefetch",
+        action="store_false",
+        dest="distributed_layerwise_offload_prefetch",
+        default=True,
+        help="Disable distributed layerwise next-block prefetch for a synchronous baseline.",
     )
     parser.add_argument(
         "--use-hsdp",
@@ -408,18 +426,24 @@ def main():
     omni_kwargs = {
         "model": args.model,
         "enable_layerwise_offload": args.enable_layerwise_offload,
+        "enable_distributed_layerwise_offload": args.enable_distributed_layerwise_offload,
+        "distributed_layerwise_offload_prefetch": args.distributed_layerwise_offload_prefetch,
         "vae_use_slicing": args.vae_use_slicing,
         "vae_use_tiling": args.vae_use_tiling,
         "cache_backend": args.cache_backend,
         "cache_config": cache_config,
         "enable_cache_dit_summary": args.enable_cache_dit_summary,
         "ulysses_degree": args.ulysses_degree,
+        "data_parallel_size": args.data_parallel_size,
         "ring_degree": args.ring_degree,
         "ulysses_mode": args.ulysses_mode,
         "cfg_parallel_size": args.cfg_parallel_size,
         "vae_patch_parallel_size": args.vae_patch_parallel_size,
         "enable_expert_parallel": args.enable_expert_parallel,
         "enable_cpu_offload": args.enable_cpu_offload,
+        "use_hsdp": args.use_hsdp,
+        "hsdp_shard_size": args.hsdp_shard_size,
+        "hsdp_replicate_size": args.hsdp_replicate_size,
         "mode": "text-to-image",
         "log_stats": args.log_stats,
         "enable_diffusion_pipeline_profiler": args.enable_diffusion_pipeline_profiler,
@@ -465,12 +489,17 @@ def main():
     tp_display = args.tensor_parallel_size if args.tensor_parallel_size is not None else "deploy/default"
     print(
         f"  Parallel configuration: tensor_parallel_size={tp_display}, "
-        f"ulysses_degree={args.ulysses_degree}, ulysses_mode={args.ulysses_mode}, "
+        f"data_parallel_size={args.data_parallel_size}, ulysses_degree={args.ulysses_degree}, "
+        f"ulysses_mode={args.ulysses_mode}, "
         f"ring_degree={args.ring_degree}, cfg_parallel_size={args.cfg_parallel_size}, "
         f"vae_patch_parallel_size={args.vae_patch_parallel_size}, "
         f"enable_expert_parallel={args.enable_expert_parallel}."
     )
-    print(f"  CPU offload: {args.enable_cpu_offload}; CPU Layerwise Offload: {args.enable_layerwise_offload}")
+    print(
+        f"  CPU offload: {args.enable_cpu_offload}; CPU Layerwise Offload: {args.enable_layerwise_offload}; "
+        f"Distributed Layerwise Offload: {args.enable_distributed_layerwise_offload} "
+        f"(prefetch={args.distributed_layerwise_offload_prefetch}); HSDP: {args.use_hsdp}"
+    )
     print(f"  Image size: {args.width}x{args.height}")
     if args.lora_path:
         print(f"  LoRA: scale={args.lora_scale}")

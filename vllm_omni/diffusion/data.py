@@ -34,6 +34,81 @@ if TYPE_CHECKING:
 logger = init_logger(__name__)
 
 
+def validate_distributed_layerwise_offload_config(
+    *,
+    enabled: bool,
+    enable_cpu_offload: bool,
+    enable_layerwise_offload: bool,
+    parallel_config: Any,
+    quantization_config: Any = None,
+    cache_backend: str | None = "none",
+    enforce_eager: bool = False,
+    step_execution: bool = False,
+    streaming_output: bool = False,
+) -> None:
+    """Validate the supported distributed layerwise-offload topologies."""
+    if not enabled:
+        return
+
+    conflicts = []
+    if enable_cpu_offload:
+        conflicts.append("enable_cpu_offload")
+    if enable_layerwise_offload:
+        conflicts.append("enable_layerwise_offload")
+    if quantization_config is not None:
+        conflicts.append("quantization_config")
+    if getattr(parallel_config, "use_hsdp", False):
+        conflicts.append("use_hsdp")
+    if cache_backend not in (None, "none"):
+        conflicts.append(f"cache_backend={cache_backend!r}")
+    if conflicts:
+        raise ValueError("Distributed layerwise offload cannot be combined with " + ", ".join(conflicts) + ".")
+
+    pipeline_parallel_size = getattr(parallel_config, "pipeline_parallel_size", 1)
+    data_parallel_size = getattr(parallel_config, "data_parallel_size", 1)
+    tensor_parallel_size = getattr(parallel_config, "tensor_parallel_size", 1)
+    ulysses_degree = getattr(parallel_config, "ulysses_degree", 1)
+    ring_degree = getattr(parallel_config, "ring_degree", 1)
+    cfg_parallel_size = getattr(parallel_config, "cfg_parallel_size", 1)
+    vae_patch_parallel_size = getattr(parallel_config, "vae_patch_parallel_size", 1)
+    enable_expert_parallel = getattr(parallel_config, "enable_expert_parallel", False)
+
+    common_dimensions_are_one = (
+        pipeline_parallel_size == 1
+        and tensor_parallel_size == 1
+        and ring_degree == 1
+        and cfg_parallel_size == 1
+        and vae_patch_parallel_size == 1
+        and not enable_expert_parallel
+    )
+    pure_usp = common_dimensions_are_one and ulysses_degree > 1 and data_parallel_size == 1
+    pure_dp = common_dimensions_are_one and data_parallel_size > 1 and ulysses_degree == 1
+    if not (pure_usp or pure_dp):
+        raise ValueError(
+            "Distributed layerwise offload requires either pure Ulysses sequence "
+            "parallelism (ulysses_degree > 1) or pure data parallelism "
+            "(data_parallel_size > 1), with all other parallel dimensions set to 1; "
+            f"got pipeline_parallel_size={pipeline_parallel_size}, "
+            f"data_parallel_size={data_parallel_size}, "
+            f"tensor_parallel_size={tensor_parallel_size}, "
+            f"ulysses_degree={ulysses_degree}, ring_degree={ring_degree}, "
+            f"cfg_parallel_size={cfg_parallel_size}, "
+            f"vae_patch_parallel_size={vae_patch_parallel_size}, "
+            f"enable_expert_parallel={enable_expert_parallel}."
+        )
+
+    if not enforce_eager:
+        raise ValueError(
+            "Distributed layerwise offload currently requires --enforce-eager; "
+            "compiled or graph-captured execution is not supported."
+        )
+    if step_execution or streaming_output:
+        raise ValueError(
+            "Distributed layerwise offload currently supports request-mode execution only; "
+            "step_execution and streaming_output are not supported."
+        )
+
+
 def normalize_omni_diffusion_kwargs(kwargs: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize legacy diffusion kwargs before config construction."""
     normalized = dict(kwargs)
@@ -652,6 +727,12 @@ class OmniDiffusionConfig:
     enable_cpu_offload: bool = False
     # Layer-wise offloading (block-level offloading) parameters
     enable_layerwise_offload: bool = False
+    # Distributed layer-wise offloading keeps a CPU shard per rank and gathers
+    # the next block into a fixed device buffer.
+    enable_distributed_layerwise_offload: bool = False
+    # Prefetch is enabled by default; disabling it provides a synchronous
+    # correctness/performance baseline with the same weight layout.
+    distributed_layerwise_offload_prefetch: bool = True
 
     pin_cpu_memory: bool = True  # Use pinned memory for faster transfers when offloading
 
@@ -889,6 +970,23 @@ class OmniDiffusionConfig:
         elif not isinstance(self.parallel_config, DiffusionParallelConfig):
             self.parallel_config = DiffusionParallelConfig()
 
+        # Resolve checkpoint-declared quantization before validating DLO. The
+        # distributed offloader currently supports only ordinary dense weights,
+        # so both explicit and auto-detected quantization must fail fast.
+        self._propagate_quantization_from_tf_config(self.tf_model_config)
+
+        validate_distributed_layerwise_offload_config(
+            enabled=self.enable_distributed_layerwise_offload,
+            enable_cpu_offload=self.enable_cpu_offload,
+            enable_layerwise_offload=self.enable_layerwise_offload,
+            parallel_config=self.parallel_config,
+            quantization_config=self.quantization_config,
+            cache_backend=self.cache_backend,
+            enforce_eager=self.enforce_eager,
+            step_execution=self.step_execution,
+            streaming_output=self.streaming_output,
+        )
+
         if self.num_gpus is None:
             if self.parallel_config is not None:
                 self.num_gpus = self.parallel_config.world_size
@@ -926,12 +1024,6 @@ class OmniDiffusionConfig:
         elif not isinstance(self.cache_config, DiffusionCacheConfig):
             # If it's neither dict nor DiffusionCacheConfig, convert to empty config
             self.cache_config = DiffusionCacheConfig()
-
-        # Auto-detect quantization from TransformerConfig if not explicitly set.
-        # This covers the case where tf_model_config is passed at construction
-        # time. For late (post-construction) assignment, callers should use
-        # set_tf_model_config() which propagates quant_config automatically.
-        self._propagate_quantization_from_tf_config(self.tf_model_config)
 
         # Resolve quantization_config: str/dict -> QuantizationConfig via build_quant_config.
         if self.quantization_config is not None:
@@ -1020,6 +1112,17 @@ class OmniDiffusionConfig:
         """
         self.tf_model_config = tf_config
         self._propagate_quantization_from_tf_config(tf_config)
+        validate_distributed_layerwise_offload_config(
+            enabled=self.enable_distributed_layerwise_offload,
+            enable_cpu_offload=self.enable_cpu_offload,
+            enable_layerwise_offload=self.enable_layerwise_offload,
+            parallel_config=self.parallel_config,
+            quantization_config=self.quantization_config,
+            cache_backend=self.cache_backend,
+            enforce_eager=self.enforce_eager,
+            step_execution=self.step_execution,
+            streaming_output=self.streaming_output,
+        )
 
     def update_multimodal_support(self) -> None:
         # Resolve serving-visible multimodal behavior from shared metadata

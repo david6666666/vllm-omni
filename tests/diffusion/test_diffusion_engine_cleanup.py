@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from vllm.v1.engine.exceptions import EngineDeadError
 
 from vllm_omni.diffusion.data import DiffusionOutput
 from vllm_omni.diffusion.diffusion_engine import DiffusionEngine
@@ -38,6 +39,7 @@ def _make_engine() -> DiffusionEngine:
     engine._closed = False
     engine._shutdown_complete = False
     engine.abort_queue = queue.Queue()
+    engine._rpc_queue = queue.Queue()
     engine._loop_started = False
     engine.stop_event = None
     engine.worker_thread = None
@@ -117,6 +119,82 @@ def test_close_rejects_late_async_requests() -> None:
             engine.add_request(_make_request("late-req"))
     finally:
         event_loop.close()
+
+
+def test_fatal_busy_loop_completes_current_and_waiting_requests() -> None:
+    engine = _make_engine()
+    engine.od_config = SimpleNamespace(
+        streaming_output=False,
+        request_batch_max_wait_ms=0.0,
+    )
+    engine.scheduler.initialize(SimpleNamespace(max_num_seqs=1))
+    engine.stop_event = threading.Event()
+    engine._rpc_queue = queue.Queue()
+    engine.step_execution = False
+    engine.supports_request_batch = False
+    engine.dp_lockstep_enabled = False
+    engine.execute_fn = Mock(side_effect=EngineDeadError("fatal DP wave"))
+
+    event_loop = asyncio.new_event_loop()
+    try:
+        engine.main_loop = event_loop
+        current = event_loop.create_future()
+        waiting = event_loop.create_future()
+        engine.scheduler.add_request(_make_request("current"))
+        engine.scheduler.add_request(_make_request("waiting"))
+        engine._out_queue = {"current": current, "waiting": waiting}
+
+        engine._busy_loop()
+
+        assert engine._closed is True
+        assert engine.stop_event.is_set()
+        assert current.done()
+        assert "fatal DP wave" in current.result().error
+        assert waiting.done()
+        assert "fatal DP wave" in waiting.result().error
+        assert event_loop.run_until_complete(engine.get_result("waiting")) is waiting.result()
+        with pytest.raises(RuntimeError, match="closed"):
+            engine.add_request(_make_request("late"))
+    finally:
+        engine.close()
+        event_loop.close()
+
+
+def test_terminal_transition_completes_streaming_waiters() -> None:
+    engine = _make_engine()
+    engine.stop_event = threading.Event()
+    event_loop = asyncio.new_event_loop()
+    try:
+        engine.main_loop = event_loop
+        streaming_queue: asyncio.Queue[DiffusionOutput] = asyncio.Queue()
+        engine._out_queue_streaming["pending-stream"] = streaming_queue
+
+        engine._transition_to_terminal_error(EngineDeadError("fatal DP wave"))
+
+        async def get_terminal_output() -> DiffusionOutput:
+            return await anext(engine.get_streaming_result("pending-stream"))
+
+        output = event_loop.run_until_complete(get_terminal_output())
+        assert "fatal DP wave" in output.error
+        assert output.finished is True
+        assert engine._closed is True
+        assert engine.stop_event.is_set()
+    finally:
+        engine.close()
+        event_loop.close()
+
+
+def test_terminal_transition_rejects_late_control_rpc() -> None:
+    engine = _make_engine()
+    engine.stop_event = threading.Event()
+    try:
+        engine._transition_to_terminal_error(EngineDeadError("fatal DP wave"))
+
+        with pytest.raises(RuntimeError, match="closed"):
+            engine._submit_rpc("profile", None, (), None, None)
+        assert engine._rpc_queue.empty()
+    finally:
+        engine.close()
 
 
 def test_close_resets_loop_started_for_dead_worker_thread() -> None:

@@ -14,6 +14,7 @@ from vllm_omni.config.config_factory import StageConfigFactory
 from vllm_omni.diffusion.data import (
     DiffusionParallelConfig,
     OmniDiffusionConfig,
+    TransformerConfig,
 )
 from vllm_omni.diffusion.model_metadata import QWEN_IMAGE_EDIT_PLUS_MAX_INPUT_IMAGES
 
@@ -87,6 +88,120 @@ class TestParallelConfigPropagation:
         pc = DiffusionParallelConfig(tensor_parallel_size=2)
         od = _roundtrip_diffusion_config(model="x", parallel_config=pc)
         assert od.num_gpus == 2
+
+    @pytest.mark.parametrize(
+        "parallel_config",
+        [
+            DiffusionParallelConfig(ulysses_degree=4),
+            DiffusionParallelConfig(data_parallel_size=4),
+        ],
+        ids=["usp4", "dp4"],
+    )
+    def test_distributed_layerwise_offload_roundtrip(self, parallel_config):
+        od = _roundtrip_diffusion_config(
+            model="x",
+            parallel_config=parallel_config,
+            enable_distributed_layerwise_offload=True,
+            distributed_layerwise_offload_prefetch=False,
+            enforce_eager=True,
+        )
+
+        assert od.enable_distributed_layerwise_offload is True
+        assert od.distributed_layerwise_offload_prefetch is False
+
+
+@pytest.mark.parametrize(
+    "conflicting_kwargs, conflict_name",
+    [
+        ({"enable_cpu_offload": True}, "enable_cpu_offload"),
+        ({"enable_layerwise_offload": True}, "enable_layerwise_offload"),
+        ({"quantization_config": {"method": "bitsandbytes"}}, "quantization_config"),
+        ({"cache_backend": "cache_dit"}, "cache_backend"),
+        (
+            {
+                "parallel_config": DiffusionParallelConfig(
+                    ulysses_degree=4,
+                    use_hsdp=True,
+                    hsdp_shard_size=4,
+                )
+            },
+            "use_hsdp",
+        ),
+    ],
+)
+def test_distributed_layerwise_offload_rejects_other_offload_modes(conflicting_kwargs, conflict_name):
+    kwargs = {
+        "model": "x",
+        "parallel_config": DiffusionParallelConfig(ulysses_degree=4),
+        "enable_distributed_layerwise_offload": True,
+        **conflicting_kwargs,
+    }
+
+    with pytest.raises(ValueError, match=conflict_name):
+        OmniDiffusionConfig(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "parallel_config",
+    [
+        DiffusionParallelConfig(),
+        DiffusionParallelConfig(data_parallel_size=2, ulysses_degree=2),
+        DiffusionParallelConfig(tensor_parallel_size=2, ulysses_degree=2),
+        DiffusionParallelConfig(ring_degree=2),
+        DiffusionParallelConfig(cfg_parallel_size=2, ulysses_degree=2),
+        DiffusionParallelConfig(vae_patch_parallel_size=2, ulysses_degree=2),
+    ],
+    ids=["single", "dp-plus-usp", "tp-plus-usp", "ring", "cfg-plus-usp", "vae-plus-usp"],
+)
+def test_distributed_layerwise_offload_rejects_non_pure_topologies(parallel_config):
+    with pytest.raises(ValueError, match="requires either pure Ulysses"):
+        OmniDiffusionConfig(
+            model="x",
+            parallel_config=parallel_config,
+            enable_distributed_layerwise_offload=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("execution_kwargs", "message"),
+    [
+        ({}, "requires --enforce-eager"),
+        ({"enforce_eager": True, "step_execution": True}, "request-mode execution only"),
+        ({"enforce_eager": True, "streaming_output": True}, "request-mode execution only"),
+    ],
+    ids=["compiled", "step-execution", "streaming-output"],
+)
+def test_distributed_layerwise_offload_rejects_unsupported_execution_modes(execution_kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        OmniDiffusionConfig(
+            model="x",
+            parallel_config=DiffusionParallelConfig(ulysses_degree=4),
+            enable_distributed_layerwise_offload=True,
+            **execution_kwargs,
+        )
+
+
+def test_distributed_layerwise_offload_rejects_auto_detected_quantization() -> None:
+    with pytest.raises(ValueError, match="quantization_config"):
+        OmniDiffusionConfig(
+            model="x",
+            parallel_config=DiffusionParallelConfig(ulysses_degree=4),
+            enable_distributed_layerwise_offload=True,
+            enforce_eager=True,
+            tf_model_config=TransformerConfig(quant_config=object()),
+        )
+
+
+def test_distributed_layerwise_offload_rejects_late_quantization() -> None:
+    config = OmniDiffusionConfig(
+        model="x",
+        parallel_config=DiffusionParallelConfig(ulysses_degree=4),
+        enable_distributed_layerwise_offload=True,
+        enforce_eager=True,
+    )
+
+    with pytest.raises(ValueError, match="quantization_config"):
+        config.set_tf_model_config(TransformerConfig(quant_config=object()))
 
 
 class TestCreateDefaultDiffusion:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import multiprocessing.connection
+import queue
 import threading
 import time
 import weakref
@@ -26,6 +27,8 @@ if TYPE_CHECKING:
 logger = init_logger(__name__)
 
 _DEQUEUE_TIMEOUT_S = 5.0
+_DP_WAVE_TIMEOUT_S = 30 * 60.0
+_DP_WAVE_POLL_SLICE_S = 0.05
 
 
 @dataclass
@@ -36,6 +39,7 @@ class BackgroundResources:
 
     broadcast_mq: MessageQueue | None = None
     result_mq: MessageQueue | None = None
+    result_mqs: list[MessageQueue] | None = None
     num_workers: int = 0
     processes: list[mp.Process] | None = None
 
@@ -52,6 +56,7 @@ class BackgroundResources:
 
                 self.broadcast_mq = None
                 self.result_mq = None
+                self.result_mqs = None
             except Exception as exc:
                 logger.warning("Failed to send shutdown signal: %s", exc)
 
@@ -73,7 +78,9 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         self._processes: list[mp.Process] = []
         self._closed = False
         self.is_failed = False
+        self._failure_callbacks_lock = threading.Lock()
         self._failure_callbacks: list[Callable[[], None]] = []
+        self._failure_callbacks_notified = False
 
         num_workers = self.od_config.num_gpus
         self.wake_events = [mp.Event() for _ in range(num_workers)]
@@ -82,13 +89,17 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         broadcast_handle = self._broadcast_mq.export_handle()
 
         # Launch workers
-        processes, result_handle = self._launch_workers(broadcast_handle, self.wake_events)
-        self._result_mq = self._init_result_queue(result_handle)
+        processes, result_handles = self._launch_workers(broadcast_handle, self.wake_events)
+        self._result_mqs = self._init_result_queues(result_handles)
+        # Retain the historical rank-zero alias for callers/tests that inspect
+        # the ordinary single-reply transport.
+        self._result_mq = self._result_mqs[0]
         self._processes = processes
 
         self.resources = BackgroundResources(
             broadcast_mq=self._broadcast_mq,
             result_mq=self._result_mq,
+            result_mqs=self._result_mqs,
             num_workers=num_workers,
             processes=self._processes,
         )
@@ -103,20 +114,40 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             local_reader_ranks=list(range(num_workers)),
         )
 
-    def _init_result_queue(self, result_handle) -> MessageQueue | None:
-        if result_handle is None:
-            logger.error("Failed to get result queue handle from workers")
-            return None
-        return MessageQueue.create_from_handle(result_handle, 0)
+    def _init_result_queues(self, result_handles: list) -> list[MessageQueue]:
+        result_mqs = []
+        for rank, result_handle in enumerate(result_handles):
+            if result_handle is None:
+                raise RuntimeError(f"Failed to get result queue handle from worker rank {rank}")
+            result_mqs.append(MessageQueue.create_from_handle(result_handle, 0))
+        return result_mqs
 
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("DiffusionExecutor is closed.")
-        if self._result_mq is None:
-            raise RuntimeError("Result queue not initialized")
+        if not getattr(self, "_result_mqs", None) and getattr(self, "_result_mq", None) is None:
+            raise RuntimeError("Result queues not initialized")
 
-    def _dequeue_one_with_failure_polling(self, deadline: float | None, method: str) -> Any:
-        """Block until one result message, polling ``is_failed`` between chunk timeouts."""
+    def _result_queue_for_rank(self, rank: int) -> MessageQueue:
+        result_mqs = getattr(self, "_result_mqs", None)
+        if result_mqs:
+            if rank < 0 or rank >= len(result_mqs):
+                raise RuntimeError(f"No result queue for worker rank {rank}")
+            return result_mqs[rank]
+        if rank == 0 and getattr(self, "_result_mq", None) is not None:
+            return self._result_mq
+        raise RuntimeError(f"No result queue for worker rank {rank}")
+
+    def _dequeue_one_with_failure_polling(
+        self,
+        deadline: float | None,
+        method: str,
+        *,
+        rank: int = 0,
+        wave_rpc_id: int | None = None,
+    ) -> Any:
+        """Read one rank-local reply while ignoring timed-out wave leftovers."""
+        result_mq = self._result_queue_for_rank(rank)
         while True:
             if deadline is None:
                 chunk_timeout = _DEQUEUE_TIMEOUT_S
@@ -126,11 +157,32 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                     raise TimeoutError(f"RPC call to {method} timed out.")
                 chunk_timeout = min(_DEQUEUE_TIMEOUT_S, remaining)
             try:
-                return self._result_mq.dequeue(timeout=chunk_timeout)
-            except (TimeoutError, zmq.error.Again):
+                response = result_mq.dequeue(timeout=chunk_timeout)
+            except (TimeoutError, zmq.error.Again, queue.Empty):
                 if self.is_failed:
                     raise EngineDeadError()
                 continue
+            response_wave_id = response.get("wave_rpc_id") if isinstance(response, dict) else None
+            if wave_rpc_id is None and response_wave_id is not None:
+                logger.warning("Discarding stale DP wave reply %s from rank %d", response_wave_id, rank)
+                try:
+                    unpack_diffusion_output_shm(response)
+                except Exception:
+                    logger.debug("Failed to release stale DP wave SHM payload", exc_info=True)
+                continue
+            if wave_rpc_id is not None and response_wave_id != wave_rpc_id:
+                logger.warning(
+                    "Discarding stale reply from rank %d while waiting for DP wave %s (got %s)",
+                    rank,
+                    wave_rpc_id,
+                    response_wave_id,
+                )
+                try:
+                    unpack_diffusion_output_shm(response)
+                except Exception:
+                    logger.debug("Failed to release stale RPC SHM payload", exc_info=True)
+                continue
+            return response
 
     @staticmethod
     def _raise_for_rpc_error_dict(response: Any) -> None:
@@ -222,7 +274,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
 
         # Wait for all workers to be ready
         scheduler_infos = []
-        result_handle = None
+        result_handles = []
         for writer in scheduler_pipe_writers:
             writer.close()
 
@@ -238,15 +290,14 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             if data["status"] != "ready":
                 raise RuntimeError("Initialization failed. Please see the error messages above.")
 
-            if i == 0:
-                result_handle = data.get("result_handle")
+            result_handles.append(data.get("result_handle"))
 
             scheduler_infos.append(data)
             reader.close()
 
         logger.debug("All workers are ready")
 
-        return processes, result_handle
+        return processes, result_handles
 
     def start_worker_monitor(self) -> None:
         # Monitors worker process liveness. If any die unexpectedly,
@@ -291,11 +342,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
 
             self.shutdown()
 
-            for cb in self._failure_callbacks:
-                try:
-                    cb()
-                except Exception:
-                    logger.exception("failure_callback raised")
+            self._notify_failure_callbacks()
 
         t = threading.Thread(target=_monitor, daemon=True, name="diffusion-worker-monitor")
         t.start()
@@ -305,7 +352,27 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         callback: Callable[[], None],
     ) -> None:
         """Register a callback invoked when a worker process dies."""
-        self._failure_callbacks.append(callback)
+        with self._failure_callbacks_lock:
+            notify_now = self._failure_callbacks_notified
+            if not notify_now:
+                self._failure_callbacks.append(callback)
+
+        if notify_now:
+            callback()
+
+    def _notify_failure_callbacks(self) -> None:
+        """Notify engine owners exactly once that the executor is terminal."""
+        with self._failure_callbacks_lock:
+            if self._failure_callbacks_notified:
+                return
+            self._failure_callbacks_notified = True
+            callbacks = list(self._failure_callbacks)
+
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception:
+                logger.exception("failure_callback raised")
 
     def execute_request(self, scheduler_output: DiffusionSchedulerOutput) -> BaseRunnerOutput:
         """Adapt request-mode scheduler output to worker execute_model RPCs.
@@ -316,6 +383,25 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
 
         self._ensure_open()
         runner_outputs: list[RunnerOutput] = []
+
+        if getattr(scheduler_output, "dp_wave_reqs", None) is not None:
+            wave_reqs = scheduler_output.dp_wave_reqs
+            wave_request_ids = [new_req.request_id for new_req in wave_reqs]
+            wave_outputs = self.collective_rpc(
+                "execute_model_dp_wave",
+                args=([new_req.req for new_req in wave_reqs], self.od_config, scheduler_output.kv_prefetch_jobs),
+                exec_all_ranks=True,
+                wave_request_ids=wave_request_ids,
+            )
+            outputs_by_request_id: dict[str, RunnerOutput] = {}
+            for wave_output in wave_outputs:
+                outputs_by_request_id.setdefault(wave_output.request_id, wave_output)
+            for request_id in scheduler_output.scheduled_request_ids:
+                output = outputs_by_request_id.get(request_id)
+                if output is None:
+                    raise RuntimeError(f"DP wave returned no result for request {request_id!r}")
+                runner_outputs.append(output)
+            return BatchRunnerOutput.from_list(runner_outputs)
 
         for new_req in scheduler_output.scheduled_new_reqs:
             req = new_req.req
@@ -391,52 +477,140 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         kwargs: dict | None = None,
         unique_reply_rank: int | None = None,
         exec_all_ranks: bool = False,
+        wave_request_ids: list[str] | None = None,
     ) -> Any:
         self._ensure_open()
 
-        deadline = None if timeout is None else time.monotonic() + timeout
+        effective_timeout = _DP_WAVE_TIMEOUT_S if wave_request_ids is not None and timeout is None else timeout
+        deadline = None if effective_timeout is None else time.monotonic() + effective_timeout
         kwargs = kwargs or {}
+        wave_rpc_id: int | None = None
+        if wave_request_ids is not None:
+            if unique_reply_rank is not None or not exec_all_ranks:
+                raise ValueError("DP wave RPC requires exec_all_ranks=True and no unique_reply_rank")
+            if len(wave_request_ids) != self.od_config.num_gpus:
+                raise ValueError(
+                    f"DP wave requires one request assignment per worker, got "
+                    f"{len(wave_request_ids)} for {self.od_config.num_gpus} workers"
+                )
+            if len(set(wave_request_ids)) != 1:
+                raise ValueError(
+                    f"DLO DP lockstep requires the same logical request on every worker; got {wave_request_ids!r}"
+                )
+            wave_rpc_id = getattr(self, "_next_wave_rpc_id", 0) + 1
+            self._next_wave_rpc_id = wave_rpc_id
 
-        # Prepare RPC request message. When unique_reply_rank is None, all
-        # workers must execute the RPC but only rank 0 can reply (it's the
-        # only one with a result_mq). Collect detailed rank statuses only for
-        # this control-plane all-rank path; forward-path exec_all_ranks RPCs
-        # avoid the per-step host object gather.
+        # A normal all-rank control RPC designates rank zero as its sole reply
+        # queue and gathers detailed rank statuses there. A DP wave is the one
+        # explicit exception: every rank replies on its own known queue.
         execute_all_ranks = unique_reply_rank is None or exec_all_ranks
-        collect_rank_status = unique_reply_rank is None
+        collect_rank_status = unique_reply_rank is None and wave_rpc_id is None
         rpc_request = {
             "type": "rpc",
             "method": method,
             "args": args,
             "kwargs": kwargs,
-            "output_rank": unique_reply_rank if unique_reply_rank is not None else 0,
+            "output_rank": (
+                None if wave_rpc_id is not None else unique_reply_rank if unique_reply_rank is not None else 0
+            ),
             "exec_all_ranks": execute_all_ranks,
             "collect_rank_status": collect_rank_status,
+            "wave_rpc_id": wave_rpc_id,
+            "wave_request_ids": wave_request_ids,
         }
 
         try:
             # Broadcast RPC request to all workers via unified message queue
             self._broadcast_mq.enqueue(rpc_request)
 
-            # Only rank 0 has a result_mq, so we always expect exactly 1 response
-            num_responses = 1
+            if wave_rpc_id is not None:
+                from vllm_omni.diffusion.worker.utils import RunnerOutput
 
-            responses = []
-            for _ in range(num_responses):
-                response = self._dequeue_one_with_failure_polling(deadline, method)
+                rank_zero_response = None
+                pending_ranks = set(range(len(wave_request_ids)))
+                while pending_ranks:
+                    if deadline is not None and time.monotonic() >= deadline:
+                        pending = ", ".join(str(rank) for rank in sorted(pending_ranks))
+                        raise TimeoutError(f"DP wave RPC call to {method} timed out waiting for rank(s) {pending}.")
+                    for rank in sorted(tuple(pending_ranks)):
+                        probe_deadline = time.monotonic() + _DP_WAVE_POLL_SLICE_S
+                        if deadline is not None:
+                            probe_deadline = min(probe_deadline, deadline)
+                        try:
+                            response = self._dequeue_one_with_failure_polling(
+                                probe_deadline,
+                                method,
+                                rank=rank,
+                                wave_rpc_id=wave_rpc_id,
+                            )
+                        except TimeoutError:
+                            continue
 
-                try:
-                    unpack_diffusion_output_shm(response)
-                except Exception as e:
-                    logger.warning("SHM unpack failed (data may already be inline): %s", e)
+                        try:
+                            unpack_diffusion_output_shm(response)
+                        except Exception as e:
+                            logger.warning("SHM unpack failed (data may already be inline): %s", e)
 
-                response = MultiprocDiffusionExecutor._handle_rpc_response(response)
+                        request_id = wave_request_ids[rank]
+                        if not (isinstance(response, dict) and response.get("type") == DIFFUSION_RPC_RESULT_ENVELOPE):
+                            raise RuntimeError(f"DP wave rank {rank} returned an invalid response envelope")
+                        if response.get("rank") != rank:
+                            raise RuntimeError(
+                                f"DP wave queue {rank} returned an envelope for rank {response.get('rank')}"
+                            )
+                        if response.get("request_id") != request_id:
+                            raise RuntimeError(
+                                f"DP wave rank {rank} returned request {response.get('request_id')!r}, "
+                                f"expected {request_id!r}"
+                            )
+                        if not response.get("ok", False):
+                            raise RuntimeError(
+                                f"DP wave rank {rank} failed request {request_id!r}: "
+                                f"{response.get('error_type') or 'Error'}: {response.get('error')}"
+                            )
+                        result = response.get("result")
+                        if rank == 0:
+                            if not isinstance(result, DiffusionOutput):
+                                raise RuntimeError(
+                                    f"DP wave rank zero returned unexpected result type {type(result)!r}"
+                                )
+                            rank_zero_response = RunnerOutput(
+                                request_id=request_id,
+                                step_index=None,
+                                finished=True,
+                                result=result,
+                            )
+                        elif result is not None:
+                            raise RuntimeError(f"DP wave rank {rank} unexpectedly returned a media result")
+                        pending_ranks.remove(rank)
+                if rank_zero_response is None:
+                    raise RuntimeError("DLO DP lockstep returned no rank-zero result")
+                return [rank_zero_response]
 
-                responses.append(response)
+            reply_rank = unique_reply_rank if unique_reply_rank is not None else 0
+            response = self._dequeue_one_with_failure_polling(deadline, method, rank=reply_rank)
 
-            return responses[0] if unique_reply_rank is not None else responses
+            try:
+                unpack_diffusion_output_shm(response)
+            except Exception as e:
+                logger.warning("SHM unpack failed (data may already be inline): %s", e)
+
+            response = MultiprocDiffusionExecutor._handle_rpc_response(response)
+
+            return response if unique_reply_rank is not None else [response]
         except Exception as e:
             logger.error(f"RPC call failed: {e}")
+            if wave_rpc_id is not None:
+                # A rank-local failure may leave peers blocked inside a
+                # collective. The process group is no longer reusable: tear
+                # down every worker and surface an engine-fatal error.
+                self.is_failed = True
+                self._notify_failure_callbacks()
+                try:
+                    self.shutdown()
+                except Exception:
+                    logger.exception("Failed to shut down executor after fatal DP wave error")
+                raise EngineDeadError(f"DLO DP lockstep RPC failed fatally: {e}") from e
             raise
 
     def check_health(self) -> None:
@@ -454,6 +628,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             self._finalizer()
         finally:
             self._broadcast_mq = None
+            self._result_mqs = []
             self._result_mq = None
             self.resources = None
             self._processes = []

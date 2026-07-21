@@ -393,6 +393,8 @@ class StageDeployConfig:
     num_weight_load_threads: int | None = None
     enable_cpu_offload: bool | None = None
     enable_layerwise_offload: bool | None = None
+    enable_distributed_layerwise_offload: bool | None = None
+    distributed_layerwise_offload_prefetch: bool | None = None
 
     # Diffusion-specific debug and observability knobs.
     enable_diffusion_pipeline_profiler: bool | None = None

@@ -270,7 +270,9 @@ class DreamZeroPipeline(nn.Module, CFGParallelMixin):
             self.vae = DistributedAutoencoderKLWan()
             self.vae.init_distributed()
         if not (
-            getattr(od_config, "enable_cpu_offload", False) or getattr(od_config, "enable_layerwise_offload", False)
+            getattr(od_config, "enable_cpu_offload", False)
+            or getattr(od_config, "enable_layerwise_offload", False)
+            or getattr(od_config, "enable_distributed_layerwise_offload", False)
         ):
             self.vae = self.vae.to(device=get_local_device(), dtype=od_config.dtype)
         self.register_buffer(

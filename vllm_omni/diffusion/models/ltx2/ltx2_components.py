@@ -138,6 +138,7 @@ def _place_aux_components(pipeline: Any) -> None:
     use_managed_placement = bool(
         getattr(pipeline.od_config, "enable_cpu_offload", False)
         or getattr(pipeline.od_config, "enable_layerwise_offload", False)
+        or getattr(pipeline.od_config, "enable_distributed_layerwise_offload", False)
         or getattr(parallel_config, "use_hsdp", False)
     )
     if use_managed_placement:

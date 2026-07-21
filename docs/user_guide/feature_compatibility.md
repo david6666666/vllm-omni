@@ -165,9 +165,25 @@ vllm serve Qwen/Qwen-Image --omni --port 8091 \
 
 - **Tensor Parallelism — Text Encoder Not Sharded**: TP currently only shards the DiT blocks. Each TP rank retains a **full copy of the text encoder weights**, leading to significant GPU memory overhead proportional to TP degree. Tracked in [Issue #771](https://github.com/vllm-project/vllm-omni/issues/771).
 
-- **CPU Offloading — Two Modes Are Mutually Exclusive**: Model-level offload (`enable_cpu_offload`) and layerwise offload (`enable_layerwise_offload`) cannot be used simultaneously. If both are set, layerwise takes priority and model-level is silently ignored.
+- **CPU Offloading — Modes Are Mutually Exclusive**: Distributed layerwise
+  offload (`enable_distributed_layerwise_offload`) cannot be combined with
+  model-level or legacy layerwise offload and rejects those combinations during
+  configuration. For backward compatibility, setting both legacy flags still
+  selects layerwise offload and ignores model-level offload.
 
-- **CPU Offloading — VAE stays on GPU**: Both offloading strategies keep the VAE on GPU at all times. For high-resolution generation, VAE decode can still cause OOM. Mitigate by combining with `vae_use_tiling=True` or VAE Patch Parallelism.
+- **CPU Offloading — VAE stays on GPU**: All offloading strategies keep the VAE
+  on GPU. For high-resolution generation, VAE decode can still cause OOM.
+  `vae_use_tiling=True` remains available; VAE Patch Parallelism can be combined
+  with the legacy modes but is not yet supported by distributed layerwise
+  offload.
+
+- **Distributed Layerwise Offload — Narrow validated surface**: The distributed
+  backend currently accepts pure Ulysses or pure intra-engine DP only. It
+  rejects cache backends, quantized tensor layouts, TP, PP, Ring, CFG, HSDP,
+  mixed DP+USP, and VAE patch parallelism. CUDA/NCCL eager execution is the
+  validated path; NPU/HCCL, `torch.compile`, and graph capture remain
+  unvalidated even though the implementation uses platform stream/event
+  abstractions.
 
 - **VAE Patch Parallelism — DistributedVaeExecutor Required**: VAE Patch Parallelism is only enabled for models that have `DistributedVaeExecutor`. Unsupported models will silently ignore `vae_patch_parallel_size`, and use sequential vae tiling instead.
 

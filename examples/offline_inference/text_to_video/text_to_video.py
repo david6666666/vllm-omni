@@ -212,6 +212,18 @@ def parse_args() -> argparse.Namespace:
         help="Enable layerwise (blockwise) offloading on DiT modules.",
     )
     parser.add_argument(
+        "--enable-distributed-layerwise-offload",
+        action="store_true",
+        help="Enable distributed layerwise offloading with pure USP or pure DP.",
+    )
+    parser.add_argument(
+        "--disable-distributed-layerwise-offload-prefetch",
+        action="store_false",
+        dest="distributed_layerwise_offload_prefetch",
+        default=True,
+        help="Disable distributed layerwise next-block prefetch for a synchronous baseline.",
+    )
+    parser.add_argument(
         "--audio-sample-rate",
         type=int,
         default=24000,
@@ -249,6 +261,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=1,
         help="Number of GPUs used for ulysses sequence parallelism.",
+    )
+    parser.add_argument(
+        "--data-parallel-size",
+        type=int,
+        default=1,
+        help="Number of GPUs used for diffusion data parallelism.",
     )
     parser.add_argument(
         "--ring-degree",
@@ -355,6 +373,7 @@ def main():
 
     # Configure parallel settings
     parallel_config = DiffusionParallelConfig(
+        data_parallel_size=args.data_parallel_size,
         ulysses_degree=args.ulysses_degree,
         ring_degree=args.ring_degree,
         cfg_parallel_size=args.cfg_parallel_size,
@@ -362,6 +381,9 @@ def main():
         vae_patch_parallel_size=args.vae_patch_parallel_size,
         pipeline_parallel_size=args.pipeline_parallel_size,
         enable_expert_parallel=args.enable_expert_parallel,
+        use_hsdp=args.use_hsdp,
+        hsdp_shard_size=args.hsdp_shard_size,
+        hsdp_replicate_size=args.hsdp_replicate_size,
     )
 
     profiler_enabled = args.profiler_config is not None
@@ -369,6 +391,8 @@ def main():
     omni_kwargs = dict(
         model=args.model,
         enable_layerwise_offload=args.enable_layerwise_offload,
+        enable_distributed_layerwise_offload=args.enable_distributed_layerwise_offload,
+        distributed_layerwise_offload_prefetch=args.distributed_layerwise_offload_prefetch,
         vae_use_slicing=args.vae_use_slicing,
         vae_use_tiling=args.vae_use_tiling,
         enable_cpu_offload=args.enable_cpu_offload,
@@ -413,10 +437,16 @@ def main():
     print(f"  Inference steps: {args.num_inference_steps}")
     print(f"  Frames: {args.num_frames}")
     print(
-        f"  Parallel configuration: ulysses_degree={args.ulysses_degree}, ring_degree={args.ring_degree},"
+        f"  Parallel configuration: data_parallel_size={args.data_parallel_size}, "
+        f"ulysses_degree={args.ulysses_degree}, ring_degree={args.ring_degree},"
         f" cfg_parallel_size={args.cfg_parallel_size}, tensor_parallel_size={args.tensor_parallel_size},"
         f" vae_patch_parallel_size={args.vae_patch_parallel_size}, pipeline_parallel_size={args.pipeline_parallel_size},"
         f" enable_expert_parallel={args.enable_expert_parallel}"
+    )
+    print(
+        f"  CPU offload: {args.enable_cpu_offload}; CPU Layerwise Offload: {args.enable_layerwise_offload}; "
+        f"Distributed Layerwise Offload: {args.enable_distributed_layerwise_offload} "
+        f"(prefetch={args.distributed_layerwise_offload_prefetch}); HSDP: {args.use_hsdp}"
     )
     print(f"  Video size: {args.width}x{args.height}")
     print(f"{'=' * 60}\n")

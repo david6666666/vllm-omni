@@ -50,6 +50,34 @@ def get_request_batch_sampling_params_key(request: OmniDiffusionRequest) -> Requ
     return RequestBatchSamplingParamsKey(**key_kwargs)
 
 
+def get_pure_data_parallel_size(od_config: OmniDiffusionConfig) -> int:
+    """Return the DLO shard-group size, or one outside pure-DP DLO."""
+    if not bool(getattr(od_config, "enable_distributed_layerwise_offload", False)):
+        return 1
+
+    parallel_config = getattr(od_config, "parallel_config", None)
+    if parallel_config is None:
+        return 1
+
+    data_parallel_size = int(getattr(parallel_config, "data_parallel_size", 1) or 1)
+    sequence_parallel_size = getattr(parallel_config, "sequence_parallel_size", None)
+    if sequence_parallel_size is None:
+        sequence_parallel_size = int(getattr(parallel_config, "ulysses_degree", 1) or 1) * int(
+            getattr(parallel_config, "ring_degree", 1) or 1
+        )
+    other_sizes = (
+        getattr(parallel_config, "tensor_parallel_size", 1),
+        sequence_parallel_size,
+        getattr(parallel_config, "ulysses_degree", 1),
+        getattr(parallel_config, "ring_degree", 1),
+        getattr(parallel_config, "cfg_parallel_size", 1),
+        getattr(parallel_config, "pipeline_parallel_size", 1),
+    )
+    if data_parallel_size > 1 and all(int(size or 1) == 1 for size in other_sizes):
+        return data_parallel_size
+    return 1
+
+
 class _BaseScheduler(SchedulerInterface):
     """Shared queue/state bookkeeping for diffusion schedulers."""
 
@@ -105,15 +133,17 @@ class _BaseScheduler(SchedulerInterface):
 
         # Second, schedule WAITING requests while capacity remains.
         while self._waiting and len(self._running) < self.max_num_running_reqs:
-            request_id = self._waiting[0]
+            request_id = self._next_waiting_request_id()
+            if request_id is None:
+                break
             state = self._request_states.get(request_id)
             if state is None:
-                self._waiting.popleft()
+                self._waiting.remove(request_id)
                 continue
             if not self._can_schedule_waiting(state):
                 break
 
-            self._waiting.popleft()
+            self._waiting.remove(request_id)
             was_new_request = state.status == DiffusionRequestStatus.WAITING
             if not self._running:
                 self._running_sampling_params_key = state.sampling_params_key
@@ -275,6 +305,9 @@ class _BaseScheduler(SchedulerInterface):
 
         current_key = self._current_sampling_params_key()
         return current_key is not None and current_key == state.sampling_params_key
+
+    def _next_waiting_request_id(self) -> str | None:
+        return self._waiting[0] if self._waiting else None
 
     def _current_sampling_params_key(self) -> SamplingParamsKey | RequestBatchSamplingParamsKey | None:
         if self._running_sampling_params_key is not None or not self._running:

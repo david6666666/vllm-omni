@@ -74,7 +74,9 @@ def _make_executor(num_gpus: int = 1):
     executor._closed = False
     executor._processes = []
     executor.is_failed = False
+    executor._failure_callbacks_lock = threading.Lock()
     executor._failure_callbacks = []
+    executor._failure_callbacks_notified = False
     return executor, req_q, res_q
 
 
@@ -896,6 +898,98 @@ class TestStageDiffusionClientErrorPropagation:
 # ───────── monitor thread & death sentinel integration tests ─────────
 
 
+class _ObservableLock:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.wait_started = threading.Event()
+
+    def __enter__(self):
+        if self._lock.locked():
+            self.wait_started.set()
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self._lock.release()
+
+
+class _BlockingAppendList(list):
+    def __init__(self) -> None:
+        super().__init__()
+        self.append_started = threading.Event()
+        self.release_append = threading.Event()
+
+    def append(self, value) -> None:
+        self.append_started.set()
+        if not self.release_append.wait(timeout=2):
+            raise TimeoutError("test did not release callback append")
+        super().append(value)
+
+
+def _make_failure_callback_executor():
+    executor = object.__new__(MultiprocDiffusionExecutor)
+    executor._failure_callbacks_lock = threading.Lock()
+    executor._failure_callbacks = []
+    executor._failure_callbacks_notified = False
+    return executor
+
+
+class TestMultiprocExecutorFailureCallbacks:
+    def test_concurrent_registration_and_notification_deliver_once(self):
+        executor = _make_failure_callback_executor()
+        callback = Mock()
+        callbacks = _BlockingAppendList()
+        callback_lock = _ObservableLock()
+        executor._failure_callbacks = callbacks
+        executor._failure_callbacks_lock = callback_lock
+
+        register_thread = threading.Thread(target=executor.register_failure_callback, args=(callback,))
+        notify_thread = threading.Thread(target=executor._notify_failure_callbacks)
+        register_thread.start()
+        assert callbacks.append_started.wait(timeout=1)
+
+        notify_thread.start()
+        try:
+            assert callback_lock.wait_started.wait(timeout=1)
+            assert notify_thread.is_alive()
+        finally:
+            callbacks.release_append.set()
+
+        register_thread.join(timeout=1)
+        notify_thread.join(timeout=1)
+        assert not register_thread.is_alive()
+        assert not notify_thread.is_alive()
+        callback.assert_called_once_with()
+
+        executor._notify_failure_callbacks()
+        callback.assert_called_once_with()
+
+    def test_late_registration_is_invoked_once(self):
+        executor = _make_failure_callback_executor()
+        executor._notify_failure_callbacks()
+        callback = Mock()
+
+        executor.register_failure_callback(callback)
+        executor._notify_failure_callbacks()
+
+        callback.assert_called_once_with()
+
+    def test_callbacks_are_invoked_outside_registration_lock(self):
+        executor = _make_failure_callback_executor()
+        lock_was_free = []
+
+        def callback() -> None:
+            acquired = executor._failure_callbacks_lock.acquire(blocking=False)
+            lock_was_free.append(acquired)
+            if acquired:
+                executor._failure_callbacks_lock.release()
+
+        executor.register_failure_callback(callback)
+        executor._notify_failure_callbacks()
+
+        assert lock_was_free == [True]
+
+
 def _poll_flag(get_flag, *, timeout=5.0, interval=0.05) -> bool:
     """Poll until ``get_flag()`` returns True or *timeout* elapses."""
     deadline = time.monotonic() + timeout
@@ -935,7 +1029,9 @@ class TestMultiprocExecutorWorkerMonitor:
         executor = object.__new__(MultiprocDiffusionExecutor)
         executor._closed = False
         executor.is_failed = False
+        executor._failure_callbacks_lock = threading.Lock()
         executor._failure_callbacks = []
+        executor._failure_callbacks_notified = False
         executor._broadcast_mq = None
         executor._result_mq = None
         executor.resources = None
@@ -962,7 +1058,9 @@ class TestMultiprocExecutorWorkerMonitor:
         executor = object.__new__(MultiprocDiffusionExecutor)
         executor._closed = True  # already shut down
         executor.is_failed = False
+        executor._failure_callbacks_lock = threading.Lock()
         executor._failure_callbacks = []
+        executor._failure_callbacks_notified = False
         executor._broadcast_mq = None
         executor._result_mq = None
         executor.resources = None

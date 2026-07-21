@@ -18,6 +18,7 @@ class OffloadStrategy(Enum):
     NONE = "none"
     MODEL_LEVEL = "model_level"  # Sequential offloading between DiT and encoders
     LAYER_WISE = "layer_wise"  # Block-level
+    DISTRIBUTED_LAYER_WISE = "distributed_layer_wise"  # Sharded block-level offload
 
 
 @dataclass
@@ -25,13 +26,20 @@ class OffloadConfig:
     strategy: OffloadStrategy
     pin_cpu_memory: bool = True
     use_hsdp: bool = False
+    distributed_layerwise_offload_prefetch: bool = True
+    data_parallel_size: int = 1
+    sequence_parallel_size: int = 1
+    tensor_parallel_size: int = 1
+    pipeline_parallel_size: int = 1
+    cfg_parallel_size: int = 1
+    cache_backend: str | None = "none"
 
     @classmethod
     def from_od_config(cls, od_config: OmniDiffusionConfig) -> "OffloadConfig":
         """Extract and validate offload settings from OmniDiffusionConfig.
 
-        For now, enforces mutual exclusion between model-level and layer-wise offloading.
-        Layer-wise takes priority if both are enabled.
+        Selects one model-level, layer-wise, or distributed layer-wise strategy.
+        Distributed layer-wise offload has the highest priority.
 
         Args:
             od_config: OmniDiffusionConfig with offload settings
@@ -41,13 +49,28 @@ class OffloadConfig:
         """
         enable_cpu_offload = getattr(od_config, "enable_cpu_offload", False)
         enable_layerwise_offload = getattr(od_config, "enable_layerwise_offload", False)
+        enable_distributed_layerwise_offload = getattr(
+            od_config,
+            "enable_distributed_layerwise_offload",
+            False,
+        )
         pin_cpu_memory = getattr(od_config, "pin_cpu_memory", True)
 
         parallel_config = getattr(od_config, "parallel_config", None)
         use_hsdp = getattr(parallel_config, "use_hsdp", False) if parallel_config else False
+        data_parallel_size = getattr(parallel_config, "data_parallel_size", 1) if parallel_config else 1
+        sequence_parallel_size = getattr(parallel_config, "sequence_parallel_size", 1) if parallel_config else 1
+        tensor_parallel_size = getattr(parallel_config, "tensor_parallel_size", 1) if parallel_config else 1
+        pipeline_parallel_size = getattr(parallel_config, "pipeline_parallel_size", 1) if parallel_config else 1
+        cfg_parallel_size = getattr(parallel_config, "cfg_parallel_size", 1) if parallel_config else 1
 
-        # Determine strategy (mutual exclusion, layer-wise takes priority)
-        if enable_layerwise_offload:
+        # Determine strategy. Distributed layer-wise offload is explicit and
+        # takes priority over the legacy single-rank strategies.
+        if enable_distributed_layerwise_offload:
+            strategy = OffloadStrategy.DISTRIBUTED_LAYER_WISE
+            if enable_layerwise_offload or enable_cpu_offload:
+                logger.info("Distributed layer-wise offloading takes priority, disabling other offloading strategies.")
+        elif enable_layerwise_offload:
             strategy = OffloadStrategy.LAYER_WISE
             if enable_cpu_offload:
                 logger.info(
@@ -63,6 +86,17 @@ class OffloadConfig:
             strategy=strategy,
             pin_cpu_memory=pin_cpu_memory,
             use_hsdp=use_hsdp,
+            distributed_layerwise_offload_prefetch=getattr(
+                od_config,
+                "distributed_layerwise_offload_prefetch",
+                True,
+            ),
+            data_parallel_size=data_parallel_size,
+            sequence_parallel_size=sequence_parallel_size or 1,
+            tensor_parallel_size=tensor_parallel_size,
+            pipeline_parallel_size=pipeline_parallel_size,
+            cfg_parallel_size=cfg_parallel_size,
+            cache_backend=getattr(od_config, "cache_backend", "none"),
         )
 
 

@@ -236,6 +236,32 @@ def test_serve_cli_accepts_ulysses_mode():
     assert parallel_config.ulysses_mode == "advanced_uaa"
 
 
+def test_serve_cli_accepts_distributed_layerwise_offload_flags():
+    parser = TrackingArgumentParser()
+    subparsers = parser.add_subparsers(dest="command")
+    OmniServeCommand().subparser_init(subparsers)
+
+    args = parser.parse_args(
+        [
+            "serve",
+            "nvidia/Cosmos3-Super",
+            "--omni",
+            "--usp",
+            "4",
+            "--enable-distributed-layerwise-offload",
+            "--disable-distributed-layerwise-offload-prefetch",
+        ]
+    )
+
+    explicit_kwargs = args.get_explicit_kwargs_dict()
+    stage_cfg = AsyncOmniEngine._create_default_diffusion_stage_cfg(explicit_kwargs)[0]
+
+    assert args.enable_distributed_layerwise_offload is True
+    assert args.distributed_layerwise_offload_prefetch is False
+    assert stage_cfg["engine_args"]["enable_distributed_layerwise_offload"] is True
+    assert stage_cfg["engine_args"]["distributed_layerwise_offload_prefetch"] is False
+
+
 def test_serve_cli_accepts_diffusion_pipeline_profiler_flag():
     """Ensure diffusion serve CLI exposes the profiler switch."""
     parser = TrackingArgumentParser()

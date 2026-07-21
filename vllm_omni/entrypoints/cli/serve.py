@@ -613,6 +613,21 @@ class OmniServeCommand(CLISubcommand):
             action="store_true",
             help="Enable layerwise (blockwise) offloading on DiT modules.",
         )
+        omni_config_group.add_argument(
+            "--enable-distributed-layerwise-offload",
+            action="store_true",
+            help=(
+                "Enable distributed layerwise offloading for diffusion models. "
+                "Requires either pure Ulysses sequence parallelism or pure data parallelism."
+            ),
+        )
+        omni_config_group.add_argument(
+            "--disable-distributed-layerwise-offload-prefetch",
+            action="store_false",
+            dest="distributed_layerwise_offload_prefetch",
+            default=True,
+            help="Disable next-block prefetch for the distributed layerwise offload synchronous baseline.",
+        )
         # Video model parameters (e.g., Wan2.2) - engine-level
         omni_config_group.add_argument(
             "--boundary-ratio",

@@ -36,6 +36,7 @@ from vllm_omni.config.stage_config import (
     PipelineConfig,
     StageDeployConfig,
     StageExecutionType,
+    StagePipelineConfig,
     load_deploy_config,
     merge_pipeline_deploy,
 )
@@ -180,6 +181,56 @@ def test_from_pipeline_config_applies_cli_overrides_without_stage_config_runtime
     assert stage0.scheduler_config.max_num_seqs == 7
     assert stage1.parallel_config.tensor_parallel_size == 2
     assert stage1.runtime_config.num_gpus == stage1.parallel_config.world_size
+
+
+def test_structured_diffusion_config_propagates_distributed_layerwise_offload():
+    pipeline = PipelineConfig(
+        model_type="test_distributed_layerwise",
+        stages=(
+            StagePipelineConfig(
+                stage_id=0,
+                model_stage="dit",
+                execution_type=StageExecutionType.DIFFUSION,
+                final_output=True,
+            ),
+        ),
+    )
+
+    omni_config = VllmOmniConfig.from_pipeline_config(
+        pipeline,
+        cli_overrides={
+            "ulysses_degree": 4,
+            "enable_distributed_layerwise_offload": True,
+            "distributed_layerwise_offload_prefetch": False,
+            "enforce_eager": True,
+        },
+    )
+    stage = omni_config.stage_by_id(0)
+
+    assert isinstance(stage, VllmOmniDiffusionStageConfig)
+    assert stage.parallel_config.ulysses_degree == 4
+    assert stage.diffusion_config.enable_distributed_layerwise_offload is True
+    assert stage.diffusion_config.distributed_layerwise_offload_prefetch is False
+
+
+def test_direct_structured_diffusion_config_rejects_canonical_quantization_with_dlo():
+    topology = StagePipelineConfig(
+        stage_id=0,
+        model_stage="dit",
+        execution_type=StageExecutionType.DIFFUSION,
+        final_output=True,
+    )
+
+    with pytest.raises(ValueError, match="quantization_config"):
+        VllmOmniDiffusionStageConfig(
+            stage_pipeline_config=topology,
+            model_config=OmniStageModelConfig(enforce_eager=True),
+            parallel_config=OmniStageDiffusionParallelConfig(ulysses_degree=4),
+            quantization_config={"method": "bitsandbytes"},
+            diffusion_config=omni_config_module._DiffusionConfigProjection(
+                enable_distributed_layerwise_offload=True,
+            ),
+        )
 
 
 def test_runtime_num_gpus_is_derived_from_parallel_world_size():

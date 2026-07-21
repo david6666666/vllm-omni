@@ -183,7 +183,11 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             return
 
         load_device = (
-            "cpu" if self.od_config.enable_cpu_offload or self.od_config.enable_layerwise_offload else str(self.device)
+            "cpu"
+            if self.od_config.enable_cpu_offload
+            or self.od_config.enable_layerwise_offload
+            or getattr(self.od_config, "enable_distributed_layerwise_offload", False)
+            else str(self.device)
         )
 
         def get_memory_context():

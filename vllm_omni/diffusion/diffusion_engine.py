@@ -172,6 +172,7 @@ class DiffusionEngine:
         )
         self.scheduler.initialize(od_config)
         self.supports_request_batch = False if self.step_execution else supports_request_batch(od_config)
+        self.dp_lockstep_enabled = bool(getattr(self.scheduler, "dp_lockstep_enabled", False))
         self.main_loop: asyncio.AbstractEventLoop | None = None
         self.stop_event: threading.Event | None = None
         self.worker_thread: threading.Thread | None = None
@@ -191,6 +192,10 @@ class DiffusionEngine:
         self._rpc_queue: queue.Queue[_RpcTask] = queue.Queue()
         if self.step_execution:
             self.execute_fn = self.executor.execute_step
+        elif self.dp_lockstep_enabled:
+            # The DP axis is the DLO weight-shard group. Replicate one logical
+            # request across all ranks; it is not a request-replica batch.
+            self.execute_fn = self.executor.execute_request
         elif self.supports_request_batch:
             self.execute_fn = self.executor.execute_batch
         else:
@@ -201,6 +206,11 @@ class DiffusionEngine:
                 "[RequestBatch] engine init max_num_seqs=%s max_wait_ms=%s",
                 getattr(od_config, "max_num_seqs", None),
                 getattr(od_config, "request_batch_max_wait_ms", None),
+            )
+        if self.dp_lockstep_enabled:
+            logger.info(
+                "[DPLockstep] engine init replicated_rank_wave_size=%s",
+                getattr(self.scheduler, "dp_wave_size", None),
             )
 
         try:
@@ -359,7 +369,7 @@ class DiffusionEngine:
                     # Only RPC / abort work pending; loop back to drain it.
                     continue
 
-                if self.supports_request_batch:
+                if self.supports_request_batch or getattr(self, "dp_lockstep_enabled", False):
                     self._wait_for_request_batch_admission_locked()
 
                 sched_output = self.scheduler.schedule()
@@ -373,6 +383,14 @@ class DiffusionEngine:
 
             try:
                 runner_output: BaseRunnerOutput = self.execute_fn(sched_output)  # pyright: ignore[reportAssignmentType]
+            except EngineDeadError as exc:
+                logger.error(
+                    "Diffusion executor died while processing requests %s",
+                    sched_output.scheduled_request_ids,
+                    exc_info=True,
+                )
+                self._transition_to_terminal_error(exc)
+                break
             except Exception as exc:
                 logger.error(
                     "Execution failed for diffusion requests %s", sched_output.scheduled_request_ids, exc_info=True
@@ -400,7 +418,6 @@ class DiffusionEngine:
                 )
             else:
                 self._handle_finished_requests(finished_req_ids, runner_output)
-
         # Engine is stopping: fail any RPCs still queued so callers don't hang.
         self._fail_pending_rpcs(RuntimeError("DiffusionEngine is shutting down."))
 
@@ -409,7 +426,8 @@ class DiffusionEngine:
 
         Caller must hold ``self._cv``.
         """
-        if self.step_execution or not self.supports_request_batch:
+        dp_lockstep_enabled = getattr(self, "dp_lockstep_enabled", False)
+        if self.step_execution or (not self.supports_request_batch and not dp_lockstep_enabled):
             return
 
         max_wait_s = self.od_config.request_batch_max_wait_ms / 1000.0
@@ -421,6 +439,23 @@ class DiffusionEngine:
         running = self.scheduler.num_running_requests()
 
         if running > 0:
+            return
+
+        if dp_lockstep_enabled:
+            start = time.monotonic()
+            has_full_wave = getattr(self.scheduler, "has_full_dp_wave")
+            while not self.stop_event.is_set() and not has_full_wave():
+                remaining = self.scheduler.dp_wave_wait_remaining_s()
+                if remaining <= 0:
+                    break
+                self._cv.wait(timeout=min(remaining, 0.002))
+            logger.info(
+                "[DPLockstep] admission wait done waiting=%d wave_size=%d waited_ms=%.1f full=%s",
+                self.scheduler.num_waiting_requests(),
+                getattr(self.scheduler, "dp_wave_size", 1),
+                (time.monotonic() - start) * 1000.0,
+                has_full_wave(),
+            )
             return
 
         start = time.monotonic()
@@ -826,6 +861,8 @@ class DiffusionEngine:
             unique_reply_rank=unique_reply_rank,
         )
         with self._cv:
+            if self._closed:
+                raise RuntimeError("DiffusionEngine is closed.")
             self._rpc_queue.put(task)
             self._cv.notify_all()
         return task
@@ -949,21 +986,49 @@ class DiffusionEngine:
             return
         self._put_streaming_queue_output(queue, output)
 
+    def _transition_to_terminal_error(self, exc: BaseException) -> None:
+        """Atomically stop admissions and complete every outstanding waiter.
+
+        A fatal executor error makes the busy loop terminal.  Merely stopping
+        that loop would leave requests that were still waiting in the
+        scheduler with futures that can never be completed.  Marking the
+        engine closed and draining the waiter maps under the same condition
+        lock also closes the race with concurrent ``add_request`` calls.
+        """
+        pending_futures: list[asyncio.Future]
+        pending_streaming_queues: list[asyncio.Queue[DiffusionOutput]]
+        with self._cv:
+            self._closed = True
+            if self.stop_event is not None:
+                self.stop_event.set()
+            # Keep the completed waiters addressable until their callers have
+            # obtained them.  In particular, an async generator does not
+            # enter ``get_streaming_result`` until its first iteration.
+            pending_futures = list(self._out_queue.values())
+            pending_streaming_queues = list(self._out_queue_streaming.values())
+            self._cv.notify_all()
+
+        terminal_output = DiffusionOutput.from_exception(exc)
+        for fut in pending_futures:
+            self._complete_future(fut, terminal_output)
+        for streaming_queue in pending_streaming_queues:
+            self._put_streaming_queue_output(streaming_queue, terminal_output)
+        self._fail_pending_rpcs(exc)
+
     def close(self) -> None:
         pending_futures: list[asyncio.Future] = []
         pending_streaming_queues: list[asyncio.Queue[DiffusionOutput]] = []
         with self._cv:
             if self._closed and self._shutdown_complete:
                 return
-            if not self._closed:
-                self._closed = True
-                if self.stop_event is not None:
-                    self.stop_event.set()
-                pending_futures = list(self._out_queue.values())
-                pending_streaming_queues = list(self._out_queue_streaming.values())
-                self._out_queue.clear()
-                self._out_queue_streaming.clear()
-                self._cv.notify_all()
+            self._closed = True
+            if self.stop_event is not None:
+                self.stop_event.set()
+            pending_futures = list(self._out_queue.values())
+            pending_streaming_queues = list(self._out_queue_streaming.values())
+            self._out_queue.clear()
+            self._out_queue_streaming.clear()
+            self._cv.notify_all()
 
         closed_output = DiffusionOutput(error="DiffusionEngine is closed.")
         for fut in pending_futures:

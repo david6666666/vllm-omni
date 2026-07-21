@@ -48,7 +48,7 @@ from vllm_omni.diffusion.registry import get_diffusion_ir_op_priority_func
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.sched.interface import DiffusionSchedulerOutput
 from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
-from vllm_omni.diffusion.worker.utils import BaseRunnerOutput, BatchRunnerOutput
+from vllm_omni.diffusion.worker.utils import BaseRunnerOutput, BatchRunnerOutput, RunnerOutput
 from vllm_omni.engine.stage_init_utils import set_death_signal
 from vllm_omni.lora.request import LoRARequest
 from vllm_omni.platforms import current_omni_platform
@@ -435,6 +435,29 @@ class DiffusionWorker:
             profiler.step()
         return output
 
+    def execute_model_dp_wave(
+        self,
+        reqs: list[OmniDiffusionRequest],
+        od_config: OmniDiffusionConfig,
+        kv_prefetch_jobs: dict | None = None,
+    ) -> RunnerOutput:
+        """Replicate one logical request across every DLO weight-shard rank."""
+        if not reqs:
+            raise RuntimeError("DLO DP lockstep received an empty rank wave.")
+        request_ids = {req.request_id for req in reqs}
+        if len(request_ids) != 1:
+            raise RuntimeError(
+                f"DLO DP lockstep requires one replicated logical request; got request ids {sorted(request_ids)!r}."
+            )
+        req = reqs[0]
+        result = self.execute_model(req, od_config, kv_prefetch_jobs)
+        return RunnerOutput(
+            request_id=req.request_id,
+            step_index=None,
+            finished=True,
+            result=result,
+        )
+
     def execute_model_batch(
         self, scheduler_output: DiffusionSchedulerOutput, od_config: OmniDiffusionConfig
     ) -> BatchRunnerOutput:
@@ -774,17 +797,12 @@ class WorkerProc:
         self.result_mq = None
         self.result_mq_handle = None
 
-        # Setup result sender (only for rank 0)
-        if gpu_id == 0:
-            self.result_mq = MessageQueue(n_reader=1, n_local_reader=1, local_reader_ranks=[0])
-            self.result_mq_handle = self.result_mq.export_handle()
-            WorkerProc._shared_result_handle = self.result_mq_handle
-            logger.info(f"Worker {gpu_id} created result MessageQueue")
-        else:
-            handle = getattr(WorkerProc, "_shared_result_handle", None)
-            if handle:
-                self.result_mq = MessageQueue.create_from_handle(handle, gpu_id)
-                logger.info(f"Worker {gpu_id} attached to shared result MessageQueue")
+        # One rank-local result queue lets a DP wave return one independently
+        # identifiable response per worker. Ordinary RPCs still select exactly
+        # one of these queues through output_rank.
+        self.result_mq = MessageQueue(n_reader=1, n_local_reader=1, local_reader_ranks=[0])
+        self.result_mq_handle = self.result_mq.export_handle()
+        logger.info(f"Worker {gpu_id} created result MessageQueue")
 
         assert od_config.master_port is not None
 
@@ -848,12 +866,17 @@ class WorkerProc:
         output_rank = rpc_request.get("output_rank")
         exec_all_ranks = rpc_request.get("exec_all_ranks", False)
         collect_rank_status = rpc_request.get("collect_rank_status", False)
+        wave_rpc_id = rpc_request.get("wave_rpc_id")
+        wave_request_ids = rpc_request.get("wave_request_ids")
+        reply_from_all_ranks = wave_rpc_id is not None
 
         if collect_rank_status and not exec_all_ranks:
             raise ValueError("collect_rank_status requires exec_all_ranks=True so all ranks enter the status gather")
+        if reply_from_all_ranks and (not exec_all_ranks or not isinstance(wave_request_ids, list)):
+            raise ValueError("DP wave reply requires exec_all_ranks=True and rank request assignments")
 
         should_execute = exec_all_ranks or output_rank is None or output_rank == self.gpu_id
-        should_reply = (output_rank is None or output_rank == self.gpu_id) and self.result_mq is not None
+        should_reply = reply_from_all_ranks or output_rank is None or output_rank == self.gpu_id
 
         if not should_execute:
             return None, False
@@ -901,6 +924,32 @@ class WorkerProc:
                 )
             return None, False
 
+        if reply_from_all_ranks:
+            expected_request_id = wave_request_ids[self.gpu_id] if self.gpu_id < len(wave_request_ids) else None
+            request_id = result.request_id if isinstance(result, RunnerOutput) else expected_request_id
+            diffusion_result = result.result if isinstance(result, RunnerOutput) else None
+            if rpc_exception is None and request_id != expected_request_id:
+                rpc_exception = RuntimeError(
+                    f"Worker rank {self.gpu_id} executed request {request_id!r}, expected {expected_request_id!r}"
+                )
+            return (
+                {
+                    "type": DIFFUSION_RPC_RESULT_ENVELOPE,
+                    "wave_rpc_id": wave_rpc_id,
+                    "rank": self.gpu_id,
+                    "request_id": request_id,
+                    "ok": rpc_exception is None,
+                    # Only rank zero transports the (potentially very large)
+                    # image/video payload. Other ranks return a status ack
+                    # after completing the same logical request.
+                    "result": diffusion_result if rpc_exception is None and self.gpu_id == 0 else None,
+                    "error": str(rpc_exception) if rpc_exception is not None else None,
+                    "error_type": type(rpc_exception).__name__ if rpc_exception is not None else None,
+                    "traceback": status["traceback"],
+                },
+                True,
+            )
+
         if rpc_exception is not None:
             raise rpc_exception
         return result, should_reply
@@ -930,11 +979,13 @@ class WorkerProc:
             if isinstance(msg, dict) and msg.get("type") == "sleep":
                 task = OmniSleepTask(level=msg.get("level", 2), task_id=msg.get("task_id", "local"))
                 ack = self.worker.handle_sleep_task(task)
-                self.return_result(ack)
+                if self.gpu_id == 0:
+                    self.return_result(ack)
             elif isinstance(msg, dict) and msg.get("type") == "wake_up":
                 task = OmniWakeTask(tags=msg.get("tags"), task_id=msg.get("task_id", "local"))
                 ack = self.worker.handle_wake_task(task)
-                self.return_result(ack)
+                if self.gpu_id == 0:
+                    self.return_result(ack)
             # Route message based on type
             elif isinstance(msg, dict) and msg.get("type") == "rpc":
                 try:
@@ -943,8 +994,27 @@ class WorkerProc:
                         self.return_result(result)
                 except Exception as e:
                     logger.error(f"Error processing RPC: {e}", exc_info=True)
-                    if self.result_mq is not None:
-                        self.return_result({"status": "error", "error": str(e)})
+                    wave_rpc_id = msg.get("wave_rpc_id")
+                    should_reply = wave_rpc_id is not None or msg.get("output_rank") in (None, self.gpu_id)
+                    if should_reply:
+                        if wave_rpc_id is not None:
+                            wave_request_ids = msg.get("wave_request_ids") or []
+                            request_id = wave_request_ids[self.gpu_id] if self.gpu_id < len(wave_request_ids) else None
+                            self.return_result(
+                                {
+                                    "type": DIFFUSION_RPC_RESULT_ENVELOPE,
+                                    "wave_rpc_id": wave_rpc_id,
+                                    "rank": self.gpu_id,
+                                    "request_id": request_id,
+                                    "ok": False,
+                                    "result": None,
+                                    "error": str(e),
+                                    "error_type": type(e).__name__,
+                                    "traceback": traceback.format_exc(),
+                                }
+                            )
+                        else:
+                            self.return_result({"status": "error", "error": str(e)})
 
             elif isinstance(msg, dict) and msg.get("type") == "shutdown":
                 logger.info("Worker %s: Received shutdown message", self.gpu_id)
@@ -963,7 +1033,8 @@ class WorkerProc:
                     output = DiffusionOutput.from_exception(e)
 
                 try:
-                    self.return_result(output)
+                    if self.gpu_id == 0:
+                        self.return_result(output)
                 except zmq.ZMQError as e:
                     logger.error(f"ZMQ error sending reply: {e}")
                     continue
@@ -1019,7 +1090,7 @@ class WorkerProc:
             pipe_writer.send(
                 {
                     "status": "ready",
-                    "result_handle": worker_proc.result_mq_handle if rank == 0 else None,
+                    "result_handle": worker_proc.result_mq_handle,
                 }
             )
             worker_proc.worker_busy_loop()

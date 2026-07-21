@@ -2,12 +2,17 @@
 
 ## Overview
 
-vLLM-Omni provides two offloading strategies to reduce GPU memory usage for diffusion models:
+vLLM-Omni provides three offloading strategies to reduce GPU memory usage for diffusion models:
 
 1. **Model-level (Sequential) Offloading**: Mutual exclusion between DiT model and encoder - only one is on GPU at a time.
 2. **Layerwise (Blockwise) Offloading**: Keeps only one transformer block on GPU at a time with compute-memory overlap.
+3. **Distributed Layerwise Offloading**: Stores one CPU weight shard per rank and reconstructs the next block with AllGather.
 
-Both strategies use pinned memory for faster CPU-GPU transfers. The strategies are **mutually exclusive** for now - if both are enabled, layerwise takes priority.
+All strategies use pinned memory for faster CPU-GPU transfers. Distributed
+layerwise offload is **mutually exclusive** with the other two modes and rejects
+invalid combinations during configuration. For backward compatibility, when
+the two legacy flags are both set, layerwise offload still takes priority over
+model-level offload.
 
 
 ## Model-level (Sequential) Offloading
@@ -179,6 +184,83 @@ class Flux2Transformer2DModel(nn.Module):
 - Support single GPU only for now
 
 
+## Distributed Layerwise Offloading
+
+Distributed layerwise offloading shards each block's flattened weights across a
+multi-rank group. Each rank retains only its pinned CPU shard. While block N is
+computed, the backend copies the local shard for block N+1 to the device and
+AllGathers the complete block into the next fixed device-buffer slot.
+
+The mode currently supports exactly one of these layouts (four ranks are shown
+as an example):
+
+| Layout | Required configuration | Request behavior |
+|---|---|---|
+| Pure Ulysses | `ulysses_degree=4`, all other parallel degrees `1` | All ranks cooperate on one sequence-parallel request |
+| Pure DP | `data_parallel_size=4`, all other parallel degrees `1` | All four weight-shard ranks replicate one logical request in lockstep |
+
+In the pure-DP layout, `data_parallel_size` is repurposed as the weight-shard
+group. It does not provide four independent request replicas: the scheduler
+admits one logical request at a time, every rank executes that same request,
+and only rank zero returns the generated media. Use an outer replica axis with
+four additional copies of the shard group for independent request throughput;
+for example, four independent `DP4` shard groups would require 16 GPUs.
+
+TP, PP, Ring, CFG parallelism, VAE patch parallelism, expert parallelism, mixed
+DP+USP, HSDP, model-level CPU offload, and legacy layerwise offload cannot be
+combined with this mode yet.
+
+**Python API:**
+
+```python
+from vllm_omni import Omni
+
+omni = Omni(
+    model="nvidia/Cosmos3-Super",
+    enable_distributed_layerwise_offload=True,
+    ulysses_degree=4,
+    enforce_eager=True,
+)
+```
+
+**CLI:**
+
+```bash
+vllm serve nvidia/Cosmos3-Super --omni \
+  --usp 4 \
+  --enable-distributed-layerwise-offload \
+  --enforce-eager
+```
+
+Next-block prefetch is enabled by default. Use
+`--disable-distributed-layerwise-offload-prefetch` only for a synchronous
+correctness or performance baseline with the same sharded weight layout.
+This switch serializes preparation and block compute; it is an ablation knob,
+not a recommended serving configuration. Prefetch removes preparation from the
+critical path only when the available block compute (or launch-ahead across
+blocks) covers the H2D plus AllGather service time. Short-compute towers can
+remain transfer-bound even with prefetch enabled.
+
+Models use the same `_layerwise_offload_blocks_attrs` declaration as legacy
+layerwise offload. The distributed backend additionally requires every rank to
+discover blocks and flattened parameter metadata in the same order.
+
+The current loader first constructs the full CPU model on every worker and only
+then commits the local pinned shard. Consequently, steady-state host weight
+storage is approximately `W/F` per rank, but startup can still peak near one
+full model plus its local shard per rank. True rank-local checkpoint loading is
+not implemented yet.
+
+Only ordinary dense strided parameters are accepted today. Quantized tensor
+layouts and tensor subclasses other than `nn.Parameter` are rejected. Cache
+backends are also rejected because rank-local block skipping can diverge the
+collective order. The stream and event path uses the platform abstraction, but
+the current acceptance evidence is CUDA/NCCL only; HCCL/NPU still requires a
+real multi-rank correctness and timeline run. The validated serving recipe uses
+`--enforce-eager`; `torch.compile` and graph capture with parameter-storage
+rebinding have not yet passed the same acceptance matrix.
+
+
 ### Implementation Notes
 
 **Module Discovery**
@@ -208,7 +290,8 @@ OffloadBackend (base class)
 ├── ModelLevelOffloadBackend → uses SequentialOffloadHook (.to() swap)
 │                              (delegates to a pipeline's enable_omni_model_cpu_offload
 │                               for split models like Cosmos3)
-└── LayerWiseOffloadBackend → uses LayerwiseOffloadHook
+├── LayerWiseOffloadBackend → uses LayerwiseOffloadHook
+└── DistributedLayerwiseOffloadBackend → H2D shard + AllGather double buffer
 ```
 
 Factory function `get_offload_backend()` selects the appropriate backend based on

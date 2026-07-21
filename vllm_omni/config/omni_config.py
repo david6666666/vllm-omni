@@ -463,6 +463,8 @@ class _DiffusionConfigProjection:
     output_type: str = "pil"
     enable_cpu_offload: bool = False
     enable_layerwise_offload: bool = False
+    enable_distributed_layerwise_offload: bool = False
+    distributed_layerwise_offload_prefetch: bool = True
     pin_cpu_memory: bool = True
     vae_use_slicing: bool = False
     vae_use_tiling: bool = False
@@ -634,6 +636,8 @@ class _DiffusionConfigProjection:
     def set_tf_model_config(self, tf_config: Any) -> None:
         self.tf_model_config = tf_config
         self._propagate_quantization_from_tf_config(tf_config)
+        if self.enable_distributed_layerwise_offload and self.quantization_config is not None:
+            raise ValueError("Distributed layerwise offload cannot be combined with quantization_config.")
 
     def enrich_config(self) -> None:
         from vllm_omni.diffusion.data import OmniDiffusionConfig
@@ -933,6 +937,26 @@ class VllmOmniDiffusionStageConfig(BaseVllmOmniStageConfig):
 
     parallel_config: OmniStageDiffusionParallelConfig = field(default_factory=OmniStageDiffusionParallelConfig)
     diffusion_config: _DiffusionConfigProjection = field(default_factory=_DiffusionConfigProjection)
+
+    def __post_init__(self) -> None:
+        from vllm_omni.diffusion.data import validate_distributed_layerwise_offload_config
+
+        quantization_config = (
+            self.quantization_config
+            if self.quantization_config is not None
+            else self.diffusion_config.quantization_config
+        )
+        validate_distributed_layerwise_offload_config(
+            enabled=self.diffusion_config.enable_distributed_layerwise_offload,
+            enable_cpu_offload=self.diffusion_config.enable_cpu_offload,
+            enable_layerwise_offload=self.diffusion_config.enable_layerwise_offload,
+            parallel_config=self.parallel_config,
+            quantization_config=quantization_config,
+            cache_backend=self.diffusion_config.cache_backend,
+            enforce_eager=self.model_config.enforce_eager,
+            step_execution=self.diffusion_config.step_execution,
+            streaming_output=getattr(self.diffusion_config, "streaming_output", False),
+        )
 
 
 StageConfigType: TypeAlias = VllmOmniARStageConfig | VllmOmniGenerationStageConfig | VllmOmniDiffusionStageConfig

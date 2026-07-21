@@ -293,7 +293,11 @@ class BagelPipeline(nn.Module, SupportsComponentDiscovery, DiffusionPipelineProf
         #    selectively materialized/moved by the offloader.
         # 3. HSDP: weights should be loaded on CPU first and sharded afterwards,
         #    rather than eagerly placing the full model on one GPU.
-        if quant_config is None and not (od_config.enable_layerwise_offload or od_config.parallel_config.use_hsdp):
+        if quant_config is None and not (
+            od_config.enable_layerwise_offload
+            or getattr(od_config, "enable_distributed_layerwise_offload", False)
+            or od_config.parallel_config.use_hsdp
+        ):
             self.to(self.device)
         self.setup_diffusion_pipeline_profiler(
             enable_diffusion_pipeline_profiler=self.od_config.enable_diffusion_pipeline_profiler

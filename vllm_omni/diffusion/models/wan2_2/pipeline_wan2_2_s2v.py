@@ -606,7 +606,11 @@ class Wan22S2VPipeline(
 
         t5_checkpoint = os.path.join(model_path, "models_t5_umt5-xxl-enc-bf16.pth")
         self.text_encoder = UMT5EncoderModel(_WAN_UMT5_CONFIG)
-        _cpu_offload = self.od_config.enable_cpu_offload or self.od_config.enable_layerwise_offload
+        _cpu_offload = (
+            self.od_config.enable_cpu_offload
+            or self.od_config.enable_layerwise_offload
+            or getattr(self.od_config, "enable_distributed_layerwise_offload", False)
+        )
         self.text_encoder = _load_wan_t5_as_umt5(self.text_encoder, t5_checkpoint, dtype=dtype)
         if not _cpu_offload:
             self.text_encoder = self.text_encoder.to(self.device)

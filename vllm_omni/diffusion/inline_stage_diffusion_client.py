@@ -101,6 +101,10 @@ class InlineStageDiffusionClient(StageClientBase):
         sampling_params: OmniDiffusionSamplingParams,
         kv_sender_info: dict[int, dict[str, Any]] | None = None,
     ) -> None:
+        if self._engine_dead:
+            raise EngineDeadError(f"Stage-{self.stage_id} inline diffusion engine is dead")
+        if self._shutting_down:
+            raise EngineDeadError("InlineStageDiffusionClient is shutting down")
         logger.debug(
             "[InlineStageDiffusionClient] stage-%s [rep-%s] add request: %s",
             self.stage_id,
