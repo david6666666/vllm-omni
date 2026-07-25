@@ -34,6 +34,7 @@ class _ExecutorShutdownCleaner:
     """Finalizer that shuts down executor worker processes."""
 
     broadcast_mq: MessageQueue | None = None
+    result_mq: MessageQueue | None = None
     num_workers: int = 0
     processes: list[mp.Process] | None = None
 
@@ -45,6 +46,7 @@ class _ExecutorShutdownCleaner:
                     self.broadcast_mq.enqueue(SHUTDOWN_MESSAGE, timeout=1.0)
 
                 self.broadcast_mq = None
+                self.result_mq = None
             except Exception as exc:
                 logger.warning("Failed to send shutdown signal: %s", exc)
 
@@ -76,22 +78,19 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         broadcast_handle = self._broadcast_mq.export_handle()
 
         # Launch workers
-        processes, result_handle = self._launch_workers(broadcast_handle, self.wake_events)
+        processes, result_handles = self._launch_workers(broadcast_handle, self.wake_events)
+        self._result_mqs = self._init_result_queues(result_handles)
+        self._result_mq = self._result_mqs[0] if self._result_mqs else None
         self._processes = processes
 
         shutdown_cleaner = _ExecutorShutdownCleaner(
             broadcast_mq=self._broadcast_mq,
+            result_mq=self._result_mqs[0] if self._result_mqs else None,
             num_workers=num_workers,
             processes=self._processes,
         )
         self._shutdown_cleaner: _ExecutorShutdownCleaner | None = shutdown_cleaner
         self._finalizer = weakref.finalize(self, shutdown_cleaner)
-
-        try:
-            self._result_mq = self._init_result_queue(result_handle)
-        except Exception:
-            self.shutdown()
-            raise
 
         self._start_worker_monitor()
 
@@ -102,21 +101,43 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             local_reader_ranks=list(range(num_workers)),
         )
 
-    def _init_result_queue(self, result_handle: Handle | None) -> MessageQueue:
-        if result_handle is None:
-            raise RuntimeError("Failed to get result queue handle from workers")
-        return MessageQueue.create_from_handle(result_handle, 0)
+    def _init_result_queues(self, result_handles: list) -> list[MessageQueue]:
+        """Create one reader per worker result queue."""
+        queues: list[MessageQueue] = []
+        for i, handle in enumerate(result_handles):
+            if handle is None:
+                logger.error(f"Failed to get result queue handle from worker {i}")
+                queues.append(None)  # type: ignore
+            else:
+                queues.append(MessageQueue.create_from_handle(handle, 0))
+        return queues
 
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("DiffusionExecutor is closed.")
-        if self._result_mq is None:
-            raise RuntimeError("Result queue is closed")
+
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("DiffusionExecutor is closed.")
+        if not hasattr(self, "_result_mqs") or not self._result_mqs:
+            raise RuntimeError("Result queues not initialized")
         if self._broadcast_mq is None:
             raise RuntimeError("Broadcast queue is closed")
 
     def _dequeue_one_with_failure_polling(self, deadline: float | None, method: str) -> Any:
-        """Block until one result message, polling ``_is_failed`` between chunk timeouts."""
+        """Block until one result message, polling ``_is_failed`` between chunk timeouts.
+
+        When multiple result queues exist (one per worker), polls all of them
+        round-robin to collect responses from any worker.
+        """
+        if hasattr(self, "_result_mqs") and self._result_mqs:
+            mqs = [mq for mq in self._result_mqs if mq is not None]
+        else:
+            mqs = [self._result_mq] if self._result_mq else []
+
+        if not mqs:
+            raise RuntimeError("No result queue available")
+
         while True:
             if deadline is None:
                 chunk_timeout = _DEQUEUE_TIMEOUT_S
@@ -125,8 +146,35 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                 if remaining <= 0:
                     raise TimeoutError(f"RPC call to {method} timed out.")
                 chunk_timeout = min(_DEQUEUE_TIMEOUT_S, remaining)
+
+            per_q_timeout = max(0.05, chunk_timeout / max(len(mqs), 1))
+            for mq in mqs:
+                try:
+                    return mq.dequeue(timeout=per_q_timeout)
+                except (TimeoutError, zmq.error.Again):
+                    continue
+
+            if self._is_failed:
+                raise EngineDeadError()
+            continue
+
+    def _dequeue_from_queue(self, mq: MessageQueue, deadline: float | None, method: str) -> Any:
+        """Block until one result message from a *specific* queue.
+
+        Used for DP multi-concurrency where responses[i] must come from
+        worker i's queue to match request i.
+        """
+        while True:
+            if deadline is None:
+                chunk_timeout = _DEQUEUE_TIMEOUT_S
+            else:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"RPC call to {method} timed out.")
+                chunk_timeout = min(_DEQUEUE_TIMEOUT_S, remaining)
+
             try:
-                return self._result_mq.dequeue(timeout=chunk_timeout)  # pyright: ignore[reportOptionalMemberAccess] MQ is not None before shutdown
+                return mq.dequeue(timeout=chunk_timeout)
             except (TimeoutError, zmq.error.Again):
                 if self._is_failed:
                     raise EngineDeadError()
@@ -187,7 +235,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         self,
         broadcast_handle: Handle,
         wake_events: list[Event],
-    ) -> tuple[list[mp.Process], Handle | None]:
+    ) -> tuple[list[mp.Process], list[Handle | None]]:
         od_config = self.od_config
         logger.info("Starting server...")
 
@@ -225,7 +273,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             processes.append(process)
 
         # Wait for all workers to be ready
-        result_handle = None
+        result_handles: list = []
         for writer in scheduler_pipe_writers:
             writer.close()
 
@@ -241,14 +289,13 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             if data["status"] != "ready":
                 raise RuntimeError("Initialization failed. Please see the error messages above.")
 
-            if i == 0:
-                result_handle = data.get("result_handle")
+            result_handles.append(data.get("result_handle"))
 
             reader.close()
 
         logger.debug("All workers are ready")
 
-        return processes, result_handle
+        return processes, result_handles
 
     @property
     def is_dead(self) -> bool:
@@ -317,41 +364,103 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
     def execute_request(self, scheduler_output: DiffusionSchedulerOutput) -> BaseRunnerOutput:
         """Adapt request-mode scheduler output to worker execute_model RPCs.
 
-        Returns a BatchRunnerOutput with one RunnerOutput per scheduled request.
+        For dist_offload_dp with multiple scheduled requests, sends ALL
+        requests in a single RPC.  Each worker picks one based on its DP
+        rank (AllGather only gathers weight shards, so ranks compute
+        different requests in parallel).  Returns a BatchRunnerOutput with
+        one RunnerOutput per scheduled request.
+
+        All concurrent requests must have the same number of inference
+        steps, because AllGather is a collective that requires every rank
+        to participate at each step.  Mismatched step counts cause one
+        rank to exit early while others hang.
         """
         from vllm_omni.diffusion.worker.utils import BatchRunnerOutput, RunnerOutput
 
         self._ensure_open()
+        new_reqs = scheduler_output.scheduled_new_reqs
         runner_outputs: list[RunnerOutput] = []
 
-        for new_req in scheduler_output.scheduled_new_reqs:
-            req = new_req.req
+        if len(new_reqs) > 1:
+            step_counts = {
+                nr.req.sampling_params.num_inference_steps
+                for nr in new_reqs
+                if nr.req.sampling_params.num_inference_steps is not None
+            }
+            if len(step_counts) > 1:
+                raise ValueError(
+                    "DP multi-concurrency requires all concurrent requests to have "
+                    f"the same num_inference_steps, got {step_counts}. AllGather is "
+                    "a collective that requires every rank to participate at each step."
+                )
+
+        if len(new_reqs) > 1:
+            # DP multi-concurrency: send all requests in one broadcast RPC.
+            # Each rank picks req[rank % len(reqs)] and computes independently.
+            # All ranks reply via shared result_mq (unique_reply_rank=None),
+            # executor collects N responses — no gather, no OOM.
+            reqs_list = [nr.req for nr in new_reqs]
             try:
-                result = self.collective_rpc(
+                results = self.collective_rpc(
                     "execute_model",
-                    args=(req, self.od_config, scheduler_output.kv_prefetch_job),
-                    unique_reply_rank=0,
+                    args=(reqs_list, self.od_config, scheduler_output.kv_prefetch_job),
+                    unique_reply_rank=None,
                     exec_all_ranks=True,
                 )
-                if not isinstance(result, DiffusionOutput):
-                    raise RuntimeError(f"Unexpected response type: {type(result)!r}")
-                runner_outputs.append(
-                    RunnerOutput(
-                        request_id=new_req.request_id,
-                        step_index=None,
-                        finished=True,
-                        result=result,
+                # results is a list of N DiffusionOutputs (one per rank)
+                results = results if isinstance(results, list) else [results]
+                for i, new_req in enumerate(new_reqs):
+                    res = results[i] if i < len(results) else results[0]
+                    if not isinstance(res, DiffusionOutput):
+                        raise RuntimeError(f"Unexpected response type [{i}]: {type(res)!r}")
+                    runner_outputs.append(
+                        RunnerOutput(
+                            request_id=new_req.request_id,
+                            step_index=None,
+                            finished=True,
+                            result=res,
+                        )
                     )
-                )
             except Exception as exc:
-                runner_outputs.append(
-                    RunnerOutput(
-                        request_id=new_req.request_id,
-                        step_index=None,
-                        finished=True,
-                        result=DiffusionOutput(error=str(exc)),
+                for new_req in new_reqs:
+                    runner_outputs.append(
+                        RunnerOutput(
+                            request_id=new_req.request_id,
+                            step_index=None,
+                            finished=True,
+                            result=DiffusionOutput(error=str(exc)),
+                        )
                     )
-                )
+        else:
+            # Single request — original path
+            for new_req in new_reqs:
+                req = new_req.req
+                try:
+                    result = self.collective_rpc(
+                        "execute_model",
+                        args=(req, self.od_config, scheduler_output.kv_prefetch_job),
+                        unique_reply_rank=0,
+                        exec_all_ranks=True,
+                    )
+                    if not isinstance(result, DiffusionOutput):
+                        raise RuntimeError(f"Unexpected response type: {type(result)!r}")
+                    runner_outputs.append(
+                        RunnerOutput(
+                            request_id=new_req.request_id,
+                            step_index=None,
+                            finished=True,
+                            result=result,
+                        )
+                    )
+                except Exception as exc:
+                    runner_outputs.append(
+                        RunnerOutput(
+                            request_id=new_req.request_id,
+                            step_index=None,
+                            finished=True,
+                            result=DiffusionOutput(error=str(exc)),
+                        )
+                    )
 
         return BatchRunnerOutput.from_list(runner_outputs)
 
@@ -361,11 +470,17 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         A scheduler wave with one request is the conservative serial case and
         uses the single-request worker RPC. Waves with multiple requests use the
         fused request-batch RPC and require pipeline request-batch support.
+
+        When dp_concurrent is active, always use execute_request instead —
+        each rank picks one request from the list and computes independently.
         """
         from vllm_omni.diffusion.worker.utils import BatchRunnerOutput
 
         self._ensure_open()
         if len(scheduler_output.scheduled_new_reqs) <= 1:
+            return self.execute_request(scheduler_output)
+
+        if getattr(self.od_config, "enable_distributed_layerwise_offload", False):
             return self.execute_request(scheduler_output)
 
         result = self.collective_rpc(
@@ -408,19 +523,30 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         deadline = None if timeout is None else time.monotonic() + timeout
         kwargs = kwargs or {}
 
-        # Prepare RPC request message. When unique_reply_rank is None, all
-        # workers must execute the RPC but only rank 0 can reply (it's the
-        # only one with a result_mq). Collect detailed rank statuses only for
-        # this control-plane all-rank path; forward-path exec_all_ranks RPCs
-        # avoid the per-step host object gather.
+        # Prepare RPC request message. When unique_reply_rank is None:
+        # - All workers execute the RPC
+        # - All workers reply via shared result_mq (each rank has result_mq)
+        # - Executor collects N responses (one per rank)
+        # When unique_reply_rank is set (e.g. 0):
+        # - All workers execute (if exec_all_ranks=True)
+        # - Only the specified rank replies
+        # - Executor collects 1 response
         execute_all_ranks = unique_reply_rank is None or exec_all_ranks
-        collect_rank_status = unique_reply_rank is None
+        # For DP multi-concurrency (unique_reply_rank=None, exec_all_ranks=True),
+        # we want all ranks to reply independently — set output_rank to None
+        # so should_reply is True for all ranks.
+        if unique_reply_rank is None and exec_all_ranks:
+            output_rank_for_rpc = None  # all ranks reply
+            collect_rank_status = False
+        else:
+            output_rank_for_rpc = unique_reply_rank if unique_reply_rank is not None else 0
+            collect_rank_status = unique_reply_rank is None
         rpc_request = {
             "type": "rpc",
             "method": method,
             "args": args,
             "kwargs": kwargs,
-            "output_rank": unique_reply_rank if unique_reply_rank is not None else 0,
+            "output_rank": output_rank_for_rpc,
             "exec_all_ranks": execute_all_ranks,
             "collect_rank_status": collect_rank_status,
         }
@@ -429,21 +555,45 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             # Broadcast RPC request to all workers via unified message queue
             self._broadcast_mq.enqueue(rpc_request)  # pyright: ignore[reportOptionalMemberAccess] MQ is not None before shutdown
 
-            # Only rank 0 has a result_mq, so we always expect exactly 1 response
-            num_responses = 1
+            # Determine number of responses to collect:
+            # - unique_reply_rank=None + exec_all_ranks=True: all DP ranks reply
+            #   (N responses, one per DP worker).  Use data_parallel_size, not
+            #   num_gpus, because num_gpus includes TP/SP ranks that should not
+            #   reply in DP multi-concurrency mode.
+            # - Otherwise: 1 response (only rank 0 or specified rank)
+            if unique_reply_rank is None and exec_all_ranks:
+                dp_size = getattr(self.od_config.parallel_config, "data_parallel_size", 1)
+                num_responses = max(1, dp_size)
+            else:
+                num_responses = 1
 
             responses = []
-            for _ in range(num_responses):
-                response = self._dequeue_one_with_failure_polling(deadline, method)
+            if unique_reply_rank is None and exec_all_ranks and num_responses > 1:
+                # DP multi-concurrency: read from each worker's queue
+                # explicitly by index so responses[i] comes from worker i
+                # (which processed request i).  This avoids the race where
+                # round-robin polling returns replies in arbitrary order.
+                mqs = [mq for mq in self._result_mqs if mq is not None]
+                for mq in mqs:
+                    response = self._dequeue_from_queue(mq, deadline, method)
+                    try:
+                        unpack_diffusion_output_shm(response)
+                    except Exception as e:
+                        logger.warning("SHM unpack failed (data may already be inline): %s", e)
+                    response = MultiprocDiffusionExecutor._handle_rpc_response(response)
+                    responses.append(response)
+            else:
+                for _ in range(num_responses):
+                    response = self._dequeue_one_with_failure_polling(deadline, method)
 
-                try:
-                    unpack_diffusion_output_shm(response)
-                except Exception as e:
-                    logger.warning("SHM unpack failed (data may already be inline): %s", e)
+                    try:
+                        unpack_diffusion_output_shm(response)
+                    except Exception as e:
+                        logger.warning("SHM unpack failed (data may already be inline): %s", e)
 
-                response = MultiprocDiffusionExecutor._handle_rpc_response(response)
+                    response = MultiprocDiffusionExecutor._handle_rpc_response(response)
 
-                responses.append(response)
+                    responses.append(response)
 
             return responses[0] if unique_reply_rank is not None else responses
         except Exception as e:
@@ -465,6 +615,7 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
             self._finalizer()
         finally:
             self._broadcast_mq = None
+            self._result_mqs = []
             self._result_mq = None
             self._shutdown_cleaner = None
             self._processes = []

@@ -362,17 +362,31 @@ class DiffusersPipelineLoader:
                 )
             else:
                 model = self._init_from_load_format(load_format, target_device, custom_pipeline_name, is_hsdp=False)
-                logger.debug("Loading weights on %s ...", load_device)
-                if load_format == "diffusers":
-                    # DiffusersAdapterPipeline.load_weights() calls
-                    # DiffusionPipeline.from_pretrained() internally; it does
-                    # not use our native customized pipeline classes.
-                    cast(DiffusersAdapterPipeline, model).load_weights()
+
+                # Check if transformer was created on meta device (dist_offload).
+                # If so, skip load_weights — weights will be loaded via mmap
+                # in offload_backend.enable() to avoid O(dp_size × model) RSS.
+                _has_meta_transformer = False
+                for name, module in model.named_modules():
+                    if hasattr(module, "transformer") and hasattr(module.transformer, "named_parameters"):
+                        for p in module.transformer.parameters():
+                            if hasattr(p, "is_meta") and p.is_meta:
+                                _has_meta_transformer = True
+                                break
+                        if _has_meta_transformer:
+                            break
+
+                if _has_meta_transformer:
+                    logger.info("Transformer on meta device, skipping load_weights (will load via mmap in enable())")
                 else:
-                    self.load_weights(model)
-                # HSDP processes quantized weights before wrapping parameters as
-                # DTensors. The non-HSDP path can process them here as usual.
-                self._process_weights_after_loading(model, target_device)
+                    logger.debug("Loading weights on %s ...", load_device)
+                    if load_format == "diffusers":
+                        cast(DiffusersAdapterPipeline, model).load_weights()
+                    else:
+                        self.load_weights(model)
+                    # HSDP processes quantized weights before wrapping parameters as
+                    # DTensors. The non-HSDP path can process them here as usual.
+                    self._process_weights_after_loading(model, target_device)
 
             if offload_after_quant:
                 model.to("cpu")
