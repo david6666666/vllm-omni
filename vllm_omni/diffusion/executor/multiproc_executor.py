@@ -115,10 +115,6 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("DiffusionExecutor is closed.")
-
-    def _ensure_open(self) -> None:
-        if self._closed:
-            raise RuntimeError("DiffusionExecutor is closed.")
         if not hasattr(self, "_result_mqs") or not self._result_mqs:
             raise RuntimeError("Result queues not initialized")
         if self._broadcast_mq is None:
@@ -382,16 +378,31 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
         runner_outputs: list[RunnerOutput] = []
 
         if len(new_reqs) > 1:
+            # AllGather is a collective — every rank must participate at each
+            # step.  If concurrent requests resolve to different step counts
+            # (e.g. T2V=35 vs action_mode=30), one rank exits early and the
+            # other hangs.  Reject this here.
+            #
+            # num_inference_steps=None means "pipeline default", which may
+            # resolve differently per request mode.  When ALL are None, we
+            # cannot validate here — the pipeline resolves them later.  This
+            # is safe only if all requests use the same mode (guaranteed by
+            # the scheduler's batch admission).  If any are explicit and any
+            # are None, reject to be safe.
             step_counts = {
                 nr.req.sampling_params.num_inference_steps
                 for nr in new_reqs
                 if nr.req.sampling_params.num_inference_steps is not None
             }
-            if len(step_counts) > 1:
+            has_none = any(nr.req.sampling_params.num_inference_steps is None for nr in new_reqs)
+            has_explicit = len(step_counts) > 0
+            if (len(step_counts) > 1) or (has_none and has_explicit):
                 raise ValueError(
                     "DP multi-concurrency requires all concurrent requests to have "
-                    f"the same num_inference_steps, got {step_counts}. AllGather is "
-                    "a collective that requires every rank to participate at each step."
+                    f"the same num_inference_steps, got "
+                    f"{[nr.req.sampling_params.num_inference_steps for nr in new_reqs]}. "
+                    "AllGather is a collective that requires every rank to participate "
+                    "at each step."
                 )
 
         if len(new_reqs) > 1:
@@ -569,19 +580,25 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
 
             responses = []
             if unique_reply_rank is None and exec_all_ranks and num_responses > 1:
-                # DP multi-concurrency: read from each worker's queue
-                # explicitly by index so responses[i] comes from worker i
-                # (which processed request i).  This avoids the race where
-                # round-robin polling returns replies in arbitrary order.
-                mqs = [mq for mq in self._result_mqs if mq is not None]
-                for mq in mqs:
-                    response = self._dequeue_from_queue(mq, deadline, method)
+                # DP multi-concurrency: only dp_size primary ranks (one per
+                # DP replica) reply, but there may be more queues (world_size
+                # with SP/TP).  Use round-robin polling to collect exactly
+                # num_responses replies, then sort by dp_rank tag to match
+                # results to requests.
+                tagged: list[tuple[int, Any]] = []
+                for _ in range(num_responses):
+                    response = self._dequeue_one_with_failure_polling(deadline, method)
                     try:
                         unpack_diffusion_output_shm(response)
                     except Exception as e:
                         logger.warning("SHM unpack failed (data may already be inline): %s", e)
                     response = MultiprocDiffusionExecutor._handle_rpc_response(response)
-                    responses.append(response)
+                    if isinstance(response, dict) and "dp_rank" in response:
+                        tagged.append((response["dp_rank"], response["output"]))
+                    else:
+                        tagged.append((len(tagged), response))
+                tagged.sort(key=lambda x: x[0])
+                responses = [r for _, r in tagged]
             else:
                 for _ in range(num_responses):
                     response = self._dequeue_one_with_failure_polling(deadline, method)

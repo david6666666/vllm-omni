@@ -453,10 +453,13 @@ class DiffusionWorker:
         if profiler:
             profiler.step()
 
-        # Each rank returns its own output independently.
-        # No gather needed — all ranks share the same result_mq and
-        # each enqueues its own DiffusionOutput.  The executor
-        # dequeues N responses (one per rank).
+        # Each primary rank returns its own output tagged with its DP rank
+        # so the executor can match results to requests by dp_rank.
+        # Non-primary ranks (SP/TP > 0) do not reply.
+        if is_batch:
+            from vllm_omni.diffusion.distributed.parallel_state import get_data_parallel_rank
+
+            return {"dp_rank": get_data_parallel_rank(), "output": output}
         return output
 
     def execute_model_batch(

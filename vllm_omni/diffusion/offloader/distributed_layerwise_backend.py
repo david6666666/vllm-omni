@@ -319,9 +319,11 @@ class DistributedLayerwiseOffloadHook(ModelHook):
                 evt.record(self.copy_stream)
         else:
             gpu_shards: dict[torch.dtype, torch.Tensor] = {}
+            shard_bufs = self.gpu_shard_buffers[slot]
+            assert shard_bufs is not None, f"gpu_shard_buffers[{slot}] not allocated"
             with current_omni_platform.stream(self.copy_stream):
                 for dtype, cpu_shard in self.cpu_shards.items():
-                    gpu_shard = torch.empty(cpu_shard.shape, dtype=dtype, device=self.device)
+                    gpu_shard = shard_bufs[dtype][: cpu_shard.numel()]
                     gpu_shard.copy_(cpu_shard, non_blocking=non_blocking)
                     gpu_shards[dtype] = gpu_shard
 
@@ -868,6 +870,9 @@ class DistributedLayerwiseOffloadBackend(OffloadBackend):
             logger.warning("DistributedLayerwiseOffloadBackend already enabled")
             return
 
+        self._on_demand_shard_infos: list[dict] = []
+        self._on_demand_handles: list[Any] = []
+
         # Initialize DP group (if not already done by early init)
         if self.dp_group is None and self.dp_size > 1:
             self._init_dp_group()
@@ -1100,42 +1105,33 @@ class DistributedLayerwiseOffloadBackend(OffloadBackend):
         # Each module gets a dedicated input (shard-sized) and output
         # (full-sized) buffer.  VAE/encoders run before/after DiT, never
         # concurrently, so peak HBM = max(DiT, VAE) not sum.
-        if hasattr(self, "_on_demand_shard_infos"):
-            for si in self._on_demand_shard_infos:
-                out_bufs: dict[torch.dtype, torch.Tensor] = {}
-                in_bufs: dict[torch.dtype, torch.Tensor] = {}
-                for dtype, shard in si["cpu_shards"].items():
-                    # AllGather output = dp_size * shard_size
-                    full_size = shard.numel() * self.dp_size if self.dp_size > 1 else shard.numel()
-                    out_bufs[dtype] = torch.empty(full_size, dtype=dtype, device=self.device)
-                    in_bufs[dtype] = torch.empty(shard.shape, dtype=dtype, device=self.device)
-                si["gpu_output"] = out_bufs
-                si["gpu_input"] = in_bufs
-                _mb = sum(t.nelement() * t.element_size() for t in out_bufs.values()) / 1048576
-                logger.info("Allocated %.0f MB GPU buffer for sharded on-demand module", _mb)
+        for si in self._on_demand_shard_infos:
+            out_bufs: dict[torch.dtype, torch.Tensor] = {}
+            in_bufs: dict[torch.dtype, torch.Tensor] = {}
+            for dtype, shard in si["cpu_shards"].items():
+                # AllGather output = dp_size * shard_size
+                full_size = shard.numel() * self.dp_size if self.dp_size > 1 else shard.numel()
+                out_bufs[dtype] = torch.empty(full_size, dtype=dtype, device=self.device)
+                in_bufs[dtype] = torch.empty(shard.shape, dtype=dtype, device=self.device)
+            si["gpu_output"] = out_bufs
+            si["gpu_input"] = in_bufs
+            _mb = sum(t.nelement() * t.element_size() for t in out_bufs.values()) / 1048576
+            logger.info("Allocated %.0f MB GPU buffer for sharded on-demand module", _mb)
 
-            # Block weights have been moved to CPU (replaced with zero-element
-            # placeholders on device). Synchronize async H2D copies, then
-            # release the freed device memory back to the allocator so that
-            # npu-smi / nvidia-smi reflect the true resident footprint.
-            # Without this the caching allocator retains the full model's
-            # worth of freed HBM, causing misleadingly high idle usage.
-            current_omni_platform.synchronize()
-            current_omni_platform.empty_cache()
-            # Return freed CPU memory to the OS.  Model loading allocates the
-            # full model on CPU; after sharding each rank keeps only 1/dp_size.
-            # glibc malloc retains the freed 3/4 in its free list instead of
-            # munmap-ing it, inflating cgroup total_rss by ~100 GB.  gc + malloc_trim
-            # forces the return so that dist_offload's 1/N sharding actually
-            # shows up as lower CPU RSS.
-            import ctypes as _ctypes
-            import gc as _gc
+        self._cleanup_after_loading()
 
-            _gc.collect()
-            try:
-                _ctypes.CDLL("libc.so.6").malloc_trim(0)
-            except Exception:
-                pass
+    def _cleanup_after_loading(self) -> None:
+        """Synchronize and release freed device/CPU memory after sharding."""
+        current_omni_platform.synchronize()
+        current_omni_platform.empty_cache()
+        import ctypes as _ctypes
+        import gc as _gc
+
+        _gc.collect()
+        try:
+            _ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except Exception:
+            pass
 
     def disable(self) -> None:
         if not self.enabled:
