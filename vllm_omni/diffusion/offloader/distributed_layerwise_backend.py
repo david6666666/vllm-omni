@@ -686,6 +686,15 @@ class DistributedLayerwiseOffloadBackend(OffloadBackend):
         self._mmap_file_cache = file_cache
         self._mmap_model_to_ckpt = model_to_ckpt
 
+        # The regular loader runs model-specific post-load transforms after
+        # assigning checkpoint tensors. The mmap path bypasses that loader, so
+        # preserve the same lifecycle for transforms such as Cosmos3's fp32
+        # timestep embedder.
+        for dit_module in modules.dits:
+            post_load_weights = getattr(dit_module, "post_load_weights", None)
+            if callable(post_load_weights):
+                post_load_weights()
+
     def _load_module_weights_from_mmap(self, module: nn.Module, dit_name: str, child_name: str) -> None:
         """Load a non-block DiT submodule's weights from safetensors via mmap."""
         from safetensors import safe_open

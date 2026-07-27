@@ -4,17 +4,21 @@
 """Unit tests for DistributedLayerwiseOffloadHook and backend utilities."""
 
 import gc
+import json
 import os
 import socket
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 import pytest
 import torch
 import torch.distributed as dist
+from safetensors.torch import save_file
 from torch import nn
 from torch.distributed.tensor import DeviceMesh, DTensor, Replicate
 
 import vllm_omni.diffusion.offloader.distributed_layerwise_backend as dist_backend_module
+from vllm_omni.diffusion.offloader.base import OffloadConfig, OffloadStrategy
 from vllm_omni.diffusion.offloader.distributed_layerwise_backend import (
     DistributedLayerwiseOffloadBackend,
     DistributedLayerwiseOffloadHook,
@@ -334,6 +338,60 @@ class _NoAttrsModel(nn.Module):
     def __init__(self, num_blocks: int = 2):
         super().__init__()
         self.blocks = nn.ModuleList([_DummyBlock() for _ in range(num_blocks)])
+
+
+class _MmapPostLoadModel(nn.Module):
+    _layerwise_offload_blocks_attrs = ["blocks"]
+
+    def __init__(self):
+        super().__init__()
+        self.time_embedder = nn.Linear(2, 2, bias=False)
+        self.blocks = nn.ModuleList([nn.Linear(2, 2, bias=False) for _ in range(2)])
+        self.post_load_calls = 0
+
+    def post_load_weights(self) -> None:
+        self.time_embedder.to(torch.float32)
+        self.post_load_calls += 1
+
+
+class _MmapPostLoadPipeline(nn.Module):
+    def __init__(self):
+        super().__init__()
+        with torch.device("meta"):
+            self.transformer = _MmapPostLoadModel()
+
+    @staticmethod
+    def _remap_ckpt_key(key: str) -> str:
+        return key
+
+
+class TestMmapWeightLoading:
+    def test_runs_model_post_load_hook(self, tmp_path, patched_offload_runtime):
+        pipeline = _MmapPostLoadPipeline()
+        weights = {name: torch.ones(param.shape, dtype=torch.bfloat16) for name, param in pipeline.named_parameters()}
+        weight_file = tmp_path / "model.safetensors"
+        save_file(weights, str(weight_file))
+        weight_map = {name: weight_file.name for name in weights}
+        (tmp_path / "model.safetensors.index.json").write_text(json.dumps({"weight_map": weight_map}))
+
+        backend = DistributedLayerwiseOffloadBackend(
+            OffloadConfig(
+                strategy=OffloadStrategy.DISTRIBUTED_LAYER_WISE,
+                pin_cpu_memory=False,
+                model_path=str(tmp_path),
+            ),
+            torch.device("cpu"),
+        )
+        modules = SimpleNamespace(
+            dits=[pipeline.transformer],
+            dit_names=["transformer"],
+        )
+
+        backend._load_weights_via_mmap(pipeline, modules)
+
+        assert pipeline.transformer.post_load_calls == 1
+        assert pipeline.transformer.time_embedder.weight.dtype == torch.float32
+        assert pipeline.transformer.blocks[0].weight.dtype == torch.bfloat16
 
 
 class TestGetBlocksFromDit:
