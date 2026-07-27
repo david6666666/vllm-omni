@@ -867,17 +867,23 @@ class WorkerProc:
 
         should_execute = exec_all_ranks or output_rank is None or output_rank == self.gpu_id
         # For DP multi-concurrency (output_rank=None), only the primary rank
-        # within each DP replica should reply.  This prevents SP/TP/CFG ranks
-        # from enqueuing extra replies that the executor doesn't drain.
+        # within each DP replica should reply.  This prevents SP/TP/CFG/PP
+        # ranks from enqueuing extra replies that the executor doesn't drain.
         if output_rank is None and exec_all_ranks:
+            from vllm.distributed.parallel_state import get_tensor_model_parallel_rank
+
             from vllm_omni.diffusion.distributed.parallel_state import (
                 get_classifier_free_guidance_rank,
+                get_pipeline_parallel_rank,
                 get_sequence_parallel_rank,
             )
 
-            sp_rank = get_sequence_parallel_rank()
-            cfg_rank = get_classifier_free_guidance_rank()
-            is_primary_in_replica = sp_rank == 0 and cfg_rank == 0
+            is_primary_in_replica = (
+                get_sequence_parallel_rank() == 0
+                and get_classifier_free_guidance_rank() == 0
+                and get_tensor_model_parallel_rank() == 0
+                and get_pipeline_parallel_rank() == 0
+            )
             should_reply = is_primary_in_replica and self.result_mq is not None
         else:
             should_reply = (output_rank is None or output_rank == self.gpu_id) and self.result_mq is not None
@@ -970,22 +976,19 @@ class WorkerProc:
                         self._return_result(result)
                 except Exception as e:
                     logger.error(f"Error processing RPC: {e}", exc_info=True)
-                    # Respect the same reply gate as the success path so
-                    # non-output ranks don't enqueue stale error replies.
-                    output_rank = msg.get("output_rank")
-                    exec_all_ranks = msg.get("exec_all_ranks", False)
-                    if output_rank is None and exec_all_ranks:
+                    # On error, always reply (even from non-primary ranks) to
+                    # prevent the executor from hanging waiting for replies
+                    # that never arrive.  Tag with dp_rank for matching.
+                    if self.result_mq is not None:
                         from vllm_omni.diffusion.distributed.parallel_state import (
-                            get_classifier_free_guidance_rank,
-                            get_sequence_parallel_rank,
+                            get_data_parallel_rank,
                         )
 
-                        is_primary = get_sequence_parallel_rank() == 0 and get_classifier_free_guidance_rank() == 0
-                        can_reply = is_primary and self.result_mq is not None
-                    else:
-                        can_reply = (output_rank is None or output_rank == self.gpu_id) and self.result_mq is not None
-                    if can_reply:
-                        self._return_result({"status": "error", "error": str(e)})
+                        try:
+                            dp_rank = get_data_parallel_rank()
+                        except Exception:
+                            dp_rank = self.gpu_id
+                        self._return_result({"status": "error", "error": str(e), "dp_rank": dp_rank})
 
             elif isinstance(msg, dict) and msg.get("type") == "shutdown":
                 logger.info("Worker %s: Received shutdown message", self.gpu_id)

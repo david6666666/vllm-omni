@@ -154,28 +154,6 @@ class MultiprocDiffusionExecutor(DiffusionExecutor):
                 raise EngineDeadError()
             continue
 
-    def _dequeue_from_queue(self, mq: MessageQueue, deadline: float | None, method: str) -> Any:
-        """Block until one result message from a *specific* queue.
-
-        Used for DP multi-concurrency where responses[i] must come from
-        worker i's queue to match request i.
-        """
-        while True:
-            if deadline is None:
-                chunk_timeout = _DEQUEUE_TIMEOUT_S
-            else:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError(f"RPC call to {method} timed out.")
-                chunk_timeout = min(_DEQUEUE_TIMEOUT_S, remaining)
-
-            try:
-                return mq.dequeue(timeout=chunk_timeout)
-            except (TimeoutError, zmq.error.Again):
-                if self._is_failed:
-                    raise EngineDeadError()
-                continue
-
     @staticmethod
     def _raise_for_rpc_error_dict(response: Any) -> None:
         if isinstance(response, dict) and response.get("status") == "error":

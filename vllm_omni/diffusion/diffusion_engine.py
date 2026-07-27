@@ -234,11 +234,14 @@ class DiffusionEngine:
         if dp_size > 1 and dist_offload:
             self.scheduler.max_num_running_reqs = dp_size
             self.dp_concurrent = True
+            # Set batch admission wait so concurrent requests accumulate
+            # before scheduling.  The scheduler reads this from od_config.
             if getattr(self.od_config, "request_batch_max_wait_ms", 0) == 0:
                 self.od_config.request_batch_max_wait_ms = 500.0
             logger.info(
-                f"dp_concurrent: max_num_running_reqs={dp_size},"
-                f" batch_wait={self.od_config.request_batch_max_wait_ms}ms"
+                "dp_concurrent: max_num_running_reqs=%d, batch_wait=%sms",
+                dp_size,
+                self.od_config.request_batch_max_wait_ms,
             )
         else:
             self.dp_concurrent = False

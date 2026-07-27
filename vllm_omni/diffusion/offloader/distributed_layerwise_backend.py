@@ -976,16 +976,31 @@ class DistributedLayerwiseOffloadBackend(OffloadBackend):
                             self._load_module_weights_from_mmap(m, dit_name, name)
                             # Materialize any remaining meta buffers (e.g. RoPE
                             # inv_freq, timestep freqs) on device and
-                            # recompute them from their original formulas via
-                            # reset_parameters().  These are non-persistent
-                            # buffers not present in the checkpoint — they
-                            # must be reconstructed, not left as torch.empty.
+                            # recompute them from their original formulas.
+                            # These are non-persistent buffers not present in
+                            # the checkpoint — they must be reconstructed, not
+                            # left as torch.empty.
+                            # NOTE: Do NOT call reset_parameters() here — it
+                            # would re-initialize ALL parameters (including
+                            # mmap-loaded weights) with random values.
                             _has_meta_buf = any(hasattr(b, "is_meta") and b.is_meta for b in m.buffers(recurse=True))
                             if _has_meta_buf:
+                                # Save mmap-loaded param values before
+                                # reset_parameters (which re-initializes
+                                # ALL params with random values).
+                                saved_params = {
+                                    n: p.data.clone()
+                                    for n, p in m.named_parameters()
+                                    if not (hasattr(p, "is_meta") and p.is_meta)
+                                }
                                 m.to_empty(device=self.device)
                                 for submod in m.modules():
                                     if hasattr(submod, "reset_parameters"):
                                         submod.reset_parameters()
+                                # Restore mmap-loaded weights
+                                for n, p in m.named_parameters():
+                                    if n in saved_params:
+                                        p.data.copy_(saved_params[n])
                             try:
                                 m.to(self.device)
                             except Exception:
@@ -1095,11 +1110,7 @@ class DistributedLayerwiseOffloadBackend(OffloadBackend):
 
         # Release mmap file handles — _shard_and_pin has copied all shards,
         # params now point to offload placeholders (not mmap views).
-        if hasattr(self, "_mmap_file_cache"):
-            self._mmap_file_cache.clear()
-            del self._mmap_file_cache
-            del self._mmap_model_to_ckpt
-            logger.info("Released safetensors mmap file handles")
+        self._release_mmap_handles()
 
         # Assign GPU buffers to sharded on-demand modules (VAE/encoders).
         # Each module gets a dedicated input (shard-sized) and output
@@ -1119,6 +1130,15 @@ class DistributedLayerwiseOffloadBackend(OffloadBackend):
             logger.info("Allocated %.0f MB GPU buffer for sharded on-demand module", _mb)
 
         self._cleanup_after_loading()
+
+    def _release_mmap_handles(self) -> None:
+        """Release safetensors mmap file handles."""
+        if hasattr(self, "_mmap_file_cache"):
+            self._mmap_file_cache.clear()
+            del self._mmap_file_cache
+            if hasattr(self, "_mmap_model_to_ckpt"):
+                del self._mmap_model_to_ckpt
+            logger.info("Released safetensors mmap file handles")
 
     def _cleanup_after_loading(self) -> None:
         """Synchronize and release freed device/CPU memory after sharding."""
