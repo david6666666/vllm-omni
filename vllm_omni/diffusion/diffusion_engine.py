@@ -800,14 +800,25 @@ class DiffusionEngine:
 
     def run_startup_warmup(self) -> None:
         dlo_use_allgather = getattr(self.od_config, "dlo_use_allgather", True)
+        # Skip dummy run when AllGather is used with more than 1 rank,
+        # because the dummy run sends only 1 request but AllGather requires
+        # all ranks to participate simultaneously.  This covers both DP > 1
+        # and SP > 1 (where dp_size is derived from sp_size in OffloadConfig).
+        pc = getattr(self.od_config, "parallel_config", None)
+        dp_size = getattr(pc, "data_parallel_size", 1) if pc else 1
+        sp_size = getattr(pc, "sequence_parallel_size", 1) if pc else 1
+        effective_shard_size = max(dp_size, sp_size)
         skip_dummy = (
             getattr(self.od_config, "enable_distributed_layerwise_offload", False)
             and dlo_use_allgather
-            and getattr(self.od_config, "parallel_config", None) is not None
-            and getattr(self.od_config.parallel_config, "data_parallel_size", 1) > 1
+            and effective_shard_size > 1
         )
         if skip_dummy:
-            logger.info("Skipping dummy run (dist_offload with DP > 1 and AllGather)")
+            logger.info(
+                "Skipping dummy run (dist_offload with AllGather, dp_size=%d, sp_size=%d)",
+                dp_size,
+                sp_size,
+            )
             return
         try:
             self._dummy_run()

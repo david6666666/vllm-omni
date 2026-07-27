@@ -741,11 +741,11 @@ class DistributedLayerwiseOffloadBackend(OffloadBackend):
             logger.info("Loaded %d params for submodule %s.%s via mmap", loaded, dit_name, child_name)
 
     def _init_dp_group(self) -> None:
-        """Reuse the DP process group initialized by parallel_state.
+        """Reuse the process group initialized by parallel_state.
 
-        This correctly handles strided DP groups when DP is combined with
-        SP/CFG/PP.  We must NOT create a new group with ranks=[0..dp_size)
-        because that only works for pure-DP topologies.
+        When DP > 1, uses the DP group (handles strided groups with SP/CFG/PP).
+        When DP = 1 but SP > 1 (and dp_size was set to sp_size in OffloadConfig),
+        uses the SP group so weights are sharded across SP ranks.
         """
         if self.dp_size <= 1:
             logger.info("Distributed layerwise offload: dp_size=1, running without AllGather")
@@ -759,19 +759,37 @@ class DistributedLayerwiseOffloadBackend(OffloadBackend):
                 "an initialized process group."
             )
 
-        from vllm_omni.diffusion.distributed.parallel_state import get_dp_group
+        from vllm_omni.diffusion.distributed.parallel_state import (
+            get_data_parallel_world_size,
+            get_dp_group,
+        )
 
-        dp_coord = get_dp_group()
-        self.dp_group = dp_coord.device_group
-        self.rank = dp_coord.rank_in_group
-        self.dp_size = dp_coord.world_size
+        # Determine which parallel group to use for sharding.
+        # When data_parallel_size > 1, use the DP group.
+        # When data_parallel_size == 1 but dp_size > 1 (set from sp_size in
+        # OffloadConfig), use the SP group for weight sharding.
+        dp_world = get_data_parallel_world_size()
+        if dp_world > 1:
+            coord = get_dp_group()
+        else:
+            from vllm_omni.diffusion.distributed.parallel_state import get_sp_group
+
+            coord = get_sp_group()
+            logger.info(
+                "Distributed layerwise offload: DP=1, using SP group (world_size=%d) for weight sharding",
+                coord.world_size,
+            )
+
+        self.dp_group = coord.device_group
+        self.rank = coord.rank_in_group
+        self.dp_size = coord.world_size
 
         logger.info(
             "Distributed layerwise offload: dp_size=%d, rank_in_group=%d, global_rank=%d, group_ranks=%s",
             self.dp_size,
             self.rank,
-            dp_coord.rank,
-            dp_coord.ranks,
+            coord.rank,
+            coord.ranks,
         )
 
     def _register_on_demand_hook(self, module: nn.Module, label: str) -> None:
