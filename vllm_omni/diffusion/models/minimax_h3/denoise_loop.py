@@ -72,6 +72,11 @@ class MiniMaxH3DenoiseBranch:
         # every transformer invocation.
         self.x_base = torch.zeros(1, seq_len, MINIMAX_H3_VIDEO_ROW_WIDTH, dtype=torch.float32, device=device)
         self.audio_x_base = torch.zeros(1, seq_len, MINIMAX_H3_AUDIO_ROW_WIDTH, dtype=torch.float32, device=device)
+        # Reuse the four-value role table across denoise steps.  The previous
+        # path allocated a new CUDA tensor for this tiny metadata vector on
+        # every step, even though its shape and storage never change.
+        self.unique_timesteps_host = torch.empty(4, dtype=torch.float32)
+        self.unique_timesteps_dev = torch.empty(4, dtype=torch.float32, device=device)
         timestep_roles = torch.zeros(seq_len, dtype=torch.long)
         timestep_roles[self.img_pos[~self.update_mask]] = 2
         timestep_roles[self.audio_pos[self.audio_update_mask]] = 1
@@ -124,17 +129,17 @@ class MiniMaxH3DenoiseBranch:
         # The role-to-row map is fixed for a packed layout.  Pass the four
         # candidate timestep values directly instead of materializing a full
         # sequence and running torch.unique over it at every denoise step.
-        unique_timesteps = torch.tensor(
-            (t_video, t_audio, imgvid_cond_timestep, audio_ref_cond_timestep),
-            dtype=torch.float32,
-            device=x.device,
-        )
+        self.unique_timesteps_host[0].fill_(t_video)
+        self.unique_timesteps_host[1].fill_(t_audio)
+        self.unique_timesteps_host[2].fill_(imgvid_cond_timestep)
+        self.unique_timesteps_host[3].fill_(audio_ref_cond_timestep)
+        self.unique_timesteps_dev.copy_(self.unique_timesteps_host, non_blocking=True)
         inverse_indices = self.timestep_roles_dev
         return {
             **self.static_kwargs,
             "x": x,
             "audio_x": audio_x,
-            "unique_timesteps": unique_timesteps,
+            "unique_timesteps": self.unique_timesteps_dev,
             "inverse_indices": inverse_indices,
         }
 
