@@ -67,23 +67,8 @@ def test_direct_fa4_packs_qkv_before_ulysses_collective():
     )
 
     names = MiniMaxH3Attention._run_direct_fa4.__code__.co_names
-    assert "pack_qkv_destination_major_bf16" in names
-    assert "unpack_qkv_destination_major_bf16" in names
-    assert "all_to_all_single" in names
-
-
-def test_destination_major_qkv_pack_is_cuda_only():
-    from vllm_omni.diffusion.models.minimax_h3.qkv_ops import (
-        pack_qkv_destination_major_bf16,
-        unpack_qkv_destination_major_bf16,
-    )
-
-    q = torch.zeros(4, 8, 16, dtype=torch.bfloat16)
-    k = torch.zeros_like(q)
-    v = torch.zeros_like(q)
-    assert pack_qkv_destination_major_bf16(q, k, v, 4) is None
-    packed = torch.zeros(4, 1, 2, 48, dtype=torch.bfloat16)
-    assert unpack_qkv_destination_major_bf16(packed, 1, 2, 16) is None
+    assert "all_to_all_5D" in names
+    assert names.count("stack") == 1
 
 
 def test_mlp_uses_fused_silu_and_mul_activation():

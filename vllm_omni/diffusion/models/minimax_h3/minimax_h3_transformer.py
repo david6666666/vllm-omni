@@ -558,8 +558,6 @@ class MiniMaxH3Attention(nn.Module):
         max_seqlen: int,
     ) -> torch.Tensor:
         """Run FA4 with the two fixed-shape Ulysses collectives inline."""
-        import torch.distributed as dist
-
         from vllm_omni.diffusion.attention.backends.utils.fa import flash_attn_varlen_func
         from vllm_omni.diffusion.distributed.comm import (
             all_to_all_4D,
@@ -567,40 +565,20 @@ class MiniMaxH3Attention(nn.Module):
         )
         from vllm_omni.diffusion.distributed.parallel_state import get_sp_group
 
-        from .qkv_ops import (
-            pack_qkv_destination_major_bf16,
-            unpack_qkv_destination_major_bf16,
-        )
-
         group = get_sp_group().ulysses_group
-        # Q, K, and V have identical packed shapes.  The fixed H3 path uses a
-        # fused destination-major pack and one collective instead of three
-        # independent Q/K/V all-to-alls.  Keep the 5-D implementation below as
-        # a semantic fallback for non-BF16 or non-CUDA callers.
-        world_size = dist.get_world_size(group)
-        packed = pack_qkv_destination_major_bf16(q, k, v, world_size)
-        if packed is None:
-            qkv = torch.stack((q, k, v), dim=1).unsqueeze(0)
-            qkv = all_to_all_5D(qkv, scatter_idx=3, gather_idx=1, group=group)
-            q, k, v = qkv.unbind(dim=2)
-            # FA4 requires independently contiguous Q/K/V strides.  The 5-D
-            # result is QKV-interleaved along the sequence dimension, so keep
-            # the collective packing but materialize the three inputs here.
-            q = q.contiguous()
-            k = k.contiguous()
-            v = v.contiguous()
-        else:
-            exchanged = torch.empty_like(packed)
-            dist.all_to_all_single(exchanged, packed, group=group)
-            unpacked = unpack_qkv_destination_major_bf16(
-                exchanged,
-                q.shape[0],
-                q.shape[1] // world_size,
-                q.shape[2],
-            )
-            if unpacked is None:
-                raise RuntimeError("QKV destination-major unpack unexpectedly fell back")
-            q, k, v = unpacked
+        # Q, K, and V have identical packed shapes.  Move them through one
+        # 5-D all-to-all instead of launching three independent collectives;
+        # this keeps the same destination-major layout while removing two
+        # NCCL launch/synchronization points from every DiT attention block.
+        qkv = torch.stack((q, k, v), dim=1).unsqueeze(0)
+        qkv = all_to_all_5D(qkv, scatter_idx=3, gather_idx=1, group=group)
+        q, k, v = qkv.unbind(dim=2)
+        # FA4 requires independently contiguous Q/K/V strides.  The 5-D
+        # result is QKV-interleaved along the sequence dimension, so keep the
+        # collective packing but materialize the three kernel inputs here.
+        q = q.contiguous()
+        k = k.contiguous()
+        v = v.contiguous()
         out = flash_attn_varlen_func(
             q=q.flatten(0, 1),
             k=k.flatten(0, 1),
