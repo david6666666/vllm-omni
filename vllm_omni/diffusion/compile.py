@@ -44,6 +44,15 @@ def regionally_compile(
     Returns:
         The same model instance (modified in-place)
     """
+    # A model may provide a narrow set of compiler options for its repeated
+    # blocks.  Keep the public runner contract unchanged while allowing
+    # workloads with unusually small, repeated GEMMs to select a better
+    # Inductor autotuning policy than PyTorch's default mode.
+    model_compile_kwargs = getattr(model, "_regional_compile_kwargs", None)
+    if model_compile_kwargs:
+        compile_kwargs = dict(compile_kwargs)
+        compile_kwargs.update(model_compile_kwargs)
+
     # Get the list of repeated blocks from the model
     repeated_blocks = getattr(model, "_repeated_blocks", None)
 

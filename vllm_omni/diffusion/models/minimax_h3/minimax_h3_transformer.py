@@ -1107,6 +1107,11 @@ class MiniMaxH3DiTModel(nn.Module):
         has_separate_cfg=False,
         check_forward_pattern=False,
     )
+    # H3's repeated block GEMMs are small enough that Inductor's autotuner
+    # materially improves the steady-state kernel choice.  Keep CUDA graphs
+    # disabled because the eager FA4/collective island is intentionally
+    # outside each compiled block.
+    _regional_compile_kwargs = {"mode": "max-autotune-no-cudagraphs"}
     _repeated_blocks = ["MiniMaxH3DiTBlock"]
     _layerwise_offload_blocks_attrs = ["blocks"]
 
