@@ -127,10 +127,8 @@ def _can_use_indexed_common(
     parameter: torch.Tensor,
     indices: torch.Tensor,
 ) -> bool:
-    is_compiling = getattr(torch.compiler, "is_compiling", lambda: False)()
     return (
-        not is_compiling
-        and x.is_cuda
+        x.is_cuda
         and x.dtype == torch.bfloat16
         and parameter.dtype == torch.bfloat16
         and indices.dtype in (torch.int32, torch.int64)
@@ -222,10 +220,8 @@ def fused_qknorm_rope_bf16_(
     rope_dim: int,
 ) -> bool:
     """Fuse q/k RMSNorm and H3's partial RoPE into two in-place kernels."""
-    is_compiling = getattr(torch.compiler, "is_compiling", lambda: False)()
     if (
-        is_compiling
-        or not q.is_cuda
+        not q.is_cuda
         or q.dtype != torch.bfloat16
         or k.dtype != torch.bfloat16
         or q_weight.dtype != torch.bfloat16
