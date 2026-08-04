@@ -14,6 +14,7 @@ from typing import Any
 
 import torch
 
+from .minimax_h3_transformer import _packed_attention_mask
 from .scheduling_minimax_h3_euler_ancestral import (
     minimax_h3_euler_eta0_step,
     minimax_h3_rf_v_to_x0,
@@ -83,10 +84,16 @@ class MiniMaxH3DenoiseBranch:
         timestep_roles[self.audio_pos[~self.audio_update_mask]] = 3
         self.timestep_roles_dev = timestep_roles.to(device)
         text_pos_dev = packed["text_pos"].view(-1).to(torch.long).to(device)
+        token_tags_dev = token_tags.view(-1).to(torch.long).to(device)
+        self.combined_indices_dev = (
+            self.timestep_roles_dev * 3 + token_tags_dev.clamp(min=0)
+        ).to(torch.long)
+        packed_attn_mask = _packed_attention_mask(cu.to(device))
         self.static_kwargs: dict[str, Any] = {
             "img_position_ids": packed["img_position_ids"][None].to(device),
             "update_mask": self.update_mask_dev,
-            "token_tags": token_tags.view(-1).to(torch.long).to(device),
+            "token_tags": token_tags_dev,
+            "combined_indices": self.combined_indices_dev,
             "skip_mask_out_condition": False,
             "prompt_embeds": text_embeddings.to(device),
             "img_pos_info": {"position_ids": self.img_pos_dev},
@@ -97,10 +104,16 @@ class MiniMaxH3DenoiseBranch:
                 "cu_seqlens_q": cu.to(device),
                 "max_seqlen_q": int(cu[1]),
             },
+            # A packed layout is immutable for the lifetime of this branch.
+            # Include the mask key even when its value is None so the model
+            # can distinguish a cached mask-free layout from a legacy caller
+            # that did not provide one.
+            "packed_attn_mask": packed_attn_mask,
             "refiner_packed_seq_params": {
                 "cu_seqlens_q": torch.tensor([0, text_len, text_len], dtype=torch.int32, device=device),
                 "max_seqlen_q": text_len,
             },
+            "refiner_attn_mask": None,
         }
         if refined_prompt_embeddings is not None:
             self.static_kwargs["prompt_embeds"] = refined_prompt_embeddings.to(device=device)

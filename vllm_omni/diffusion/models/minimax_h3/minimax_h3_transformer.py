@@ -122,6 +122,7 @@ _FORWARD_SUPPORTED_KWARGS = frozenset(
         "rope_freqs",
         "unique_timesteps",
         "inverse_indices",
+        "combined_indices",
         "update_mask",
         "update_audio_mask",
         "token_tags",
@@ -133,7 +134,9 @@ _FORWARD_SUPPORTED_KWARGS = frozenset(
         "text_pos_info",
         "img_pos_for_infer_output_info",
         "packed_seq_params",
+        "packed_attn_mask",
         "refiner_packed_seq_params",
+        "refiner_attn_mask",
     }
 )
 
@@ -1273,7 +1276,13 @@ class MiniMaxH3DiTModel(nn.Module):
             raise ValueError(f"inverse_indices must be [{seq_len}], got {list(inverse_indices.shape)}")
         device = x.device
         refiner_cu = refiner_cu.to(device=device)
-        refiner_attn_mask = _packed_attention_mask(refiner_cu)
+        # Branches pass a request-static value, including None for a
+        # mask-free layout.  Recompute only for direct legacy callers that do
+        # not provide the optional key.
+        if "refiner_attn_mask" in kwargs:
+            refiner_attn_mask = kwargs["refiner_attn_mask"]
+        else:
+            refiner_attn_mask = _packed_attention_mask(refiner_cu)
         # RoPE depends only on the packed positions and is reused for every
         # denoise timestep when supplied by the pipeline.
         rope_freqs = kwargs.get("rope_freqs")
@@ -1310,12 +1319,18 @@ class MiniMaxH3DiTModel(nn.Module):
             prompt_embeds_refined=prompt_embeds_refined,
         )
 
-        combined_indices = (inverse_indices * MINIMAX_H3_ADALN_MODALITY_NUM + token_tags.clamp(min=0)).to(device)
+        if "combined_indices" in kwargs:
+            combined_indices = kwargs["combined_indices"].view(-1).to(device=device, dtype=torch.long)
+        else:
+            combined_indices = (inverse_indices * MINIMAX_H3_ADALN_MODALITY_NUM + token_tags.clamp(min=0)).to(device)
         inverse_indices = inverse_indices.to(device)
 
         hidden = decoder_input
         cu_seqlens = cu_seqlens.to(device)
-        block_attn_mask = _packed_attention_mask(cu_seqlens)
+        if "packed_attn_mask" in kwargs:
+            block_attn_mask = kwargs["packed_attn_mask"]
+        else:
+            block_attn_mask = _packed_attention_mask(cu_seqlens)
         block_rope = rope_freqs
         block_combined = combined_indices
 
