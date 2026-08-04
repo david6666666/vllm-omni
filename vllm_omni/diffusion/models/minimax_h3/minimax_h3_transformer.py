@@ -18,6 +18,7 @@ import torch.nn as nn
 from cache_dit import ForwardPattern
 from vllm.distributed import get_tensor_model_parallel_world_size
 from vllm.logger import init_logger
+from vllm.model_executor.layers.activation import SiluAndMul
 from vllm.model_executor.layers.linear import (
     ColumnParallelLinear,
     MergedColumnParallelLinear,
@@ -651,11 +652,11 @@ class MiniMaxH3MLP(nn.Module):
             quant_config=quant_config,
             prefix=f"{prefix}.fc2",
         )
+        self.silu_and_mul = SiluAndMul()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         hidden, _ = self.fc1(x)
-        gate, up = hidden.chunk(2, dim=-1)
-        hidden = nn.functional.silu(gate) * up
+        hidden = self.silu_and_mul(hidden)
         out, _ = self.fc2(hidden)
         return out
 

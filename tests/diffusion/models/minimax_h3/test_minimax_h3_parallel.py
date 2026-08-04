@@ -61,6 +61,17 @@ def test_packed_attention_is_a_regional_compile_boundary():
     assert getattr(MiniMaxH3Attention._run_packed_attention, "_torchdynamo_disable", False)
 
 
+def test_mlp_uses_fused_silu_and_mul_activation():
+    from vllm.model_executor.layers.activation import SiluAndMul
+
+    from vllm_omni.diffusion.models.minimax_h3.minimax_h3_transformer import (
+        MiniMaxH3MLP,
+    )
+
+    assert MiniMaxH3MLP.forward.__code__.co_names.count("silu_and_mul") == 1
+    assert isinstance(SiluAndMul(), SiluAndMul)
+
+
 def test_rope_build_cache_matches_raw_frequency_path():
     from vllm_omni.diffusion.models.minimax_h3.minimax_h3_transformer import (
         MiniMaxH3Rope,
