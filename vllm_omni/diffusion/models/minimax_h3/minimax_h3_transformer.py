@@ -206,6 +206,23 @@ def _modulate_gate(
     return (x + gate.index_select(0, indices) * other).to(dtype)
 
 
+def _packed_attention_mask(cu_seqlens: torch.Tensor) -> torch.Tensor | None:
+    """Build the optional alignment mask once per packed forward.
+
+    H3 normally has no alignment rows, in which case the attention backend
+    takes its mask-free fast path.  When SP padding adds a second, partial
+    document, preserve the old mask semantics but keep the scalar CUDA reads
+    out of the per-block attention loop.
+    """
+    if cu_seqlens.numel() < 2:
+        return None
+    used = int(cu_seqlens[1].item())
+    packed_total = int(cu_seqlens[-1].item())
+    if used >= packed_total:
+        return None
+    return torch.arange(packed_total, device=cu_seqlens.device)[None] < used
+
+
 class MiniMaxH3Rope(nn.Module):
     """3D rope over (t, h, w); rotates 96 of 128 head dims (rotary_percent 0.75).
 
@@ -378,6 +395,7 @@ class MiniMaxH3Attention(nn.Module):
         *,
         cu_seqlens: torch.Tensor,
         max_seqlen: int,
+        attn_mask: torch.Tensor | None,
     ) -> torch.Tensor:
         """Run packed attention as a small eager island.
 
@@ -386,11 +404,6 @@ class MiniMaxH3Attention(nn.Module):
         regional compile fuse projections, norms, RoPE, and the surrounding
         DiT block without repeatedly graph-breaking inside the FA4 compiler.
         """
-        used = int(cu_seqlens[1].item())
-        packed_total = int(cu_seqlens[-1].item())
-        attn_mask = None
-        if used < packed_total:
-            attn_mask = torch.arange(packed_total, device=q.device)[None] < used
         metadata = AttentionMetadata(
             attn_mask=attn_mask,
             extra={
@@ -414,6 +427,7 @@ class MiniMaxH3Attention(nn.Module):
         rope_freqs: torch.Tensor | None,
         cu_seqlens: torch.Tensor,
         max_seqlen: int,
+        attn_mask: torch.Tensor | None = None,
         sp_seq_lens: list[int] | None = None,
     ) -> torch.Tensor:
         """x: [T, hidden] packed thd rows -> [T, hidden].
@@ -450,6 +464,7 @@ class MiniMaxH3Attention(nn.Module):
             v,
             cu_seqlens=cu_seqlens,
             max_seqlen=max_seqlen,
+            attn_mask=attn_mask,
         )
         out = out.reshape(total, self.num_heads * self.head_dim)
         out, _ = self.out_proj(out)
@@ -574,12 +589,14 @@ class MiniMaxH3TokenRefinerBlock(nn.Module):
         *,
         cu_seqlens: torch.Tensor,
         max_seqlen: int,
+        attn_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         x = x + self.attn(
             self.norm1(x),
             rope_freqs=None,
             cu_seqlens=cu_seqlens,
             max_seqlen=max_seqlen,
+            attn_mask=attn_mask,
         )
         x = x + self.mlp(self.norm2(x))
         return x
@@ -612,9 +629,17 @@ class MiniMaxH3TokenRefiner(nn.Module):
         *,
         cu_seqlens: torch.Tensor,
         max_seqlen: int,
+        attn_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        if attn_mask is None:
+            attn_mask = _packed_attention_mask(cu_seqlens)
         for block in self.blocks:
-            x = block(x, cu_seqlens=cu_seqlens, max_seqlen=max_seqlen)
+            x = block(
+                x,
+                cu_seqlens=cu_seqlens,
+                max_seqlen=max_seqlen,
+                attn_mask=attn_mask,
+            )
         return self.final_norm(x)
 
 
@@ -657,6 +682,7 @@ class MiniMaxH3DiTBlock(nn.Module):
         rope_freqs: torch.Tensor,
         cu_seqlens: torch.Tensor,
         max_seqlen: int,
+        attn_mask: torch.Tensor | None = None,
         sp_seq_lens: list[int] | None = None,
     ) -> torch.Tensor:
         """x: [T, H]; t_emb: [M, t_dim]; combined_indices: [T]
@@ -683,6 +709,7 @@ class MiniMaxH3DiTBlock(nn.Module):
             rope_freqs=rope_freqs,
             cu_seqlens=cu_seqlens,
             max_seqlen=max_seqlen,
+            attn_mask=attn_mask,
             sp_seq_lens=sp_seq_lens,
         )
         x = _modulate_gate(residual, gate_msa, h, combined_indices, dtype=_BF16_DTYPE)
@@ -1007,6 +1034,7 @@ class MiniMaxH3DiTModel(nn.Module):
         text_pos: torch.Tensor,
         refiner_cu_seqlens: torch.Tensor,
         refiner_max_seqlen: int,
+        refiner_attn_mask: torch.Tensor | None,
         seq_len: int,
         device: torch.device,
         prompt_embeds_refined: bool,
@@ -1029,6 +1057,7 @@ class MiniMaxH3DiTModel(nn.Module):
                 text_embed,
                 cu_seqlens=refiner_cu_seqlens,
                 max_seqlen=refiner_max_seqlen,
+                attn_mask=refiner_attn_mask,
             )
         else:
             # The condition projection and token refiner are independent of
@@ -1056,10 +1085,12 @@ class MiniMaxH3DiTModel(nn.Module):
         """Run the timestep-invariant text path once per diffusion request."""
         text_rows = text_embeddings.to(device=device, dtype=_BF16_DTYPE)
         text_embed, _ = self.condition_proj(text_rows)
+        refiner_cu_seqlens = refiner_cu_seqlens.to(device=device, dtype=torch.int32)
         return self.token_refiner(
             text_embed,
-            cu_seqlens=refiner_cu_seqlens.to(device=device, dtype=torch.int32),
+            cu_seqlens=refiner_cu_seqlens,
             max_seqlen=int(refiner_max_seqlen),
+            attn_mask=_packed_attention_mask(refiner_cu_seqlens),
         )
 
     def forward(self, **kwargs: Any) -> tuple[torch.Tensor, torch.Tensor]:
@@ -1117,6 +1148,8 @@ class MiniMaxH3DiTModel(nn.Module):
         if inverse_indices.shape[0] != seq_len:
             raise ValueError(f"inverse_indices must be [{seq_len}], got {list(inverse_indices.shape)}")
         device = x.device
+        refiner_cu = refiner_cu.to(device=device)
+        refiner_attn_mask = _packed_attention_mask(refiner_cu)
         # RoPE depends only on the packed positions and is reused for every
         # denoise timestep when supplied by the pipeline.
         rope_freqs = kwargs.get("rope_freqs")
@@ -1133,8 +1166,9 @@ class MiniMaxH3DiTModel(nn.Module):
             img_pos=img_pos.to(device),
             audio_pos=audio_pos.to(device),
             text_pos=text_pos.to(device),
-            refiner_cu_seqlens=refiner_cu.to(device),
+            refiner_cu_seqlens=refiner_cu,
             refiner_max_seqlen=refiner_max,
+            refiner_attn_mask=refiner_attn_mask,
             seq_len=seq_len,
             device=device,
             prompt_embeds_refined=prompt_embeds_refined,
@@ -1145,6 +1179,7 @@ class MiniMaxH3DiTModel(nn.Module):
 
         hidden = decoder_input
         cu_seqlens = cu_seqlens.to(device)
+        block_attn_mask = _packed_attention_mask(cu_seqlens)
         block_rope = rope_freqs
         block_combined = combined_indices
 
@@ -1161,6 +1196,7 @@ class MiniMaxH3DiTModel(nn.Module):
                 rope_freqs=block_rope,
                 cu_seqlens=cu_seqlens,
                 max_seqlen=max_seqlen,
+                attn_mask=block_attn_mask,
             )
         # Keep the hidden state sequence-sharded through the final projection.
         # The previous path gathered [S, hidden_size] here and only then
