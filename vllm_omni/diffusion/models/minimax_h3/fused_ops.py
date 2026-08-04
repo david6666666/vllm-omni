@@ -85,6 +85,43 @@ def _merge_ulysses_heads_kernel(
 
 
 @triton.jit
+def _merge_ulysses_heads_vec_kernel(
+    output_ptr,
+    input_ptr,
+    total_vectors,
+    seq,
+    world,
+    local_heads,
+    head_size,
+    VEC_SIZE: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """Vectorized [W, S, 1, h, D] -> [1, S, W, h, D] copy.
+
+    The H3 head dimension is 128, so every vector stays within one head and
+    can be loaded from the all-to-all result and stored contiguously in the
+    merged output.  This mirrors the 16-byte copy granularity used by the
+    fixed-shape CUDA path while retaining a scalar fallback for other layouts.
+    """
+    vector_ids = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    vector_mask = vector_ids < total_vectors
+    lanes = tl.arange(0, VEC_SIZE)
+
+    vectors_per_head = head_size // VEC_SIZE
+    scalar_offsets = vector_ids * VEC_SIZE
+    dim_vector = vector_ids % vectors_per_head
+    head_slot = vector_ids // vectors_per_head
+    local_head = head_slot % local_heads
+    world_slot = (head_slot // local_heads) % world
+    row = (head_slot // (local_heads * world)) % seq
+    input_offset = (((world_slot * seq + row) * local_heads + local_head) * head_size) + dim_vector * VEC_SIZE
+
+    mask = vector_mask[:, None]
+    values = tl.load(input_ptr + input_offset[:, None] + lanes[None, :], mask=mask)
+    tl.store(output_ptr + scalar_offsets[:, None] + lanes[None, :], values, mask=mask)
+
+
+@triton.jit
 def _indexed_scale_shift_kernel(
     x_ptr,
     scale_ptr,
@@ -436,18 +473,43 @@ def merge_ulysses_heads_bf16(
     total_elements = output.numel()
     if total_elements == 0:
         return output
-    block_size = 1024
-    _merge_ulysses_heads_kernel[(triton.cdiv(total_elements, block_size),)](
-        output,
-        x,
-        total_elements,
-        seq,
-        world_size,
-        local_heads,
-        head_size,
-        BLOCK_SIZE=block_size,
-        num_warps=8,
-    )
+    # BF16 vectors of eight values are 16-byte aligned for the H3 contiguous
+    # buffers.  Use the vector path only when a complete vector fits inside a
+    # head; the generic scalar kernel preserves the helper's wider contract.
+    vec_size = 8
+    if (
+        head_size % vec_size == 0
+        and total_elements % vec_size == 0
+        and (x.data_ptr() % 16) == 0
+        and (output.data_ptr() % 16) == 0
+    ):
+        block_size = 256
+        total_vectors = total_elements // vec_size
+        _merge_ulysses_heads_vec_kernel[(triton.cdiv(total_vectors, block_size),)](
+            output,
+            x,
+            total_vectors,
+            seq,
+            world_size,
+            local_heads,
+            head_size,
+            VEC_SIZE=vec_size,
+            BLOCK_SIZE=block_size,
+            num_warps=8,
+        )
+    else:
+        block_size = 1024
+        _merge_ulysses_heads_kernel[(triton.cdiv(total_elements, block_size),)](
+            output,
+            x,
+            total_elements,
+            seq,
+            world_size,
+            local_heads,
+            head_size,
+            BLOCK_SIZE=block_size,
+            num_warps=8,
+        )
     return output
 
 
