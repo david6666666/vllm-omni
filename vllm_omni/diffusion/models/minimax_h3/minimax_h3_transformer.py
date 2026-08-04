@@ -226,6 +226,30 @@ def _packed_attention_mask(cu_seqlens: torch.Tensor) -> torch.Tensor | None:
     return torch.arange(packed_total, device=cu_seqlens.device)[None] < used
 
 
+def _sequence_parallel_local_span(seq_len: int) -> tuple[int, int]:
+    """Return this rank's contiguous packed span when strict SP is active."""
+    try:
+        from vllm_omni.diffusion.distributed.parallel_state import (
+            get_sequence_parallel_rank,
+            get_sequence_parallel_world_size,
+        )
+
+        world_size = int(get_sequence_parallel_world_size())
+        rank = int(get_sequence_parallel_rank())
+    except AssertionError:
+        # Unit tests and single-process callers do not initialize model
+        # parallel groups. They retain the original full-sequence path.
+        return 0, seq_len
+
+    if world_size <= 1 or seq_len % world_size:
+        # The existing SP hook handles non-divisible layouts (when configured
+        # with auto padding). Keep the full embedding path in that case so the
+        # hook remains the single owner of padding semantics.
+        return 0, seq_len
+    local_len = seq_len // world_size
+    return rank * local_len, local_len
+
+
 class MiniMaxH3Rope(nn.Module):
     """3D rope over (t, h, w); rotates 96 of 128 head dims (rotary_percent 0.75).
 
@@ -1166,16 +1190,33 @@ class MiniMaxH3DiTModel(nn.Module):
         device: torch.device,
         prompt_embeds_refined: bool,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Build packed multimodal embeddings for the TP=1/SP=1 inference path.
+        """Build packed multimodal embeddings before the SP boundary.
 
         Returns (decoder_input [S, H] bf16, t_emb [M, t_dim] fp32).
         """
+        local_start, local_len = _sequence_parallel_local_span(seq_len)
+        local_only = local_len != seq_len
+        if local_only:
+            local_end = local_start + local_len
+            img_row_mask = (img_pos >= local_start) & (img_pos < local_end)
+            audio_row_mask = (audio_pos >= local_start) & (audio_pos < local_end)
+            text_row_mask = (text_pos >= local_start) & (text_pos < local_end)
+            img_rows = img_pos[img_row_mask]
+            audio_rows = audio_pos[audio_row_mask]
+            text_rows_idx = torch.nonzero(text_row_mask, as_tuple=False).view(-1)
+            text_rows_pos = text_pos[text_row_mask]
+        else:
+            img_rows = img_pos
+            audio_rows = audio_pos
+            text_rows_idx = None
+            text_rows_pos = text_pos
+
         # Latent embedders stay fp32 in and out; their outputs are cast to the
         # bf16 sequence dtype only during indexed scattering.
-        x_rows = x.view(-1, x.shape[-1]).index_select(0, img_pos).to(_FP32_DTYPE)
+        x_rows = x.view(-1, x.shape[-1]).index_select(0, img_rows).to(_FP32_DTYPE)
         video_embed, _ = self.video_patch_proj(x_rows)
-        audio_rows = audio_x.view(-1, audio_x.shape[-1]).index_select(0, audio_pos).to(_FP32_DTYPE)
-        audio_embed, _ = self.audio_patch_proj(audio_rows)
+        audio_input_rows = audio_x.view(-1, audio_x.shape[-1]).index_select(0, audio_rows).to(_FP32_DTYPE)
+        audio_embed, _ = self.audio_patch_proj(audio_input_rows)
 
         text_rows = text_embeddings_selected.to(device=device, dtype=_BF16_DTYPE)
         if not prompt_embeds_refined:
@@ -1192,10 +1233,18 @@ class MiniMaxH3DiTModel(nn.Module):
             # passes the refined rows through the static forward kwargs.
             text_embed = text_rows
 
-        embeddings = torch.zeros((seq_len, self.hidden_size), device=device, dtype=_BF16_DTYPE)
-        embeddings.index_add_(0, text_pos, text_embed.to(_BF16_DTYPE)[: text_pos.shape[0]])
-        embeddings.index_add_(0, img_pos, video_embed.to(_BF16_DTYPE)[: img_pos.shape[0]])
-        embeddings.index_add_(0, audio_pos, audio_embed.to(_BF16_DTYPE)[: audio_pos.shape[0]])
+        # Every packed row has exactly one owner (text, image, audio, or
+        # alignment padding), so index_copy avoids the read/modify/write
+        # accumulation used by the old full-sequence index_add path. Under
+        # strict Ulysses, only this rank's span is initialized; sp_prepare
+        # immediately shards that span and never observes the other rows.
+        embeddings = torch.empty((seq_len, self.hidden_size), device=device, dtype=_BF16_DTYPE)
+        embeddings.narrow(0, local_start, local_len).zero_()
+        if local_only:
+            text_embed = text_embed.index_select(0, text_rows_idx)
+        embeddings.index_copy_(0, text_rows_pos, text_embed.to(_BF16_DTYPE))
+        embeddings.index_copy_(0, img_rows, video_embed.to(_BF16_DTYPE))
+        embeddings.index_copy_(0, audio_rows, audio_embed.to(_BF16_DTYPE))
 
         t_emb = self.time_embedder(unique_timesteps)
         return embeddings, t_emb

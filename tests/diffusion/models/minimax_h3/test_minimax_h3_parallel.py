@@ -85,6 +85,63 @@ def test_rope_build_cache_matches_raw_frequency_path():
     )
 
 
+def test_sequence_parallel_local_span_falls_back_without_initialized_groups():
+    from vllm_omni.diffusion.models.minimax_h3.minimax_h3_transformer import (
+        _sequence_parallel_local_span,
+    )
+
+    assert _sequence_parallel_local_span(64) == (0, 64)
+
+
+def test_local_embedding_spans_reassemble_to_full_embedding(monkeypatch):
+    from vllm_omni.diffusion.models.minimax_h3 import minimax_h3_transformer as h3
+
+    class _IdentityProjection(nn.Module):
+        def forward(self, x):
+            return x, None
+
+    class _TimeEmbedding(nn.Module):
+        def forward(self, x):
+            return x
+
+    model = object.__new__(h3.MiniMaxH3DiTModel)
+    nn.Module.__init__(model)
+    model.hidden_size = 2
+    model.video_patch_proj = _IdentityProjection()
+    model.audio_patch_proj = _IdentityProjection()
+    model.time_embedder = _TimeEmbedding()
+
+    x = torch.arange(16, dtype=torch.float32).reshape(1, 8, 2)
+    audio_x = (x + 100).clone()
+    text = torch.tensor([[10.0, 11.0], [12.0, 13.0]])
+    common = dict(
+        x=x,
+        audio_x=audio_x,
+        text_embeddings_selected=text,
+        unique_timesteps=torch.tensor([0.2, 0.3]),
+        img_pos=torch.tensor([2, 4, 6]),
+        audio_pos=torch.tensor([3, 5, 7]),
+        text_pos=torch.tensor([0, 1]),
+        refiner_cu_seqlens=torch.tensor([0, 2, 2], dtype=torch.int32),
+        refiner_max_seqlen=2,
+        refiner_attn_mask=None,
+        seq_len=8,
+        device=torch.device("cpu"),
+        prompt_embeds_refined=True,
+    )
+
+    monkeypatch.setattr(h3, "_sequence_parallel_local_span", lambda seq_len: (0, seq_len))
+    full, _ = model._embed(**common)
+
+    spans = []
+    for rank in range(4):
+        monkeypatch.setattr(h3, "_sequence_parallel_local_span", lambda seq_len, rank=rank: (rank * 2, 2))
+        local, _ = model._embed(**common)
+        spans.append(local[rank * 2 : (rank + 1) * 2])
+
+    torch.testing.assert_close(torch.cat(spans), full)
+
+
 @pytest.mark.parametrize(
     ("tp_size", "message"),
     [
