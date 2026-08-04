@@ -1162,13 +1162,30 @@ class MiniMaxH3DiTModel(nn.Module):
                 cu_seqlens=cu_seqlens,
                 max_seqlen=max_seqlen,
             )
-        hidden = self.sp_gather(hidden)
-
+        # Keep the hidden state sequence-sharded through the final projection.
+        # The previous path gathered [S, hidden_size] here and only then
+        # projected to the small video/audio heads.  With H3's 5376-wide
+        # hidden state that collective dominates the tail of every denoise
+        # step.  The final heads are row-local, so project each shard first
+        # and gather only the compact logits ([video_patch_dim + audio_dim]).
+        # ``block_combined`` carries the same global timestep/modality index
+        # as ``inverse_indices`` and is already sharded by ``sp_prepare``;
+        # deriving the local indices from it also handles any SP padding.
+        local_inverse_indices = torch.div(
+            block_combined,
+            MINIMAX_H3_ADALN_MODALITY_NUM,
+            rounding_mode="floor",
+        )
         video_logits, audio_logits = self.final_layer(
             hidden,
             t_emb=t_emb,
-            inverse_indices=inverse_indices,
+            inverse_indices=local_inverse_indices,
         )
+        compact_logits = torch.cat((video_logits, audio_logits), dim=-1)
+        compact_logits = self.sp_gather(compact_logits)
+        video_width = self.arch.latents_dim * math.prod(self.arch.patch_size)
+        video_logits = compact_logits[..., :video_width]
+        audio_logits = compact_logits[..., video_width:]
 
         # Select target and condition rows at inference-output positions, then
         # zero the condition rows.
