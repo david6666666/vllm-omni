@@ -466,6 +466,7 @@ class MiniMaxH3Attention(nn.Module):
         k: torch.Tensor,
         v: torch.Tensor,
         *,
+        packed_qkv: torch.Tensor | None,
         cu_seqlens: torch.Tensor,
         max_seqlen: int,
         attn_mask: torch.Tensor | None,
@@ -488,6 +489,7 @@ class MiniMaxH3Attention(nn.Module):
                 q,
                 k,
                 v,
+                packed_qkv=packed_qkv,
                 cu_seqlens=cu_seqlens,
                 max_seqlen=max_seqlen,
             )
@@ -554,6 +556,7 @@ class MiniMaxH3Attention(nn.Module):
         k: torch.Tensor,
         v: torch.Tensor,
         *,
+        packed_qkv: torch.Tensor | None,
         cu_seqlens: torch.Tensor,
         max_seqlen: int,
     ) -> torch.Tensor:
@@ -570,7 +573,17 @@ class MiniMaxH3Attention(nn.Module):
         # 5-D all-to-all instead of launching three independent collectives;
         # this keeps the same destination-major layout while removing two
         # NCCL launch/synchronization points from every DiT attention block.
-        qkv = torch.stack((q, k, v), dim=1).unsqueeze(0)
+        if packed_qkv is None:
+            # Keep the generic fallback for callers whose Q/K/V do not share
+            # the original projection buffer (for example, non-fused norm
+            # fallbacks and direct unit-test calls).
+            qkv = torch.stack((q, k, v), dim=1).unsqueeze(0)
+        else:
+            # QKVParallelLinear already emits [S, 3*H*D] in Q/K/V order.
+            # The fused QKNorm+RoPE path mutates q and k in that buffer, so a
+            # reshape is a view of the normalized values and avoids rebuilding
+            # the same [1, S, 3, H, D] payload with torch.stack.
+            qkv = packed_qkv.view(1, q.shape[0], 3, q.shape[1], q.shape[2])
         qkv = all_to_all_5D(qkv, scatter_idx=3, gather_idx=1, group=group)
         q, k, v = qkv.unbind(dim=2)
         # FA4 requires independently contiguous Q/K/V strides.  The 5-D
@@ -635,6 +648,9 @@ class MiniMaxH3Attention(nn.Module):
                 eps=self.q_norm.eps,
                 rope_dim=rope_freqs.shape[-1] // 2,
             )
+        packed_qkv = None
+        if fused_qk_rope and qkv.is_contiguous() and q.shape == k.shape == v.shape:
+            packed_qkv = qkv
         if not fused_qk_rope:
             q = self.q_norm(q)
             k = self.k_norm(k)
@@ -649,6 +665,7 @@ class MiniMaxH3Attention(nn.Module):
             q,
             k,
             v,
+            packed_qkv=packed_qkv,
             cu_seqlens=cu_seqlens,
             max_seqlen=max_seqlen,
             attn_mask=attn_mask,
