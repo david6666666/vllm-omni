@@ -27,11 +27,12 @@ from tests.helpers.runtime import OmniServer
 pytestmark = [pytest.mark.benchmark, pytest.mark.diffusion, pytest.mark.full_model]
 
 MODEL_REPO_ID = "MiniMaxAI/MiniMax-H3"
-MODEL_REVISION = "73372e6cf53e414edd3ab03e357717fb0602e758"
+# The previously pinned revision was removed from the Hugging Face repository.
+MODEL_REVISION = "main"
 MODEL_ENV_VAR = "VLLM_TEST_MINIMAX_H3_FL2VA_MODEL"
-# The reference asset was moved out of the pinned model snapshot. Keep the
-# model weights pinned and verify the current official asset content instead.
-REFERENCE_VIDEO_URL = f"https://huggingface.co/{MODEL_REPO_ID}/resolve/main/assets/t2va.mp4"
+# Keep the official asset link visible in the test report. Hugging Face's
+# ``blob`` URL is an HTML page, so resolve it to the raw asset for download.
+REFERENCE_VIDEO_URL = "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/assets/t2va.mp4"
 REFERENCE_VIDEO_SHA256 = "d66903241362e224085cc93f7a5e70fba6ab378d0ac6ff6af83acf2559849a42"
 
 # This is the official reproducible 768p T2VA prompt associated with
@@ -97,7 +98,8 @@ def _server_args() -> list[str]:
 
 def _download_reference_video(output_dir: Path) -> Path:
     reference_path = output_dir / "reference.mp4"
-    response = requests.get(REFERENCE_VIDEO_URL, timeout=120)
+    download_url = REFERENCE_VIDEO_URL.replace("/blob/", "/resolve/", 1)
+    response = requests.get(download_url, timeout=120)
     response.raise_for_status()
     content = response.content
     digest = hashlib.sha256(content).hexdigest()
