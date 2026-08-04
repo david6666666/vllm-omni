@@ -13,6 +13,8 @@ from typing import Any
 import numpy as np
 import torch
 
+from vllm_omni.errors import OmniClientError
+
 MINIMAX_H3_FPS = 24.0
 MINIMAX_H3_QWEN_VIDEO_SAMPLE_FPS = 2.0
 MINIMAX_H3_QWEN_TEMPORAL_PATCH = 2
@@ -26,6 +28,9 @@ MINIMAX_H3_MAX_REFERENCE_FPS = 60.0
 MINIMAX_H3_MIN_REFERENCE_DURATION = 2.0
 MINIMAX_H3_MAX_REFERENCE_DURATION = 15.0
 MINIMAX_H3_MAX_REFERENCE_TOTAL_DURATION = 15.0
+# ffprobe reports container durations at a finer precision than the official
+# example's rounded values. Trim only this small probe-rounding excess.
+MINIMAX_H3_REFERENCE_DURATION_EPSILON = 1e-2
 MINIMAX_H3_MAX_VIDEO_BYTES = 50 * 1024 * 1024
 MINIMAX_H3_MAX_AUDIO_BYTES = 15 * 1024 * 1024
 MINIMAX_H3_VIDEO_FORMATS = frozenset({"mp4", "mov"})
@@ -62,18 +67,18 @@ def _probe_video(path: str) -> dict[str, Any]:
     streams = probe.get("streams") or []
     video_streams = [stream for stream in streams if stream.get("codec_type") == "video"]
     if not video_streams:
-        raise ValueError(f"media has no video stream: {path}")
+        raise OmniClientError(f"media has no video stream: {path}")
     stream = video_streams[0]
     try:
         numerator, denominator = str(stream["r_frame_rate"]).split("/", 1)
         fps = float(numerator) / float(denominator)
     except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
-        raise ValueError(f"cannot determine video FPS: {path}") from exc
+        raise OmniClientError(f"cannot determine video FPS: {path}") from exc
     if not math.isfinite(fps) or fps <= 0:
-        raise ValueError(f"cannot determine video FPS: {path}")
+        raise OmniClientError(f"cannot determine video FPS: {path}")
     raw_count = stream.get("nb_read_frames") or stream.get("nb_frames")
     if raw_count in (None, "", "N/A"):
-        raise ValueError(f"cannot determine video frame count: {path}")
+        raise OmniClientError(f"cannot determine video frame count: {path}")
     raw_duration = stream.get("duration")
     if raw_duration in (None, "", "N/A"):
         raw_duration = probe.get("format", {}).get("duration")
@@ -109,36 +114,36 @@ def _validate_reference_video_metadata(meta: dict[str, Any], *, index: int, sour
         min(width, height) < MINIMAX_H3_MIN_REFERENCE_DIMENSION
         or max(width, height) > MINIMAX_H3_MAX_REFERENCE_DIMENSION
     ):
-        raise ValueError(f"reference video {index} dimensions must be in [256, 5760] pixels, got {width}x{height}")
+        raise OmniClientError(f"reference video {index} dimensions must be in [256, 5760] pixels, got {width}x{height}")
     ratio = width / height
     if not 0.4 <= ratio <= 2.5:
-        raise ValueError(f"reference video {index} aspect ratio must be in [0.4, 2.5], got {width}x{height}")
+        raise OmniClientError(f"reference video {index} aspect ratio must be in [0.4, 2.5], got {width}x{height}")
 
     fps = float(meta["fps"])
     if not MINIMAX_H3_MIN_REFERENCE_FPS <= fps <= MINIMAX_H3_MAX_REFERENCE_FPS:
-        raise ValueError(f"reference video {index} FPS must be in [23.976, 60], got {fps:.3f}")
+        raise OmniClientError(f"reference video {index} FPS must be in [23.976, 60], got {fps:.3f}")
     duration = float(meta["duration"])
     if (
         not math.isfinite(duration)
         or not MINIMAX_H3_MIN_REFERENCE_DURATION <= duration <= MINIMAX_H3_MAX_REFERENCE_DURATION
     ):
-        raise ValueError(f"reference video {index} duration must be in [2, 15] seconds, got {duration:.3f}")
+        raise OmniClientError(f"reference video {index} duration must be in [2, 15] seconds, got {duration:.3f}")
 
     raw_file_size = meta.get("file_size")
     file_size = int(raw_file_size) if raw_file_size is not None else os.path.getsize(source)
     if file_size > MINIMAX_H3_MAX_VIDEO_BYTES:
-        raise ValueError(f"reference video {index} exceeds the 50 MiB size limit")
+        raise OmniClientError(f"reference video {index} exceeds the 50 MiB size limit")
     format_names = set(meta.get("format_names", ()))
     if not format_names.intersection(MINIMAX_H3_VIDEO_FORMATS):
         formats = ", ".join(sorted(format_names)) or "unknown"
-        raise ValueError(f"reference video {index} must use an MP4 or MOV container, got {formats}")
+        raise OmniClientError(f"reference video {index} must use an MP4 or MOV container, got {formats}")
     video_codec = str(meta.get("video_codec", "")).lower()
     if video_codec not in MINIMAX_H3_VIDEO_CODECS:
-        raise ValueError(f"reference video {index} must use H.264 or H.265 video, got {video_codec or 'unknown'}")
+        raise OmniClientError(f"reference video {index} must use H.264 or H.265 video, got {video_codec or 'unknown'}")
     audio_codecs = tuple(str(codec).lower() for codec in meta.get("audio_codecs", ()))
     invalid_audio = [codec for codec in audio_codecs if codec not in MINIMAX_H3_AUDIO_CODECS]
     if invalid_audio:
-        raise ValueError(
+        raise OmniClientError(
             f"reference video {index} must use AAC or MP3 audio when audio is present, got {invalid_audio[0]}"
         )
 
@@ -172,13 +177,13 @@ def _probe_audio(path: str) -> dict[str, Any]:
     probe = json.loads(result.stdout)
     streams = [stream for stream in probe.get("streams", []) if stream.get("codec_type") == "audio"]
     if not streams:
-        raise ValueError(f"media has no audio stream: {path}")
+        raise OmniClientError(f"media has no audio stream: {path}")
     stream = streams[0]
     raw_duration = stream.get("duration")
     if raw_duration in (None, "", "N/A"):
         raw_duration = (probe.get("format") or {}).get("duration")
     if raw_duration in (None, "", "N/A"):
-        raise ValueError(f"cannot determine audio duration: {path}")
+        raise OmniClientError(f"cannot determine audio duration: {path}")
     format_info = probe.get("format") or {}
     format_names = tuple(
         name.strip().lower() for name in str(format_info.get("format_name", "")).split(",") if name.strip()
@@ -203,22 +208,22 @@ def validate_reference_audio_files(values: Any) -> None:
         meta = _probe_audio(source)
         file_size = int(meta["file_size"])
         if file_size > MINIMAX_H3_MAX_AUDIO_BYTES:
-            raise ValueError(f"reference audio {index} exceeds the 15 MiB size limit")
+            raise OmniClientError(f"reference audio {index} exceeds the 15 MiB size limit")
         if not set(meta["format_names"]).intersection(MINIMAX_H3_AUDIO_FORMATS):
             formats = ", ".join(meta["format_names"]) or "unknown"
-            raise ValueError(f"reference audio {index} must be WAV or MP3, got {formats}")
+            raise OmniClientError(f"reference audio {index} must be WAV or MP3, got {formats}")
         codec = str(meta["codec"]).lower()
         if codec not in MINIMAX_H3_AUDIO_CODECS and not codec.startswith("pcm_"):
-            raise ValueError(f"reference audio {index} must use MP3 or PCM audio, got {codec or 'unknown'}")
+            raise OmniClientError(f"reference audio {index} must use MP3 or PCM audio, got {codec or 'unknown'}")
         duration = float(meta["duration"])
         if (
             not math.isfinite(duration)
             or not MINIMAX_H3_MIN_REFERENCE_DURATION <= duration <= MINIMAX_H3_MAX_REFERENCE_DURATION
         ):
-            raise ValueError(f"reference audio {index} duration must be in [2, 15] seconds, got {duration:.3f}")
+            raise OmniClientError(f"reference audio {index} duration must be in [2, 15] seconds, got {duration:.3f}")
         total_duration += duration
     if total_duration > MINIMAX_H3_MAX_REFERENCE_TOTAL_DURATION:
-        raise ValueError("reference audio must be at most 15 seconds in total")
+        raise OmniClientError("reference audio must be at most 15 seconds in total")
 
 
 def validate_reference_audio_waveforms(values: list[tuple[torch.Tensor, int]]) -> None:
@@ -226,14 +231,14 @@ def validate_reference_audio_waveforms(values: list[tuple[torch.Tensor, int]]) -
     total_duration = 0.0
     for index, (waveform, sample_rate) in enumerate(values):
         if int(sample_rate) <= 0:
-            raise ValueError(f"reference audio {index} has an invalid sample rate")
+            raise OmniClientError(f"reference audio {index} has an invalid sample rate")
         samples = int(waveform.shape[-1])
         duration = samples / int(sample_rate)
         if not MINIMAX_H3_MIN_REFERENCE_DURATION <= duration <= MINIMAX_H3_MAX_REFERENCE_DURATION:
-            raise ValueError(f"reference audio {index} duration must be in [2, 15] seconds, got {duration:.3f}")
+            raise OmniClientError(f"reference audio {index} duration must be in [2, 15] seconds, got {duration:.3f}")
         total_duration += duration
     if total_duration > MINIMAX_H3_MAX_REFERENCE_TOTAL_DURATION:
-        raise ValueError("reference audio must be at most 15 seconds in total")
+        raise OmniClientError("reference audio must be at most 15 seconds in total")
 
 
 def _reference_video_shape(width: int, height: int) -> tuple[int, int]:
@@ -241,10 +246,10 @@ def _reference_video_shape(width: int, height: int) -> tuple[int, int]:
         min(width, height) < MINIMAX_H3_MIN_REFERENCE_DIMENSION
         or max(width, height) > MINIMAX_H3_MAX_REFERENCE_DIMENSION
     ):
-        raise ValueError(f"reference video dimensions must be in [256, 5760] pixels, got {width}x{height}")
+        raise OmniClientError(f"reference video dimensions must be in [256, 5760] pixels, got {width}x{height}")
     ratio = float(width) / float(height)
     if not 0.4 <= ratio <= 2.5:
-        raise ValueError(f"reference video aspect ratio must be in [0.4, 2.5], got {width}x{height}")
+        raise OmniClientError(f"reference video aspect ratio must be in [0.4, 2.5], got {width}x{height}")
     if ratio >= 1.0:
         target_width = MINIMAX_H3_BASE_SHORT_EDGE * ratio
         target_height = float(MINIMAX_H3_BASE_SHORT_EDGE)
@@ -316,13 +321,13 @@ def prepare_reference_videos(
     if isinstance(values, (str, os.PathLike)):
         values = [values]
     if not isinstance(values, (list, tuple)) or not values:
-        raise ValueError("MiniMax H3 Ref2VA video input must be a path or a non-empty list of paths")
+        raise OmniClientError("MiniMax H3 Ref2VA video input must be a path or a non-empty list of paths")
     if isinstance(start_time_seconds, (list, tuple)):
         start_times = list(start_time_seconds)
     else:
         start_times = [start_time_seconds] * len(values)
     if len(start_times) != len(values):
-        raise ValueError("start_time_seconds must contain one value per reference video")
+        raise OmniClientError("start_time_seconds must contain one value per reference video")
 
     prepared: list[dict[str, Any]] = []
     total_duration = 0.0
@@ -332,20 +337,27 @@ def prepare_reference_videos(
             item_start = value.get("start_time_seconds", item_start)
             value = value.get("path", value.get("video_path", value.get("video_url")))
         if not isinstance(value, (str, os.PathLike)):
-            raise TypeError(f"MiniMax H3 Ref2VA video references require file paths, got item {index}: {type(value)!r}")
+            raise OmniClientError(
+                f"MiniMax H3 Ref2VA video references require file paths, got item {index}: {type(value)!r}"
+            )
         source = str(value)
         meta = _probe_video(source)
         _validate_reference_video_metadata(meta, index=index, source=source)
         start = 0.0 if item_start is None else float(item_start)
         if not math.isfinite(start) or start < 0 or start >= float(meta["duration"]):
-            raise ValueError(f"reference video {index} start_time_seconds is outside the source duration")
+            raise OmniClientError(f"reference video {index} start_time_seconds is outside the source duration")
         duration = float(meta["duration"]) - start
         if duration < MINIMAX_H3_MIN_REFERENCE_DURATION:
-            raise ValueError(
+            raise OmniClientError(
                 f"reference video {index} must provide at least 2 seconds after start_time_seconds, got {duration:.3f}"
             )
-        if total_duration + duration > MINIMAX_H3_MAX_REFERENCE_TOTAL_DURATION:
-            raise ValueError("reference videos must be at most 15 seconds in total")
+        remaining_duration = MINIMAX_H3_MAX_REFERENCE_TOTAL_DURATION - total_duration
+        if duration > remaining_duration:
+            if duration - remaining_duration > MINIMAX_H3_REFERENCE_DURATION_EPSILON:
+                raise OmniClientError("reference videos must be at most 15 seconds in total")
+            duration = remaining_duration
+            if duration < MINIMAX_H3_MIN_REFERENCE_DURATION:
+                raise OmniClientError("reference videos must be at most 15 seconds in total")
         total_duration += duration
         width, height = _reference_video_shape(meta["width"], meta["height"])
         item_workdir = Path(workdir) / f"video_{index}"
@@ -381,12 +393,12 @@ def load_video_frames(path: str) -> np.ndarray:
         with av.open(path) as container:
             frames = [frame.to_ndarray(format="rgb24") for frame in container.decode(video=0)]
         if not frames:
-            raise ValueError(f"video has no frames: {path}")
+            raise OmniClientError(f"video has no frames: {path}")
         return np.stack(frames)
 
     reader = decord.VideoReader(path)
     if len(reader) <= 0:
-        raise ValueError(f"video has no frames: {path}")
+        raise OmniClientError(f"video has no frames: {path}")
     frames = reader.get_batch(list(range(len(reader))))
     return frames.asnumpy() if hasattr(frames, "asnumpy") else np.asarray(frames)
 
@@ -410,7 +422,7 @@ def sample_reference_video_frames(
             indices.append(frame_index)
         cursor += ratio
     if not indices:
-        raise ValueError(f"no frames sampled from {prepared_path}")
+        raise OmniClientError(f"no frames sampled from {prepared_path}")
 
     frame_dir = Path(workdir)
     frame_dir.mkdir(parents=True, exist_ok=True)

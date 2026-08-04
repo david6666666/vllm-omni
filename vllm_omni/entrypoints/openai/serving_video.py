@@ -15,6 +15,7 @@ from PIL import Image
 from vllm.engine.protocol import EngineClient
 from vllm.logger import init_logger
 
+from vllm_omni.diffusion.model_metadata import get_diffusion_model_metadata
 from vllm_omni.entrypoints.async_omni import AsyncOmni
 from vllm_omni.entrypoints.openai.protocol.videos import (
     VideoAction,
@@ -99,6 +100,21 @@ class OmniOpenAIServingVideo:
         if self._stage_configs is None and stage_configs is not None:
             self._stage_configs = stage_configs
 
+    @property
+    def supports_mixed_reference_inputs(self) -> bool:
+        """Return whether the configured diffusion model accepts mixed refs."""
+        get_od_config = getattr(self._engine_client, "get_diffusion_od_config", None)
+        od_config = get_od_config() if callable(get_od_config) else getattr(self._engine_client, "od_config", None)
+        if od_config is None:
+            return False
+
+        capability = getattr(od_config, "supports_mixed_reference_inputs", None)
+        if isinstance(capability, bool):
+            return capability
+
+        model_class_name = getattr(od_config, "model_class_name", None)
+        return get_diffusion_model_metadata(model_class_name).supports_mixed_reference_inputs
+
     @classmethod
     def for_diffusion(
         cls,
@@ -130,6 +146,11 @@ class OmniOpenAIServingVideo:
 
         input_image = None if reference_image is None else reference_image.data
         input_video = None if reference_video is None else reference_video.data
+        if input_image is not None and input_video is not None and not self.supports_mixed_reference_inputs:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST.value,
+                detail="This diffusion model does not support mixed image and video references.",
+            )
         provided_fields = request.model_fields_set
         fps_provided = self._request_fps_provided(request)
         vp = request.resolve_video_params()

@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from PIL import Image
 from pytest_mock import MockerFixture
@@ -62,9 +62,13 @@ class FakeAsyncOmni:
     def __init__(self):
         self.stage_configs = [SimpleNamespace(stage_type="diffusion")]
         self.default_sampling_params_list = [OmniDiffusionSamplingParams()]
+        self.model_class_name = "WanPipeline"
         self.captured_prompt = None
         self.captured_reference_video_bytes = None
         self.captured_sampling_params_list = None
+
+    def get_diffusion_od_config(self):
+        return SimpleNamespace(model_class_name=self.model_class_name)
 
     async def generate(self, prompt, request_id, sampling_params_list):
         self.captured_prompt = prompt
@@ -506,8 +510,11 @@ def test_r9_typed_video_reference_form(test_client, mocker: MockerFixture):
 
     engine = test_client.app.state.openai_serving_video._engine_client
     input_video = engine.captured_prompt["multi_modal_data"]["video"]
-    assert len(input_video) == 2
-    assert input_video[0].size == (32, 24)
+    assert len(input_video) == 1
+    assert all(isinstance(item, str) for item in input_video)
+    assert engine.captured_reference_video_bytes is not None
+    assert len(engine.captured_reference_video_bytes) == 1
+    assert b"ftyp" in engine.captured_reference_video_bytes[0][:32]
 
 
 def test_r5_mixed_image_video_audio_references_and_fanout(test_client, mocker: MockerFixture):
@@ -515,6 +522,7 @@ def test_r5_mixed_image_video_audio_references_and_fanout(test_client, mocker: M
         "vllm_omni.entrypoints.openai.serving_video._encode_video_bytes",
         return_value=b"fake-video",
     )
+    test_client.app.state.openai_serving_video._engine_client.model_class_name = "MiniMaxH3Pipeline"
     response = test_client.post(
         "/v1/videos",
         data={
@@ -542,7 +550,11 @@ def test_r5_mixed_image_video_audio_references_and_fanout(test_client, mocker: M
     engine = test_client.app.state.openai_serving_video._engine_client
     multi_modal_data = engine.captured_prompt["multi_modal_data"]
     assert len(multi_modal_data["image"]) == 2
-    assert len(multi_modal_data["video"]) == 2
+    assert len(multi_modal_data["video"]) == 1
+    assert all(isinstance(item, str) for item in multi_modal_data["video"])
+    assert engine.captured_reference_video_bytes is not None
+    assert len(engine.captured_reference_video_bytes) == 1
+    assert b"ftyp" in engine.captured_reference_video_bytes[0][:32]
     assert isinstance(multi_modal_data["audio"], str)
     assert engine.captured_sampling_params_list[0].num_outputs_per_prompt == 2
 
@@ -557,6 +569,7 @@ def test_multi_video_generation_preserves_uploaded_files_until_generation(
         "vllm_omni.entrypoints.openai.serving_video._encode_video_bytes",
         return_value=b"fake-video",
     )
+    test_client.app.state.openai_serving_video._engine_client.model_class_name = "MiniMaxH3Pipeline"
     response = test_client.post(
         endpoint,
         data={
@@ -1229,6 +1242,7 @@ def test_r10_typed_image_and_video_reference_form(test_client, mocker: MockerFix
         "vllm_omni.entrypoints.openai.serving_video._encode_video_bytes",
         return_value=b"fake-video",
     )
+    test_client.app.state.openai_serving_video._engine_client.model_class_name = "MiniMaxH3Pipeline"
     response = test_client.post(
         "/v1/videos",
         data={
@@ -1239,6 +1253,51 @@ def test_r10_typed_image_and_video_reference_form(test_client, mocker: MockerFix
     )
     assert response.status_code == 200
     _wait_for_status(test_client, response.json()["id"], VideoGenerationStatus.COMPLETED.value)
+
+
+def test_generic_video_model_rejects_mixed_image_and_video_references(test_client):
+    response = test_client.post(
+        "/v1/videos/sync",
+        data={
+            "prompt": "use both references",
+            "image_reference": json.dumps({"image_url": _make_test_image_data_url((40, 24))}),
+            "video_reference": json.dumps({"video_url": _make_test_video_data_url((32, 24), 2)}),
+        },
+    )
+
+    assert response.status_code == 400
+    assert "does not support mixed image and video" in response.json()["detail"].lower()
+
+
+def test_h3_multipart_rejects_bmp_image_reference(test_client):
+    image = Image.new("RGB", (64, 64), color="blue")
+    image_buffer = io.BytesIO()
+    image.save(image_buffer, format="BMP")
+
+    test_client.app.state.openai_serving_video._engine_client.model_class_name = "MiniMaxH3Pipeline"
+    response = test_client.post(
+        "/v1/videos/sync",
+        data={"prompt": "reject unsupported image container", "extra_params": '{"task":"ref2va"}'},
+        files=[("input_references", ("reference.bmp", image_buffer.getvalue(), "image/bmp"))],
+    )
+
+    assert response.status_code == 400
+    assert "must use jpg" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_h3_upload_limit_checks_declared_size_before_read():
+    class OversizedUpload:
+        size = api_server.MINIMAX_H3_MAX_REFERENCE_IMAGE_BYTES + 1
+
+        async def read(self, _size):
+            raise AssertionError("the oversized upload must be rejected before reading")
+
+    with pytest.raises(HTTPException, match="size limit"):
+        await api_server._read_upload_limited(
+            OversizedUpload(),
+            max_bytes=api_server.MINIMAX_H3_MAX_REFERENCE_IMAGE_BYTES,
+        )
 
 
 def test_invalid_seconds_returns_422(test_client):

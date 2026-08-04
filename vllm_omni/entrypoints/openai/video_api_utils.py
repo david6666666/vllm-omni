@@ -179,6 +179,7 @@ def _decode_base64_video(
     source: str,
     max_frames: int | None = None,
     keep: Literal["first", "last"] = "first",
+    source_path: str | None = None,
 ) -> VideoFrames:
     if video_reference:
         if video_reference.startswith("data:video"):
@@ -190,7 +191,16 @@ def _decode_base64_video(
             video_bytes = base64.b64decode(b64_data)
         except (binascii.Error, ValueError) as exc:  # pragma: no cover - malformed base64
             raise InvalidInputReferenceError(f"Invalid {source}: video data is not valid base64.") from exc
-        return _decode_video_bytes(video_bytes, source=source, max_frames=max_frames, keep=keep)
+        if source_path is not None:
+            with open(source_path, "wb") as output:
+                output.write(video_bytes)
+        return _decode_video_bytes(
+            video_bytes,
+            source=source,
+            max_frames=max_frames,
+            keep=keep,
+            source_path=source_path,
+        )
     raise InvalidInputReferenceError(f"Invalid {source}: video data is empty.")
 
 
@@ -201,12 +211,19 @@ async def decode_video_url(
     keep: Literal["first", "last"] = "first",
 ) -> VideoFrames:
     if video_url.startswith("data:video"):
-        return _decode_base64_video(
-            video_url,
-            source="video_reference.video_url",
-            max_frames=max_frames,
-            keep=keep,
-        )
+        path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+        try:
+            return _decode_base64_video(
+                video_url,
+                source="video_reference.video_url",
+                max_frames=max_frames,
+                keep=keep,
+                source_path=path,
+            )
+        except Exception:
+            if os.path.exists(path):
+                os.unlink(path)
+            raise
 
     if video_url.startswith(("http://", "https://")):
         async with httpx.AsyncClient(timeout=60) as client:

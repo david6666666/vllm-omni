@@ -159,6 +159,13 @@ logger = init_logger(__name__)
 router = APIRouter()
 
 MAX_UINT32_SEED = 2**32 - 1
+MINIMAX_H3_MAX_REFERENCE_IMAGE_BYTES = 30 * 1024 * 1024
+MINIMAX_H3_MAX_REFERENCE_VIDEO_BYTES = 50 * 1024 * 1024
+MINIMAX_H3_MAX_REFERENCE_AUDIO_BYTES = 15 * 1024 * 1024
+MINIMAX_H3_MAX_REFERENCE_COUNT = 12
+MINIMAX_H3_REFERENCE_IMAGE_FORMATS = frozenset({"jpeg", "png", "webp", "heic", "heif"})
+MINIMAX_H3_REFERENCE_VIDEO_SUFFIXES = frozenset({".mp4", ".mov"})
+MINIMAX_H3_REFERENCE_AUDIO_SUFFIXES = frozenset({".wav", ".mp3"})
 profiler_router = APIRouter()
 
 
@@ -3002,6 +3009,68 @@ def _uploaded_media_kind(upload: UploadFile) -> str:
     return "video"
 
 
+def _minimax_h3_upload_limit(upload: UploadFile) -> int:
+    kind = _uploaded_media_kind(upload)
+    if kind == "image":
+        return MINIMAX_H3_MAX_REFERENCE_IMAGE_BYTES
+    if kind == "audio":
+        return MINIMAX_H3_MAX_REFERENCE_AUDIO_BYTES
+    return MINIMAX_H3_MAX_REFERENCE_VIDEO_BYTES
+
+
+async def _read_upload_limited(upload: UploadFile, *, max_bytes: int | None = None) -> bytes:
+    """Read an upload with an optional hard byte limit."""
+    if max_bytes is None:
+        return await upload.read()
+
+    declared_size = getattr(upload, "size", None)
+    if isinstance(declared_size, Integral) and int(declared_size) > max_bytes:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST.value,
+            detail=f"Uploaded reference exceeds the {max_bytes // (1024 * 1024)} MiB size limit.",
+        )
+
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await upload.read(min(1024 * 1024, max_bytes - total + 1))
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_REQUEST.value,
+                detail=f"Uploaded reference exceeds the {max_bytes // (1024 * 1024)} MiB size limit.",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _validate_minimax_h3_image_payload(
+    payload: bytes,
+    *,
+    filename: str | None,
+    allow_non_image: bool = False,
+) -> None:
+    """Validate a H3 image before converting it to a format-less PIL image."""
+    try:
+        with Image.open(io.BytesIO(payload)) as image:
+            image_format = str(image.format or "").lower()
+    except (OSError, ValueError) as exc:
+        if allow_non_image:
+            return
+        raise HTTPException(400, detail=f"Invalid uploaded image reference: {filename}") from exc
+
+    if image_format not in MINIMAX_H3_REFERENCE_IMAGE_FORMATS:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST.value,
+            detail=(
+                "MiniMax H3 reference images must use JPG, JPEG, PNG, WEBP, HEIC, or HEIF; "
+                f"got {image_format or 'unknown'}."
+            ),
+        )
+
+
 async def _persist_uploaded_media_references(
     uploads: list[UploadFile],
 ) -> tuple[list[Image.Image], list[str], list[str]]:
@@ -3015,17 +3084,34 @@ async def _persist_uploaded_media_references(
     videos: list[str] = []
     audios: list[str] = []
     paths: list[str] = []
+    if len(uploads) > MINIMAX_H3_MAX_REFERENCE_COUNT:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_REQUEST.value,
+            detail=f"MiniMax H3 accepts at most {MINIMAX_H3_MAX_REFERENCE_COUNT} total references.",
+        )
     try:
         for upload in uploads:
             kind = _uploaded_media_kind(upload)
-            payload = await upload.read()
+            payload = await _read_upload_limited(upload, max_bytes=_minimax_h3_upload_limit(upload))
             if kind == "image":
                 try:
-                    images.append(Image.open(io.BytesIO(payload)).convert("RGB"))
+                    _validate_minimax_h3_image_payload(payload, filename=upload.filename)
+                    with Image.open(io.BytesIO(payload)) as image:
+                        images.append(image.convert("RGB"))
                 except (OSError, ValueError) as exc:
                     raise HTTPException(400, detail=f"Invalid uploaded image reference: {upload.filename}") from exc
                 continue
             suffix = Path(upload.filename or "").suffix.lower()
+            if kind == "video" and suffix and suffix not in MINIMAX_H3_REFERENCE_VIDEO_SUFFIXES:
+                raise HTTPException(
+                    status_code=HTTPStatus.BAD_REQUEST.value,
+                    detail="MiniMax H3 reference videos must use an MP4 or MOV file.",
+                )
+            if kind == "audio" and suffix and suffix not in MINIMAX_H3_REFERENCE_AUDIO_SUFFIXES:
+                raise HTTPException(
+                    status_code=HTTPStatus.BAD_REQUEST.value,
+                    detail="MiniMax H3 reference audio must use a WAV or MP3 file.",
+                )
             if not suffix or len(suffix) > 8:
                 suffix = ".mp3" if kind == "audio" else ".mp4"
             fd, path = tempfile.mkstemp(prefix="vllm_omni_reference_", suffix=suffix)
@@ -3094,19 +3180,19 @@ async def _parse_video_form(
     Used by both ``POST /v1/videos`` (async) and ``POST /v1/videos/sync``.
     """
     input_references = input_references or []
-    input_reference_bytes = await input_reference.read() if input_reference is not None else None
+    input_reference_bytes: bytes | None = None
     parsed_image_reference = _parse_form_json(image_reference)
     parsed_video_reference = _parse_form_json(video_reference)
     parsed_audio_reference = _parse_form_json(audio_reference)
 
     if input_references and any(
-        item is not None for item in (parsed_image_reference, parsed_video_reference, input_reference_bytes)
+        item is not None for item in (parsed_image_reference, parsed_video_reference, input_reference)
     ):
         raise HTTPException(
             status_code=HTTPStatus.BAD_REQUEST.value,
             detail="Provide input_references alone, without input_reference, image_reference, or video_reference.",
         )
-    if input_reference_bytes is not None and (parsed_image_reference is not None or parsed_video_reference is not None):
+    if input_reference is not None and (parsed_image_reference is not None or parsed_video_reference is not None):
         raise HTTPException(
             status_code=HTTPStatus.BAD_REQUEST.value,
             detail=(
@@ -3180,6 +3266,20 @@ async def _parse_video_form(
             detail=f"Video generation setup failed: {str(e)}",
         )
 
+    supports_mixed_reference_inputs = bool(getattr(handler, "supports_mixed_reference_inputs", False))
+    if input_reference is not None:
+        input_reference_bytes = await _read_upload_limited(
+            input_reference,
+            max_bytes=_minimax_h3_upload_limit(input_reference) if supports_mixed_reference_inputs else None,
+        )
+        if supports_mixed_reference_inputs:
+            input_reference_kind = _uploaded_media_kind(input_reference)
+            _validate_minimax_h3_image_payload(
+                input_reference_bytes,
+                filename=input_reference.filename,
+                allow_non_image=input_reference_kind != "image",
+            )
+
     decode_spec = ReferenceVideoDecodeSpec()
     if not input_references and (parsed_video_reference is not None or input_reference_bytes is not None):
         stage_configs = (
@@ -3192,7 +3292,12 @@ async def _parse_video_form(
     reference_video = None
     reference_audio: ReferenceAudio | None = None
     if input_references:
-        images, video_paths, audio_paths = await _persist_uploaded_media_references(input_references)
+        if not supports_mixed_reference_inputs:
+            video_paths = await _persist_uploaded_video_references(input_references)
+            reference_video = ReferenceVideo(data=video_paths, cleanup_paths=tuple(video_paths))
+            images, audio_paths = [], []
+        else:
+            images, video_paths, audio_paths = await _persist_uploaded_media_references(input_references)
         if images:
             reference_image = ReferenceImage(data=images if len(images) > 1 else images[0])
         if video_paths:

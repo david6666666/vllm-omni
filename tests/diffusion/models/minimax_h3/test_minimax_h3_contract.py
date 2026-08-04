@@ -457,6 +457,16 @@ def test_r1_r6_ref2va_reference_count_matrix(case, counts):
     _validate_ref2va_reference_counts(*counts)
 
 
+def test_ref2va_reference_count_validation_preserves_client_error_metadata():
+    from vllm_omni.diffusion.models.minimax_h3.pipeline_minimax_h3 import (
+        _validate_ref2va_reference_counts,
+    )
+    from vllm_omni.errors import OmniClientError
+
+    with pytest.raises(OmniClientError, match="at least one image or video"):
+        _validate_ref2va_reference_counts(0, 0, 0)
+
+
 @pytest.mark.parametrize(
     ("case", "start_time", "expected_duration"),
     [
@@ -498,6 +508,99 @@ def test_r7_r8_ref2va_video_segment_matrix(monkeypatch, tmp_path, case, start_ti
     assert prepared[0]["duration_seconds"] == pytest.approx(expected_duration)
     assert prepared[0]["start_time_seconds"] == pytest.approx(start_time or 0.0)
     assert transcode_calls[0][1]["duration_seconds"] == pytest.approx(expected_duration)
+
+
+def test_ref2va_two_video_recipe_tolerates_container_rounding(monkeypatch, tmp_path):
+    from vllm_omni.diffusion.models.minimax_h3 import reference_video as reference_video_module
+
+    first = tmp_path / "first.mp4"
+    second = tmp_path / "second.mp4"
+    first.touch()
+    second.touch()
+    metadata = {
+        str(first): {
+            "width": 1280,
+            "height": 720,
+            "fps": 24.0,
+            "frame_count": 241,
+            "duration": 10.041667,
+            "format_names": ("mp4",),
+            "video_codec": "h264",
+            "audio_codecs": (),
+            "file_size": 1024,
+        },
+        str(second): {
+            "width": 1280,
+            "height": 720,
+            "fps": 24.0,
+            "frame_count": 120,
+            "duration": 4.966667,
+            "format_names": ("mp4",),
+            "video_codec": "h264",
+            "audio_codecs": (),
+            "file_size": 1024,
+        },
+    }
+    transcode_calls = []
+    monkeypatch.setattr(reference_video_module, "_probe_video", lambda path: metadata[str(path)])
+    monkeypatch.setattr(
+        reference_video_module,
+        "_transcode_reference_video",
+        lambda source, **kwargs: transcode_calls.append((source, kwargs)) or f"{source}.prepared.mp4",
+    )
+
+    prepared = reference_video_module.prepare_reference_videos(
+        [str(first), str(second)],
+        target_frame_count=124,
+        workdir=str(tmp_path / "work"),
+    )
+
+    assert [item["duration_seconds"] for item in prepared] == pytest.approx([10.041667, 4.958333])
+    assert sum(item["duration_seconds"] for item in prepared) == pytest.approx(15.0)
+    assert transcode_calls[1][1]["duration_seconds"] == pytest.approx(4.958333)
+
+
+def test_ref2va_two_video_recipe_rejects_real_duration_overflow(monkeypatch, tmp_path):
+    from vllm_omni.diffusion.models.minimax_h3 import reference_video as reference_video_module
+    from vllm_omni.errors import OmniClientError
+
+    first = tmp_path / "first.mp4"
+    second = tmp_path / "second.mp4"
+    first.touch()
+    second.touch()
+    metadata = {
+        str(first): {
+            "width": 1280,
+            "height": 720,
+            "fps": 24.0,
+            "frame_count": 240,
+            "duration": 10.0,
+            "format_names": ("mp4",),
+            "video_codec": "h264",
+            "audio_codecs": (),
+            "file_size": 1024,
+        },
+        str(second): {
+            "width": 1280,
+            "height": 720,
+            "fps": 24.0,
+            "frame_count": 120,
+            "duration": 5.02,
+            "format_names": ("mp4",),
+            "video_codec": "h264",
+            "audio_codecs": (),
+            "file_size": 1024,
+        },
+    }
+    monkeypatch.setattr(reference_video_module, "_probe_video", lambda path: metadata[str(path)])
+    monkeypatch.setattr(reference_video_module, "_transcode_reference_video", lambda source, **kwargs: "prepared.mp4")
+
+    with pytest.raises(OmniClientError, match="15 seconds"):
+        reference_video_module.prepare_reference_videos(
+            [str(first), str(second)],
+            target_frame_count=124,
+            workdir=str(tmp_path / "work"),
+        )
 
 
 @pytest.mark.parametrize("duration", [4.0, 15.0])
