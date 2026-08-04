@@ -279,6 +279,7 @@ def all_to_all_ulysses_output(
         seq=seq_local,
         local_heads=local_heads,
         head_size=head_size,
+        output=output,
     )
     if merged is None:
         return None

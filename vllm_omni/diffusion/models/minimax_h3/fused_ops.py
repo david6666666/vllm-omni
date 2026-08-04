@@ -411,6 +411,7 @@ def merge_ulysses_heads_bf16(
     seq: int,
     local_heads: int,
     head_size: int,
+    output: torch.Tensor | None = None,
 ) -> torch.Tensor | None:
     """Fuse the inverse Ulysses output transpose and contiguous copy."""
     if not (
@@ -422,7 +423,16 @@ def merge_ulysses_heads_bf16(
         and x.is_contiguous()
     ):
         return None
-    output = torch.empty_like(x).new_empty((1, seq, world_size, local_heads, head_size))
+    if output is None:
+        output = torch.empty_like(x).new_empty((1, seq, world_size, local_heads, head_size))
+    else:
+        if output.numel() != x.numel() or not output.is_contiguous():
+            return None
+        # The linear storage of [1, seq, world, local_heads, head_size] is
+        # identical to [1, seq, world * local_heads, head_size].  Reusing the
+        # completed attention output here removes one full-size allocator
+        # request without changing the fused copy's indexing.
+        output = output.view(1, seq, world_size, local_heads, head_size)
     total_elements = output.numel()
     if total_elements == 0:
         return output
