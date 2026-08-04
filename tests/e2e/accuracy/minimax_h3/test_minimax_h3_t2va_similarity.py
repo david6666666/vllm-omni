@@ -159,6 +159,7 @@ def test_minimax_h3_t2va_matches_official_reference(
             {
                 "task": "t2va",
                 "duration": DURATION_SECONDS,
+                "aspect_ratio": "16:9",
                 "audio_flow_shift": AUDIO_FLOW_SHIFT,
             }
         ),

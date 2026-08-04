@@ -193,6 +193,7 @@ curl -sS -X POST "${API_URL}" \
   -F 'prompt=In a snowy blue-purple forest, Ori carefully walks past a sleeping giant; footsteps crunch in the snow while the creature breathes and softly snorts.' \
   -F 'width=1344' \
   -F 'height=768' \
+  -F 'aspect_ratio=16:9' \
   -F 'fps=24' \
   -F 'num_inference_steps=50' \
   -F 'flow_shift=12' \
@@ -324,10 +325,15 @@ soundtrack, a separate `audio_reference`, or both. To send a mixed multipart
 request, repeat `input_references` for each image, video, or audio file; the
 server classifies them by MIME type and preserves the per-type order.
 
-Reference videos may be 2–15 seconds and may be longer than the generated
-clip. Use `start_time_seconds` to select a synchronized segment; for multiple
-typed video references, pass one value per video in
-`extra_params.start_time_seconds`.
+Reference videos must be MP4/MOV with H.264/H.265 video, optional AAC/MP3
+audio, 2–15 seconds each, and at most 15 seconds combined. They may still be
+longer than the generated clip. Use `start_time_seconds` to select a
+synchronized segment; for multiple typed video references, pass one value per
+video in `extra_params.start_time_seconds`.
+
+Reference images accept JPG/JPEG, PNG, WEBP, HEIC, or HEIF up to 30 MiB. Standalone
+audio references accept WAV or MP3 up to 15 MiB, with 2–15 seconds per file and
+at most 15 seconds combined.
 
 ## Official input matrix and limits
 
@@ -338,9 +344,11 @@ typed video references, pass one value per video in
 | Ref2VA | image-only, image+image, image+video, video+audio, and mixed image/video/audio | images ≤9, videos ≤3, audios ≤3, total references ≤12; audio requires a visual reference |
 
 The H3 output contract is 4–15 seconds at 24 FPS, stereo 32 kHz audio, and a
-32-pixel canvas multiple. Supported output ratios are `adaptive` (also accepts
-SGLang's `auto` spelling), `21:9`, `16:9`, `4:3`, `1:1`, `3:4`, and `9:16`;
-`short_edge` controls the adaptive 768-pixel canvas and must be `768`.
+32-pixel canvas multiple. T2VA requires one named output ratio from `21:9`,
+`16:9`, `4:3`, `1:1`, `3:4`, or `9:16`. FL2VA always follows the first input
+image's ratio and ignores a generic `aspect_ratio` override. Ref2VA defaults to
+`16:9`; `adaptive` and SGLang's `auto` spelling are accepted aliases for that
+default. `short_edge` controls the 768-pixel canvas and must be `768`.
 `num_outputs_per_prompt` accepts 1–10 and derives each output seed as
 `seed + output_index`. The asynchronous endpoint returns all
 outputs; the synchronous raw-MP4 endpoint returns the first output when more
@@ -357,7 +365,7 @@ than one is requested.
 | `flow_shift` | `12` | Video sigma shift |
 | `audio_flow_shift` | `3` | Audio sigma shift, passed in `extra_params` |
 | `seed` | Task-specific | Use a fixed value for reproducibility |
-| `aspect_ratio` | `adaptive` | Also accepts `21:9`, `16:9`, `4:3`, `1:1`, `3:4`, `9:16` |
+| `aspect_ratio` | Task-specific | T2VA requires a named ratio; FL2VA follows the input image; Ref2VA defaults to `16:9` |
 | `short_edge` | `768` | H3 shape policy requires exactly 768 when `width`/`height` are omitted |
 | `num_outputs_per_prompt` | `1` | 1–10; async API returns every output |
 | `start_time_seconds` | `0` | Reference-video segment start; use a list in `extra_params` for multiple videos |

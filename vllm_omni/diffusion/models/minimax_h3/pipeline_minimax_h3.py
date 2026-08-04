@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 from collections.abc import Iterable, Mapping, Sequence
@@ -70,6 +71,8 @@ from .reference_video import (
     load_video_frames,
     prepare_reference_videos,
     sample_reference_video_frames,
+    validate_reference_audio_files,
+    validate_reference_audio_waveforms,
 )
 from .time_request import (
     MINIMAX_H3_SHAPE_PLANNER,
@@ -88,6 +91,18 @@ MINIMAX_H3_OUTPUT_SHORT_EDGE = 768
 MINIMAX_H3_OUTPUT_MAX_PIXELS = 768 * 1344
 MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE = 2048
 MINIMAX_H3_REFERENCE_IMAGE_MULTIPLE = 32
+MINIMAX_H3_SUPPORTED_ASPECT_RATIOS = {
+    "21:9": 21.0 / 9.0,
+    "16:9": 16.0 / 9.0,
+    "4:3": 4.0 / 3.0,
+    "1:1": 1.0,
+    "3:4": 3.0 / 4.0,
+    "9:16": 9.0 / 16.0,
+}
+MINIMAX_H3_MAX_REFERENCE_IMAGE_BYTES = 30 * 1024 * 1024
+MINIMAX_H3_REFERENCE_IMAGE_FORMATS = frozenset({"jpeg", "png", "webp", "heic", "heif"})
+MINIMAX_H3_MIN_OUTPUT_SECONDS = 4.0
+MINIMAX_H3_MAX_OUTPUT_SECONDS = 15.0
 
 
 def _minimax_h3_post_process(output, output_type: str = "np"):
@@ -137,7 +152,15 @@ def _load_images(value: Any) -> list[Image.Image]:
             raise ValueError("MiniMax H3 image input must not be empty")
         return [_load_image(item) for item in value]
     if isinstance(value, (str, os.PathLike)):
+        file_size = os.path.getsize(value)
+        if file_size > MINIMAX_H3_MAX_REFERENCE_IMAGE_BYTES:
+            raise ValueError("MiniMax H3 reference image exceeds the 30 MiB size limit")
         with Image.open(value) as image:
+            image_format = str(image.format or "").lower()
+            if image_format and image_format not in MINIMAX_H3_REFERENCE_IMAGE_FORMATS:
+                raise ValueError(
+                    f"MiniMax H3 reference image must use JPG, JPEG, PNG, WEBP, HEIC, or HEIF, got {image.format}"
+                )
             return [image.convert("RGB")]
     if isinstance(value, Image.Image):
         return [value.convert("RGB")]
@@ -218,6 +241,90 @@ def _resolve_fl2va_keyframe_indices(extra: Mapping[str, Any], image_count: int) 
     return raw_indices
 
 
+def _validate_ref2va_reference_counts(
+    image_count: int,
+    video_count: int,
+    audio_count: int,
+) -> None:
+    """Validate the official Ref2VA reference-count contract."""
+    if image_count < 0 or video_count < 0 or audio_count < 0:
+        raise ValueError("MiniMax H3 reference counts must be non-negative")
+    if image_count + video_count == 0:
+        raise ValueError("ref2va requires at least one image or video reference")
+    if image_count > 9:
+        raise ValueError("ref2va accepts at most 9 image references")
+    if video_count > 3:
+        raise ValueError("ref2va accepts at most 3 video references")
+    if audio_count > 3:
+        raise ValueError("ref2va accepts at most 3 standalone audio references")
+    if image_count + video_count + audio_count > 12:
+        raise ValueError("ref2va accepts at most 12 total references")
+
+
+def _resolve_minimax_h3_aspect_ratio(
+    task: str,
+    value: Any,
+    image: Image.Image | None,
+) -> float:
+    """Resolve H3's task-specific ratio policy.
+
+    T2VA must name one of the official ratios.  FL2VA always follows the
+    first input image, even when a generic client sends ``aspect_ratio``.
+    Ref2VA defaults to 16:9; ``adaptive``/``auto`` are retained as aliases
+    for that default for compatibility with existing clients.
+    """
+    if task == "fl2va":
+        if image is None:
+            raise ValueError("fl2va requires an input image to resolve its aspect ratio")
+        return float(image.width) / float(image.height)
+
+    if value is None:
+        if task == "t2va":
+            raise ValueError("t2va requires an explicit aspect_ratio")
+        return MINIMAX_H3_SUPPORTED_ASPECT_RATIOS["16:9"]
+
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"adaptive", "auto"}:
+            if task == "t2va":
+                raise ValueError("t2va requires an explicit named aspect_ratio, not adaptive")
+            return MINIMAX_H3_SUPPORTED_ASPECT_RATIOS["16:9"]
+        if normalized in MINIMAX_H3_SUPPORTED_ASPECT_RATIOS:
+            return MINIMAX_H3_SUPPORTED_ASPECT_RATIOS[normalized]
+        try:
+            numeric_value = float(normalized)
+        except (TypeError, ValueError) as exc:
+            supported = ", ".join(MINIMAX_H3_SUPPORTED_ASPECT_RATIOS)
+            raise ValueError(f"MiniMax H3 aspect_ratio must be one of {supported}, got {value!r}") from exc
+    elif isinstance(value, (int, float, np.integer, np.floating)) and not isinstance(value, bool):
+        numeric_value = float(value)
+    else:
+        raise ValueError(f"MiniMax H3 aspect_ratio must be a string ratio, got {value!r}")
+
+    if not math.isfinite(numeric_value) or not any(
+        math.isclose(numeric_value, ratio, rel_tol=0.0, abs_tol=1e-6)
+        for ratio in MINIMAX_H3_SUPPORTED_ASPECT_RATIOS.values()
+    ):
+        supported = ", ".join(MINIMAX_H3_SUPPORTED_ASPECT_RATIOS)
+        raise ValueError(f"MiniMax H3 aspect_ratio must be one of {supported}, got {value!r}")
+    return numeric_value
+
+
+def _resolve_minimax_h3_num_outputs(value: Any) -> int:
+    if value is None:
+        return 1
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise ValueError("MiniMax H3 num_outputs_per_prompt must be an integer in [1, 10]")
+    value = int(value)
+    if not 1 <= value <= 10:
+        raise ValueError(f"MiniMax H3 num_outputs_per_prompt must be in [1, 10], got {value}")
+    return value
+
+
+def _minimax_h3_output_seeds(seed: int, num_outputs: int) -> list[int]:
+    return [int(seed) + output_index for output_index in range(int(num_outputs))]
+
+
 def _validate_reference_image(image: Image.Image) -> None:
     width, height = image.size
     if min(width, height) < 256 or max(width, height) > 5760:
@@ -288,6 +395,8 @@ def _reference_image_shape(image: Image.Image) -> tuple[int, int]:
 
 def _resolve_output_canvas(aspect_ratio: float, short_edge: int) -> tuple[int, int]:
     """Resolve the official H3 ratio/area policy to a 32-pixel canvas."""
+    if not math.isfinite(float(aspect_ratio)) or float(aspect_ratio) <= 0:
+        raise ValueError(f"MiniMax H3 canvas aspect ratio must be positive, got {aspect_ratio!r}")
     if short_edge != MINIMAX_H3_OUTPUT_SHORT_EDGE:
         raise ValueError(f"MiniMax H3 target.short_edge must be {MINIMAX_H3_OUTPUT_SHORT_EDGE}, got {short_edge}")
     if aspect_ratio >= 1.0:
@@ -492,8 +601,16 @@ class MiniMaxH3Pipeline(
         target = target if isinstance(target, Mapping) else {}
         duration = target.get("duration_seconds", extra.get("duration_seconds", extra.get("duration")))
         if duration is not None:
-            duration = float(duration)
-            if not 4.0 <= duration <= 15.0:
+            if isinstance(duration, bool):
+                raise ValueError(f"MiniMax H3 output duration must be in [4, 15] seconds, got {duration!r}")
+            try:
+                duration = float(duration)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"MiniMax H3 output duration must be in [4, 15] seconds, got {duration!r}") from exc
+            if (
+                not math.isfinite(duration)
+                or not MINIMAX_H3_MIN_OUTPUT_SECONDS <= duration <= MINIMAX_H3_MAX_OUTPUT_SECONDS
+            ):
                 raise ValueError(f"MiniMax H3 output duration must be in [4, 15] seconds, got {duration}")
             requested_frames = int(round(duration * fps))
         elif int(sampling.num_frames or 1) > 1:
@@ -501,7 +618,7 @@ class MiniMaxH3Pipeline(
         else:
             requested_frames = 124 if task == "ref2va" else 209
             duration = requested_frames / fps
-        if not 4.0 <= requested_frames / fps <= 15.0:
+        if not MINIMAX_H3_MIN_OUTPUT_SECONDS <= requested_frames / fps <= MINIMAX_H3_MAX_OUTPUT_SECONDS:
             raise ValueError(f"MiniMax H3 output duration must be in [4, 15] seconds, got {requested_frames / fps:.3f}")
         num_frames = minimax_h3_align_frame_count(requested_frames)
 
@@ -515,28 +632,11 @@ class MiniMaxH3Pipeline(
             )
         short_edge = int(raw_short_edge)
 
-        if aspect_ratio is None:
-            if task == "fl2va" and image is not None:
-                aspect_ratio = image.width / image.height
-            else:
-                aspect_ratio = "16:9"
-        if isinstance(aspect_ratio, str):
-            normalized_ratio = aspect_ratio.strip().lower()
-            if normalized_ratio in {"adaptive", "auto"}:
-                normalized_ratio = image.width / image.height if task == "fl2va" and image is not None else "16:9"
-            if isinstance(normalized_ratio, str) and ":" in normalized_ratio:
-                numerator, denominator = normalized_ratio.split(":", 1)
-                try:
-                    normalized_ratio = float(numerator) / float(denominator)
-                except (TypeError, ValueError, ZeroDivisionError) as exc:
-                    raise ValueError(f"invalid MiniMax H3 aspect_ratio {aspect_ratio!r}") from exc
-            elif isinstance(normalized_ratio, str):
-                try:
-                    normalized_ratio = float(normalized_ratio)
-                except ValueError as exc:
-                    raise ValueError(f"invalid MiniMax H3 aspect_ratio {aspect_ratio!r}") from exc
-            aspect_ratio = normalized_ratio
-        aspect_ratio = float(aspect_ratio)
+        aspect_ratio = _resolve_minimax_h3_aspect_ratio(
+            task,
+            aspect_ratio,
+            image,
+        )
         if not 0.25 <= aspect_ratio <= 4.0:
             raise ValueError(f"MiniMax H3 canvas aspect ratio must be in [1:4, 4:1], got {aspect_ratio}")
 
@@ -1261,16 +1361,7 @@ class MiniMaxH3Pipeline(
                 if isinstance(audio_values, (list, tuple)) and not audio_is_waveform_pair
                 else int(raw_audio is not None)
             )
-            if not images and video_count == 0:
-                raise ValueError("ref2va requires at least one image or video reference")
-            if len(images) > 9:
-                raise ValueError("ref2va accepts at most 9 image references")
-            if video_count > 3:
-                raise ValueError("ref2va accepts at most 3 video references")
-            if audio_count > 3:
-                raise ValueError("ref2va accepts at most 3 standalone audio references")
-            if len(images) + video_count + audio_count > 12:
-                raise ValueError("ref2va accepts at most 12 total references")
+            _validate_ref2va_reference_counts(len(images), video_count, audio_count)
         elif raw_videos is not None:
             raise ValueError(f"{task} does not accept a video condition")
 
@@ -1330,7 +1421,10 @@ class MiniMaxH3Pipeline(
                     )
                 has_audio = [bool(value) for value in has_audio_tensor.tolist()]
 
+            if raw_audio is not None:
+                validate_reference_audio_files(raw_audio)
             standalone_audios = _load_audios(raw_audio) if raw_audio is not None else []
+            validate_reference_audio_waveforms(standalone_audios)
             condition_labels: list[tuple[str, int]] = []
             for image_index in range(1, len(prepared_images) + 1):
                 condition_labels.append(("image", image_index))
@@ -1415,17 +1509,15 @@ class MiniMaxH3Pipeline(
         num_steps = int(sampling.num_inference_steps or 50)
         video_shift = float(extra.get("flow_shift", self.default_video_shift))
         audio_shift = float(extra.get("audio_flow_shift", self.default_audio_shift))
-        num_outputs = int(sampling.num_outputs_per_prompt or 1)
-        if not 1 <= num_outputs <= 10:
-            raise ValueError(f"MiniMax H3 num_outputs_per_prompt must be in [1, 10], got {num_outputs}")
+        num_outputs = _resolve_minimax_h3_num_outputs(sampling.num_outputs_per_prompt)
         videos = []
         audios = []
-        for output_index in range(num_outputs):
+        for output_seed in _minimax_h3_output_seeds(seed, num_outputs):
             video_latent, audio_latent = self.diffuse(
                 task=task,
                 text_embeddings=text_embeddings,
                 text_tags=text_tags,
-                seed=seed + output_index,
+                seed=output_seed,
                 latent_t=latent_t,
                 latent_h=height // 16,
                 latent_w=width // 16,

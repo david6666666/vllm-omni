@@ -487,7 +487,7 @@ def test_v2v_video_generation_form(test_client, mocker: MockerFixture):
     assert input_video[0].size == (32, 24)
 
 
-def test_v2v_video_generation_with_video_reference_form(test_client, mocker: MockerFixture):
+def test_r9_typed_video_reference_form(test_client, mocker: MockerFixture):
     mocker.patch(
         "vllm_omni.entrypoints.openai.serving_video._encode_video_bytes",
         return_value=b"fake-video",
@@ -510,7 +510,7 @@ def test_v2v_video_generation_with_video_reference_form(test_client, mocker: Moc
     assert input_video[0].size == (32, 24)
 
 
-def test_minimax_h3_http_accepts_mixed_image_video_references(test_client, mocker: MockerFixture):
+def test_r5_mixed_image_video_audio_references_and_fanout(test_client, mocker: MockerFixture):
     mocker.patch(
         "vllm_omni.entrypoints.openai.serving_video._encode_video_bytes",
         return_value=b"fake-video",
@@ -1224,7 +1224,7 @@ def test_rejects_input_reference_and_image_reference_together(test_client):
     assert "only one of input_reference, image_reference, or video_reference" in response.json()["detail"].lower()
 
 
-def test_accepts_image_reference_and_video_reference_together(test_client, mocker: MockerFixture):
+def test_r10_typed_image_and_video_reference_form(test_client, mocker: MockerFixture):
     mocker.patch(
         "vllm_omni.entrypoints.openai.serving_video._encode_video_bytes",
         return_value=b"fake-video",
