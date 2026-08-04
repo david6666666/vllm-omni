@@ -6,7 +6,7 @@
 ## Summary
 
 - Vendor: MiniMaxAI
-- Model: [`Inferact/MiniMax-H3`](https://huggingface.co/Inferact/MiniMax-H3)
+- Model: [`MiniMaxAI/MiniMax-H3`](https://huggingface.co/MiniMaxAI/MiniMax-H3)
 - Tasks: T2VA, FL2VA, and Ref2VA
 - Mode: OpenAI-compatible `/v1/videos` HTTP serving
 - Hardware: Atlas 800I A3
@@ -31,7 +31,7 @@ Same as the GPU recipe — Hugging Face access approval is required:
 ```bash
 hf auth login
 export MODEL_ROOT=/path/to/MiniMax-H3
-hf download Inferact/MiniMax-H3 --local-dir "${MODEL_ROOT}"
+hf download MiniMaxAI/MiniMax-H3 --local-dir "${MODEL_ROOT}"
 ```
 
 ### Environment
