@@ -247,6 +247,11 @@ def sample_reference_video_frames(
     ]
     return {
         "frames": sampled_frames,
+        # Keep the full decoded array alive for the VAE stage.  The Qwen
+        # processor consumes ``frames`` above, while the VAE needs every
+        # frame; handing the array through the request avoids reopening the
+        # prepared video (or the temporary .npy copy) a second time.
+        "decoded_frames": frames,
         "block_timestamps": block_timestamps,
         "frames_path": str(frames_path),
     }

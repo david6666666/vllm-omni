@@ -471,6 +471,7 @@ class MiniMaxH3Pipeline(
                     )
                     videos.append(np.stack(sampled["frames"]))
                     item["decoded_frames_path"] = sampled["frames_path"]
+                    item["decoded_frames"] = sampled["decoded_frames"]
                     sampled_videos.append(sampled)
                 vision = self.processor.video_processor(
                     videos=videos,
@@ -751,14 +752,24 @@ class MiniMaxH3Pipeline(
         if distributed_encode:
             # Native tiled encode uses collectives, so every VPP rank must
             # enter each reference encode in the same input order.
-            prepared_videos_list = [prepared_videos]
+            # Do not pickle the potentially hundreds-of-megabytes decoded
+            # arrays through ``broadcast_object_list``.  Non-zero ranks use
+            # the persistent prepared path and decode locally instead.
+            broadcast_videos = [
+                [
+                    {key: value for key, value in item.items() if key != "decoded_frames"}
+                    for item in prepared_videos
+                ]
+                if prepared_videos is not None
+                else None
+            ]
             dist.broadcast_object_list(
-                prepared_videos_list,
+                broadcast_videos,
                 src=0,
                 group=group,
                 device=self.device,
             )
-            prepared_videos = prepared_videos_list[0]
+            prepared_videos = broadcast_videos[0]
 
         rows = None
         shapes = torch.zeros((count, 3), dtype=torch.long, device=self.device)
@@ -766,7 +777,11 @@ class MiniMaxH3Pipeline(
             if prepared_videos is None or len(prepared_videos) != count:
                 raise ValueError("reference-video preparation is incomplete")
             encoded = [
-                self.video_vae.encode_video(load_video_frames(item.get("decoded_frames_path", item["prepared_path"])))
+                self.video_vae.encode_video(
+                    item.get("decoded_frames")
+                    if item.get("decoded_frames") is not None
+                    else load_video_frames(item.get("decoded_frames_path", item["prepared_path"]))
+                )
                 for item in prepared_videos
             ]
             rows = torch.cat([item[0] for item in encoded])
