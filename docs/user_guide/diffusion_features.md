@@ -186,7 +186,7 @@ pytest -s -v \
 
 The test starts the four-GPU HSDP/Ulysses server itself and writes the generated
 video and comparison reference under `tests/e2e/accuracy/artifacts/minimax_h3_t2va`.
-For the full serving/API setup, see the [MiniMax-H3 recipe](../../recipes/MiniMaxAI/MiniMax-H3.md).
+For the full serving/API setup, see the [MiniMax-H3 recipe](https://github.com/vllm-project/vllm-omni/blob/main/recipes/MiniMaxAI/MiniMax-H3.md).
 
 
 **Frame Interpolation Support**
