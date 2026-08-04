@@ -214,6 +214,77 @@ def all_to_all_5D(
         raise RuntimeError("scatter_idx must be 1 or 3 and gather_idx must be 1 or 3")
 
 
+def all_to_all_packed_qkv(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    *,
+    group=None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None:
+    """Exchange Q/K/V through one destination-major Ulysses collective.
+
+    This fixed-shape path is intentionally separate from ``all_to_all_4D``:
+    H3 has batch one and equal sequence shards, so the three projections can
+    share the same communication buffer.  The returned Q/K/V views retain a
+    unit stride in the head dimension, which is the layout required by FA4.
+    """
+    from vllm_omni.diffusion.models.minimax_h3.fused_ops import (
+        pack_qkv_destination_major_bf16,
+    )
+
+    world_size = dist.get_world_size(group)
+    packed = pack_qkv_destination_major_bf16(q, k, v, world_size)
+    if packed is None:
+        return None
+
+    output = torch.empty_like(packed)
+    dist.all_to_all_single(output, packed, group=group)
+    # all_to_all_single retains destination/source-major chunks.  Folding
+    # the first two dimensions is a view and avoids the old QKV transpose.
+    seq_global = q.shape[0] * world_size
+    local_heads = q.shape[1] // world_size
+    packed = output.reshape(1, seq_global, local_heads, 3 * q.shape[2])
+    return packed.split(q.shape[2], dim=-1)
+
+
+def all_to_all_ulysses_output(
+    output: torch.Tensor,
+    *,
+    group=None,
+) -> torch.Tensor | None:
+    """Inverse fixed-shape Ulysses collective with a fused output relayout."""
+    from vllm_omni.diffusion.models.minimax_h3.fused_ops import (
+        merge_ulysses_heads_bf16,
+    )
+
+    if output.ndim != 4 or output.shape[0] != 1 or not output.is_cuda:
+        return None
+    world_size = dist.get_world_size(group)
+    if world_size <= 1 or output.dtype != torch.bfloat16:
+        return None
+    seq_global, local_heads, head_size = output.shape[1:]
+    if seq_global % world_size:
+        return None
+
+    # [1, S, H/P, D] -> [S, 1, H/P, D].  After the collective, each source
+    # rank owns one contiguous local sequence shard.
+    input_t = output.permute(1, 0, 2, 3).contiguous()
+    exchanged = torch.empty_like(input_t)
+    dist.all_to_all_single(exchanged, input_t, group=group)
+    seq_local = seq_global // world_size
+    exchanged = exchanged.reshape(world_size, seq_local, 1, local_heads, head_size)
+    merged = merge_ulysses_heads_bf16(
+        exchanged,
+        world_size=world_size,
+        seq=seq_local,
+        local_heads=local_heads,
+        head_size=head_size,
+    )
+    if merged is None:
+        return None
+    return merged.reshape(1, seq_local, world_size * local_heads, head_size)
+
+
 class SeqAllToAll5D(torch.autograd.Function):
     @staticmethod
     def forward(

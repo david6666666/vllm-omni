@@ -494,6 +494,21 @@ class MiniMaxH3Attention(nn.Module):
                 max_seqlen=max_seqlen,
             )
 
+        if self._can_use_packed_ulysses(
+            q,
+            k,
+            v,
+            cu_seqlens=cu_seqlens,
+            attn_mask=attn_mask,
+        ):
+            return self._run_packed_ulysses(
+                q,
+                k,
+                v,
+                cu_seqlens=cu_seqlens,
+                max_seqlen=max_seqlen,
+            )
+
         metadata = AttentionMetadata(
             attn_mask=attn_mask,
             extra={
@@ -549,6 +564,84 @@ class MiniMaxH3Attention(nn.Module):
             return int(cu_seqlens[-1].item()) == int(q.shape[0]) * int(sp_group.ulysses_world_size)
         except (AssertionError, ImportError, RuntimeError):
             return False
+
+    @staticmethod
+    def _can_use_packed_ulysses(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        *,
+        cu_seqlens: torch.Tensor,
+        attn_mask: torch.Tensor | None,
+    ) -> bool:
+        """Check H3's packed-QKV Ulysses path.
+
+        A 2-D alignment mask is already redundant when packed FlashAttention
+        receives the two document boundaries in ``cu_seqlens``.  Keep the
+        branch restricted to that representation; 4-D/piecewise masks stay
+        on the generic strategy so their semantics remain unchanged.
+        """
+        if q.device.type != "cuda" or q.dtype != torch.bfloat16:
+            return False
+        if q.ndim != 3 or q.shape != k.shape or q.shape != v.shape:
+            return False
+        if attn_mask is not None and attn_mask.ndim != 2:
+            return False
+        if cu_seqlens.numel() < 2:
+            return False
+        try:
+            from vllm_omni.diffusion.attention.backends.utils.fa import flash_attn_varlen_func
+            from vllm_omni.diffusion.distributed.parallel_state import get_sp_group
+
+            sp_group = get_sp_group()
+            if sp_group.ulysses_world_size != 4 or sp_group.ring_world_size != 1:
+                return False
+            if getattr(flash_attn_varlen_func, "__module__", "") != "flash_attn.cute.interface":
+                return False
+            return int(cu_seqlens[-1].item()) == int(q.shape[0]) * int(sp_group.ulysses_world_size)
+        except (AssertionError, ImportError, RuntimeError):
+            return False
+
+    def _run_packed_ulysses(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        *,
+        cu_seqlens: torch.Tensor,
+        max_seqlen: int,
+    ) -> torch.Tensor:
+        """Run FA4 with destination-major QKV and fused inverse relayout."""
+        from vllm_omni.diffusion.attention.backends.utils.fa import flash_attn_varlen_func
+        from vllm_omni.diffusion.distributed.comm import (
+            all_to_all_packed_qkv,
+            all_to_all_ulysses_output,
+        )
+        from vllm_omni.diffusion.distributed.parallel_state import get_sp_group
+
+        group = get_sp_group().ulysses_group
+        packed = all_to_all_packed_qkv(q, k, v, group=group)
+        if packed is None:
+            raise RuntimeError("H3 packed Ulysses path was selected for an unsupported QKV layout")
+        q, k, v = packed
+        out = flash_attn_varlen_func(
+            q=q.flatten(0, 1),
+            k=k.flatten(0, 1),
+            v=v.flatten(0, 1),
+            cu_seqlens_q=cu_seqlens,
+            cu_seqlens_k=cu_seqlens,
+            max_seqlen_q=max_seqlen,
+            max_seqlen_k=max_seqlen,
+            causal=False,
+            softmax_scale=self.softmax_scale,
+        )
+        if isinstance(out, tuple):
+            out = out[0]
+        out = out.reshape(q.shape)
+        merged = all_to_all_ulysses_output(out, group=group)
+        if merged is None:
+            raise RuntimeError("H3 packed Ulysses output relayout failed")
+        return merged.squeeze(0)
 
     def _run_direct_fa4(
         self,

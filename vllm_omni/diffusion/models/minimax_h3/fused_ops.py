@@ -12,6 +12,79 @@ _QK_BLOCK_SIZE = 128
 
 
 @triton.jit
+def _pack_qkv_destination_major_kernel(
+    output_ptr,
+    q_ptr,
+    k_ptr,
+    v_ptr,
+    total_elements,
+    rows,
+    local_heads,
+    head_size,
+    stride_q_row,
+    stride_q_head,
+    stride_k_row,
+    stride_k_head,
+    stride_v_row,
+    stride_v_head,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """Pack [S, H, D] Q/K/V into [world, S, H/world, 3D]."""
+    offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < total_elements
+
+    dim = offsets % head_size
+    head_slot = offsets // head_size
+    local_head = head_slot % local_heads
+    row_slot = head_slot // local_heads
+    row = row_slot % rows
+    destination = row_slot // rows
+    global_head = destination * local_heads + local_head
+
+    q_value = tl.load(
+        q_ptr + row * stride_q_row + global_head * stride_q_head + dim,
+        mask=mask,
+    )
+    k_value = tl.load(
+        k_ptr + row * stride_k_row + global_head * stride_k_head + dim,
+        mask=mask,
+    )
+    v_value = tl.load(
+        v_ptr + row * stride_v_row + global_head * stride_v_head + dim,
+        mask=mask,
+    )
+    output_base = head_slot * (3 * head_size) + dim
+    tl.store(output_ptr + output_base, q_value, mask=mask)
+    tl.store(output_ptr + output_base + head_size, k_value, mask=mask)
+    tl.store(output_ptr + output_base + 2 * head_size, v_value, mask=mask)
+
+
+@triton.jit
+def _merge_ulysses_heads_kernel(
+    output_ptr,
+    input_ptr,
+    total_elements,
+    seq,
+    world,
+    local_heads,
+    head_size,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """Materialize [1, S, W, H/W, D] from [W, S, 1, H/W, D]."""
+    offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < total_elements
+
+    dim = offsets % head_size
+    head_slot = offsets // head_size
+    local_head = head_slot % local_heads
+    world_slot = (head_slot // local_heads) % world
+    row = (head_slot // (local_heads * world)) % seq
+
+    input_offset = (((world_slot * seq + row) * local_heads + local_head) * head_size) + dim
+    tl.store(output_ptr + offsets, tl.load(input_ptr + input_offset, mask=mask), mask=mask)
+
+
+@triton.jit
 def _indexed_scale_shift_kernel(
     x_ptr,
     scale_ptr,
@@ -273,6 +346,99 @@ def indexed_gate_bf16_(
         num_warps=4,
     )
     return True
+
+
+def pack_qkv_destination_major_bf16(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    world_size: int,
+) -> torch.Tensor | None:
+    """Pack Q/K/V for one Ulysses input collective.
+
+    The output uses destination-major storage, so a single all-to-all can
+    exchange all three projections while preserving a unit stride in the
+    head dimension after splitting the received ``3 * D`` payload.  Return
+    ``None`` for layouts outside the fixed H3 CUDA fast path.
+    """
+    if not (
+        world_size > 1
+        and q.is_cuda
+        and q.dtype == torch.bfloat16
+        and q.shape == k.shape == v.shape
+        and q.ndim == 3
+        and q.stride(-1) == k.stride(-1) == v.stride(-1) == 1
+    ):
+        return None
+    rows, global_heads, head_size = q.shape
+    if global_heads % world_size:
+        return None
+    local_heads = global_heads // world_size
+    output = torch.empty(
+        (world_size, rows, local_heads, 3 * head_size),
+        dtype=q.dtype,
+        device=q.device,
+    )
+    total_elements = rows * global_heads * head_size
+    if total_elements == 0:
+        return output
+    block_size = 1024
+    _pack_qkv_destination_major_kernel[(triton.cdiv(total_elements, block_size),)](
+        output,
+        q,
+        k,
+        v,
+        total_elements,
+        rows,
+        local_heads,
+        head_size,
+        q.stride(0),
+        q.stride(1),
+        k.stride(0),
+        k.stride(1),
+        v.stride(0),
+        v.stride(1),
+        BLOCK_SIZE=block_size,
+        num_warps=8,
+    )
+    return output
+
+
+def merge_ulysses_heads_bf16(
+    x: torch.Tensor,
+    *,
+    world_size: int,
+    seq: int,
+    local_heads: int,
+    head_size: int,
+) -> torch.Tensor | None:
+    """Fuse the inverse Ulysses output transpose and contiguous copy."""
+    if not (
+        world_size > 1
+        and x.is_cuda
+        and x.dtype == torch.bfloat16
+        and x.ndim == 5
+        and tuple(x.shape) == (world_size, seq, 1, local_heads, head_size)
+        and x.is_contiguous()
+    ):
+        return None
+    output = torch.empty_like(x).new_empty((1, seq, world_size, local_heads, head_size))
+    total_elements = output.numel()
+    if total_elements == 0:
+        return output
+    block_size = 1024
+    _merge_ulysses_heads_kernel[(triton.cdiv(total_elements, block_size),)](
+        output,
+        x,
+        total_elements,
+        seq,
+        world_size,
+        local_heads,
+        head_size,
+        BLOCK_SIZE=block_size,
+        num_warps=8,
+    )
+    return output
 
 
 def fused_qknorm_rope_bf16_(
