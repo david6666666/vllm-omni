@@ -167,6 +167,39 @@ def test_reference_video_shape_uses_h3_adapt_shape_policy():
     assert _reference_video_shape(3844, 2160) == (1344, 768)
 
 
+def test_reference_video_sampling_decodes_once_and_writes_reusable_cache(tmp_path, monkeypatch):
+    from vllm_omni.diffusion.models.minimax_h3 import reference_video
+
+    frames = np.arange(25 * 2 * 3 * 3, dtype=np.uint8).reshape(25, 2, 3, 3)
+    calls = []
+
+    def fake_load(path):
+        calls.append(path)
+        return frames
+
+    monkeypatch.setattr(reference_video, "load_video_frames", fake_load)
+    sampled = reference_video.sample_reference_video_frames("prepared.mp4", workdir=str(tmp_path))
+
+    assert calls == ["prepared.mp4"]
+    assert len(sampled["frames"]) == 3
+    np.testing.assert_array_equal(sampled["frames"][1], frames[12])
+    cached = np.load(sampled["frames_path"], allow_pickle=False)
+    np.testing.assert_array_equal(cached, frames)
+
+
+def test_cached_reference_video_frames_validate_shape(tmp_path):
+    from vllm_omni.diffusion.models.minimax_h3.reference_video import load_video_frames
+
+    path = tmp_path / "frames.npy"
+    np.save(path, np.zeros((2, 4, 4, 3), dtype=np.uint8), allow_pickle=False)
+    np.testing.assert_array_equal(load_video_frames(str(path)), np.zeros((2, 4, 4, 3), dtype=np.uint8))
+
+    bad = tmp_path / "bad.npy"
+    np.save(bad, np.zeros((2, 4, 4), dtype=np.uint8), allow_pickle=False)
+    with pytest.raises(ValueError, match=r"\[T,H,W,3\]"):
+        load_video_frames(str(bad))
+
+
 def test_text_encoder_stub_constructs_without_group_or_weights():
     from vllm_omni.diffusion.models.minimax_h3.encoder import (
         MiniMaxH3Qwen3VLEncoder,

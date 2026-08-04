@@ -180,6 +180,12 @@ def prepare_reference_videos(
 
 
 def load_video_frames(path: str) -> np.ndarray:
+    if Path(path).suffix == ".npy":
+        frames = np.load(path, allow_pickle=False)
+        if frames.ndim != 4 or frames.shape[-1] != 3:
+            raise ValueError(f"cached video frames must be [T,H,W,3], got {frames.shape}")
+        return np.asarray(frames)
+
     try:
         import decord
     except ImportError:
@@ -203,15 +209,18 @@ def sample_reference_video_frames(
     *,
     workdir: str,
 ) -> dict[str, Any]:
-    from PIL import Image
-
-    meta = _probe_video(prepared_path)
+    # Decode the prepared 24-fps stream once.  The same lossless-in-memory
+    # frame array is reused by the VAE stage through ``frames_path`` below;
+    # this avoids one ffmpeg process per Qwen frame, PNG round-trips, and a
+    # second full video decode later in the request.
+    frames = load_video_frames(prepared_path)
+    frame_count = int(frames.shape[0])
     ratio = MINIMAX_H3_FPS / MINIMAX_H3_QWEN_VIDEO_SAMPLE_FPS
     indices: list[int] = []
     cursor = 0.0
     while True:
         frame_index = int(round(cursor))
-        if frame_index >= meta["frame_count"]:
+        if frame_index >= frame_count:
             break
         if not indices or frame_index > indices[-1]:
             indices.append(frame_index)
@@ -221,28 +230,9 @@ def sample_reference_video_frames(
 
     frame_dir = Path(workdir)
     frame_dir.mkdir(parents=True, exist_ok=True)
-    frames = []
-    for output_index, source_index in enumerate(indices, start=1):
-        output = frame_dir / f"frame_{output_index:06d}.png"
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-loglevel",
-                "error",
-                "-i",
-                prepared_path,
-                "-vf",
-                f"select=eq(n\\,{source_index})",
-                "-vsync",
-                "vfr",
-                "-frames:v",
-                "1",
-                str(output),
-            ],
-            check=True,
-        )
-        frames.append(np.asarray(Image.open(output).convert("RGB")))
+    frames_path = frame_dir / "decoded_frames.npy"
+    np.save(frames_path, frames, allow_pickle=False)
+    sampled_frames = [frames[index] for index in indices]
 
     timestamps = [index / MINIMAX_H3_QWEN_VIDEO_SAMPLE_FPS for index in range(len(indices))]
     timestamps += [timestamps[-1]] * ((-len(timestamps)) % MINIMAX_H3_QWEN_TEMPORAL_PATCH)
@@ -255,8 +245,9 @@ def sample_reference_video_frames(
         )
     ]
     return {
-        "frames": frames,
+        "frames": sampled_frames,
         "block_timestamps": block_timestamps,
+        "frames_path": str(frames_path),
     }
 
 

@@ -470,6 +470,7 @@ class MiniMaxH3Pipeline(
                         workdir=str(Path(item["prepared_path"]).parent / f"qwen_frames_{index}"),
                     )
                     videos.append(np.stack(sampled["frames"]))
+                    item["decoded_frames_path"] = sampled["frames_path"]
                     sampled_videos.append(sampled)
                 vision = self.processor.video_processor(
                     videos=videos,
@@ -765,7 +766,8 @@ class MiniMaxH3Pipeline(
             if prepared_videos is None or len(prepared_videos) != count:
                 raise ValueError("reference-video preparation is incomplete")
             encoded = [
-                self.video_vae.encode_video(load_video_frames(item["prepared_path"])) for item in prepared_videos
+                self.video_vae.encode_video(load_video_frames(item.get("decoded_frames_path", item["prepared_path"])))
+                for item in prepared_videos
             ]
             rows = torch.cat([item[0] for item in encoded])
             shapes = torch.tensor(
