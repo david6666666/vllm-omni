@@ -119,6 +119,7 @@ _FORWARD_SUPPORTED_KWARGS = frozenset(
         "x",
         "audio_x",
         "img_position_ids",
+        "rope_freqs",
         "unique_timesteps",
         "inverse_indices",
         "update_mask",
@@ -126,6 +127,7 @@ _FORWARD_SUPPORTED_KWARGS = frozenset(
         "token_tags",
         "skip_mask_out_condition",
         "prompt_embeds",
+        "prompt_embeds_refined",
         "img_pos_info",
         "audio_pos_info",
         "text_pos_info",
@@ -1007,6 +1009,7 @@ class MiniMaxH3DiTModel(nn.Module):
         refiner_max_seqlen: int,
         seq_len: int,
         device: torch.device,
+        prompt_embeds_refined: bool,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Build packed multimodal embeddings for the TP=1/SP=1 inference path.
 
@@ -1020,12 +1023,18 @@ class MiniMaxH3DiTModel(nn.Module):
         audio_embed, _ = self.audio_patch_proj(audio_rows)
 
         text_rows = text_embeddings_selected.to(device=device, dtype=_BF16_DTYPE)
-        text_embed, _ = self.condition_proj(text_rows)
-        text_embed = self.token_refiner(
-            text_embed,
-            cu_seqlens=refiner_cu_seqlens,
-            max_seqlen=refiner_max_seqlen,
-        )
+        if not prompt_embeds_refined:
+            text_embed, _ = self.condition_proj(text_rows)
+            text_embed = self.token_refiner(
+                text_embed,
+                cu_seqlens=refiner_cu_seqlens,
+                max_seqlen=refiner_max_seqlen,
+            )
+        else:
+            # The condition projection and token refiner are independent of
+            # the denoise timestep.  The pipeline computes this once and
+            # passes the refined rows through the static forward kwargs.
+            text_embed = text_rows
 
         embeddings = torch.zeros((seq_len, self.hidden_size), device=device, dtype=_BF16_DTYPE)
         embeddings.index_add_(0, text_pos, text_embed.to(_BF16_DTYPE)[: text_pos.shape[0]])
@@ -1034,6 +1043,24 @@ class MiniMaxH3DiTModel(nn.Module):
 
         t_emb = self.time_embedder(unique_timesteps)
         return embeddings, t_emb
+
+    @torch.inference_mode()
+    def prepare_prompt_embeddings(
+        self,
+        text_embeddings: torch.Tensor,
+        *,
+        refiner_cu_seqlens: torch.Tensor,
+        refiner_max_seqlen: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Run the timestep-invariant text path once per diffusion request."""
+        text_rows = text_embeddings.to(device=device, dtype=_BF16_DTYPE)
+        text_embed, _ = self.condition_proj(text_rows)
+        return self.token_refiner(
+            text_embed,
+            cu_seqlens=refiner_cu_seqlens.to(device=device, dtype=torch.int32),
+            max_seqlen=int(refiner_max_seqlen),
+        )
 
     def forward(self, **kwargs: Any) -> tuple[torch.Tensor, torch.Tensor]:
         """Packed inference forward.
@@ -1062,6 +1089,7 @@ class MiniMaxH3DiTModel(nn.Module):
         skip_mask_out_condition = bool(kwargs.get("skip_mask_out_condition", False))
 
         text_selected = _required_kwarg(kwargs, "prompt_embeds")
+        prompt_embeds_refined = bool(kwargs.get("prompt_embeds_refined", False))
 
         img_pos = self._pos_ids(_required_kwarg(kwargs, "img_pos_info"), "img_pos_info")
         audio_pos = self._pos_ids(_required_kwarg(kwargs, "audio_pos_info"), "audio_pos_info")
@@ -1089,8 +1117,13 @@ class MiniMaxH3DiTModel(nn.Module):
         if inverse_indices.shape[0] != seq_len:
             raise ValueError(f"inverse_indices must be [{seq_len}], got {list(inverse_indices.shape)}")
         device = x.device
-        # Compute RoPE frequencies over the full packed sequence.
-        rope_freqs = self.rope(img_position_ids).to(device)
+        # RoPE depends only on the packed positions and is reused for every
+        # denoise timestep when supplied by the pipeline.
+        rope_freqs = kwargs.get("rope_freqs")
+        if rope_freqs is None:
+            rope_freqs = self.rope(img_position_ids).to(device)
+        else:
+            rope_freqs = rope_freqs.to(device=device)
 
         decoder_input, t_emb = self._embed(
             x=x,
@@ -1104,6 +1137,7 @@ class MiniMaxH3DiTModel(nn.Module):
             refiner_max_seqlen=refiner_max,
             seq_len=seq_len,
             device=device,
+            prompt_embeds_refined=prompt_embeds_refined,
         )
 
         combined_indices = (inverse_indices * MINIMAX_H3_ADALN_MODALITY_NUM + token_tags.clamp(min=0)).to(device)

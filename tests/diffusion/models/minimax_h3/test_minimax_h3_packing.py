@@ -101,6 +101,60 @@ def test_ref2va_packing_tracks_video_and_audio_update_masks():
     assert packed["cu_seqlens"].tolist() == [0, 30, 64]
 
 
+def test_denoise_branch_reuses_packed_buffers_and_timestep_roles():
+    from vllm_omni.diffusion.models.minimax_h3.denoise_loop import (
+        MiniMaxH3DenoiseBranch,
+    )
+    from vllm_omni.diffusion.models.minimax_h3.packed_sequence import (
+        minimax_h3_packed_sequence_ref2va_blocks,
+    )
+
+    packed = minimax_h3_packed_sequence_ref2va_blocks(
+        text_len=4,
+        latent_t=2,
+        latent_h=4,
+        latent_w=6,
+        audio_t=3,
+        ref_blocks=[
+            {"kind": "image", "latent_h": 4, "latent_w": 4},
+            {"kind": "audio", "ref_audio_t": 2},
+        ],
+    )
+    branch = MiniMaxH3DenoiseBranch(
+        packed=packed,
+        text_embeddings=torch.zeros(4, 5120),
+        token_tags=packed["token_tags"],
+        device=torch.device("cpu"),
+    )
+    video = torch.arange(packed["img_pos"].numel() * 96, dtype=torch.float32).reshape(-1, 96)
+    audio = torch.arange(packed["audio_pos"].numel() * 32, dtype=torch.float32).reshape(-1, 32)
+
+    first = branch.forward_kwargs(
+        video_rows=video,
+        audio_rows=audio,
+        t_video=0.2,
+        t_audio=0.3,
+        imgvid_cond_timestep=0.999,
+        audio_ref_cond_timestep=1.0,
+    )
+    second = branch.forward_kwargs(
+        video_rows=video + 1,
+        audio_rows=audio + 1,
+        t_video=0.4,
+        t_audio=0.5,
+        imgvid_cond_timestep=0.999,
+        audio_ref_cond_timestep=1.0,
+    )
+
+    assert first["x"] is second["x"] is branch.x_base
+    assert first["audio_x"] is second["audio_x"] is branch.audio_x_base
+    torch.testing.assert_close(
+        second["unique_timesteps"],
+        torch.tensor([0.4, 0.5, 0.999, 1.0]),
+    )
+    assert second["inverse_indices"] is branch.timestep_roles_dev
+
+
 def test_condition_noise_is_seeded_and_keeps_clean_anchor_at_timestep_one():
     from vllm_omni.diffusion.models.minimax_h3.condition_noise import (
         minimax_h3_audio_cond_noise_aug_rows,

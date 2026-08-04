@@ -915,11 +915,29 @@ class MiniMaxH3Pipeline(
 
         tags = packed["token_tags"].clone()
         tags[packed["text_pos"]] = text_tags.cpu()
+        text_len = int(text_embeddings.shape[0])
+        refiner_cu_seqlens = torch.tensor(
+            [0, text_len, text_len],
+            dtype=torch.int32,
+            device=self.device,
+        )
+        with torch.inference_mode():
+            refined_prompt_embeddings = self.transformer.prepare_prompt_embeddings(
+                text_embeddings,
+                refiner_cu_seqlens=refiner_cu_seqlens,
+                refiner_max_seqlen=text_len,
+                device=self.device,
+            )
+            rope_freqs = self.transformer.rope(
+                packed["img_position_ids"][None].to(self.device),
+            ).to(self.device)
         branch = MiniMaxH3DenoiseBranch(
             packed=packed,
             text_embeddings=text_embeddings,
             token_tags=tags,
             device=self.device,
+            refined_prompt_embeddings=refined_prompt_embeddings,
+            rope_freqs=rope_freqs,
         )
 
         visual_anchor = visual_condition
