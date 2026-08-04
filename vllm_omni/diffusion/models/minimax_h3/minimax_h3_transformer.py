@@ -559,13 +559,20 @@ class MiniMaxH3Attention(nn.Module):
     ) -> torch.Tensor:
         """Run FA4 with the two fixed-shape Ulysses collectives inline."""
         from vllm_omni.diffusion.attention.backends.utils.fa import flash_attn_varlen_func
-        from vllm_omni.diffusion.distributed.comm import all_to_all_4D
+        from vllm_omni.diffusion.distributed.comm import (
+            all_to_all_4D,
+            all_to_all_5D,
+        )
         from vllm_omni.diffusion.distributed.parallel_state import get_sp_group
 
         group = get_sp_group().ulysses_group
-        q = all_to_all_4D(q.unsqueeze(0), scatter_idx=2, gather_idx=1, group=group)
-        k = all_to_all_4D(k.unsqueeze(0), scatter_idx=2, gather_idx=1, group=group)
-        v = all_to_all_4D(v.unsqueeze(0), scatter_idx=2, gather_idx=1, group=group)
+        # Q, K, and V have identical packed shapes.  Move them through one
+        # 5-D all-to-all instead of launching three independent collectives;
+        # this keeps the same destination-major layout while removing two
+        # NCCL launch/synchronization points from every DiT attention block.
+        qkv = torch.stack((q, k, v), dim=1).unsqueeze(0)
+        qkv = all_to_all_5D(qkv, scatter_idx=3, gather_idx=1, group=group)
+        q, k, v = qkv.unbind(dim=2)
         out = flash_attn_varlen_func(
             q=q.flatten(0, 1),
             k=k.flatten(0, 1),

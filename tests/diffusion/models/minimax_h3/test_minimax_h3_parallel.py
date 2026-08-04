@@ -61,6 +61,16 @@ def test_packed_attention_is_a_regional_compile_boundary():
     assert getattr(MiniMaxH3Attention._run_packed_attention, "_torchdynamo_disable", False)
 
 
+def test_direct_fa4_packs_qkv_before_ulysses_collective():
+    from vllm_omni.diffusion.models.minimax_h3.minimax_h3_transformer import (
+        MiniMaxH3Attention,
+    )
+
+    names = MiniMaxH3Attention._run_direct_fa4.__code__.co_names
+    assert "all_to_all_5D" in names
+    assert names.count("stack") == 1
+
+
 def test_mlp_uses_fused_silu_and_mul_activation():
     from vllm.model_executor.layers.activation import SiluAndMul
 
