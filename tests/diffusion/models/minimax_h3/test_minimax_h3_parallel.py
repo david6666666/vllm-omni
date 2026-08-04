@@ -190,7 +190,8 @@ def test_local_embedding_spans_reassemble_to_full_embedding(monkeypatch):
     for rank in range(4):
         monkeypatch.setattr(h3, "_sequence_parallel_local_span", lambda seq_len, rank=rank: (rank * 2, 2))
         local, _ = model._embed(**common)
-        spans.append(local[rank * 2 : (rank + 1) * 2])
+        assert local.shape == (2, 2)
+        spans.append(local)
 
     torch.testing.assert_close(torch.cat(spans), full)
 

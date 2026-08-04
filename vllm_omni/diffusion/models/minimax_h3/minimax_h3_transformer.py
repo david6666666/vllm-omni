@@ -1012,16 +1012,6 @@ class MiniMaxH3DiTModel(nn.Module):
     ]
     _sp_plan = {
         "sp_prepare": {
-            0: SequenceParallelInput(
-                split_dim=0,
-                expected_dims=2,
-                split_output=True,
-            ),
-            1: SequenceParallelInput(
-                split_dim=0,
-                expected_dims=2,
-                split_output=True,
-            ),
             2: SequenceParallelInput(
                 split_dim=0,
                 expected_dims=1,
@@ -1237,11 +1227,15 @@ class MiniMaxH3DiTModel(nn.Module):
             img_row_mask = (img_pos >= local_start) & (img_pos < local_end)
             audio_row_mask = (audio_pos >= local_start) & (audio_pos < local_end)
             text_row_mask = (text_pos >= local_start) & (text_pos < local_end)
-            img_rows = img_pos[img_row_mask]
-            audio_rows = audio_pos[audio_row_mask]
+            img_global_rows = img_pos[img_row_mask]
+            audio_global_rows = audio_pos[audio_row_mask]
+            img_rows = img_global_rows - local_start
+            audio_rows = audio_global_rows - local_start
             text_rows_idx = torch.nonzero(text_row_mask, as_tuple=False).view(-1)
-            text_rows_pos = text_pos[text_row_mask]
+            text_rows_pos = text_pos[text_row_mask] - local_start
         else:
+            img_global_rows = img_pos
+            audio_global_rows = audio_pos
             img_rows = img_pos
             audio_rows = audio_pos
             text_rows_idx = None
@@ -1249,9 +1243,9 @@ class MiniMaxH3DiTModel(nn.Module):
 
         # Latent embedders stay fp32 in and out; their outputs are cast to the
         # bf16 sequence dtype only during indexed scattering.
-        x_rows = x.view(-1, x.shape[-1]).index_select(0, img_rows).to(_FP32_DTYPE)
+        x_rows = x.view(-1, x.shape[-1]).index_select(0, img_global_rows).to(_FP32_DTYPE)
         video_embed, _ = self.video_patch_proj(x_rows)
-        audio_input_rows = audio_x.view(-1, audio_x.shape[-1]).index_select(0, audio_rows).to(_FP32_DTYPE)
+        audio_input_rows = audio_x.view(-1, audio_x.shape[-1]).index_select(0, audio_global_rows).to(_FP32_DTYPE)
         audio_embed, _ = self.audio_patch_proj(audio_input_rows)
 
         text_rows = text_embeddings_selected.to(device=device, dtype=_BF16_DTYPE)
@@ -1272,10 +1266,11 @@ class MiniMaxH3DiTModel(nn.Module):
         # Every packed row has exactly one owner (text, image, audio, or
         # alignment padding), so index_copy avoids the read/modify/write
         # accumulation used by the old full-sequence index_add path. Under
-        # strict Ulysses, only this rank's span is initialized; sp_prepare
-        # immediately shards that span and never observes the other rows.
-        embeddings = torch.empty((seq_len, self.hidden_size), device=device, dtype=_BF16_DTYPE)
-        embeddings.narrow(0, local_start, local_len).zero_()
+        # strict Ulysses, keep only this rank's span resident; the previous
+        # path allocated a full [S, H] buffer and immediately discarded the
+        # other ranks' rows at the SP boundary.
+        embeddings = torch.empty((local_len, self.hidden_size), device=device, dtype=_BF16_DTYPE)
+        embeddings.zero_()
         if local_only:
             text_embed = text_embed.index_select(0, text_rows_idx)
         embeddings.index_copy_(0, text_rows_pos, text_embed.to(_BF16_DTYPE))
@@ -1416,7 +1411,8 @@ class MiniMaxH3DiTModel(nn.Module):
             block_attn_mask = kwargs["packed_attn_mask"]
         else:
             block_attn_mask = _packed_attention_mask(cu_seqlens)
-        block_rope = rope_freqs
+        local_start, local_len = _sequence_parallel_local_span(seq_len)
+        block_rope = rope_freqs.narrow(0, local_start, local_len)
         block_combined = combined_indices
 
         hidden, block_rope, block_combined = self.sp_prepare(
