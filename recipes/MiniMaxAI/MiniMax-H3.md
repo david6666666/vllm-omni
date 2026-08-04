@@ -103,6 +103,7 @@ vllm serve "${MODEL}" \
   --num-gpus 4 \
   --usp 4 \
   --ring 1 \
+  --text-encoder-tp-size 4 \
   --vae-patch-parallel-size 4 \
   --vae-parallel-mode tile \
   --vae-use-tiling \
@@ -119,10 +120,11 @@ steady-state latency. H3 is CFG-distilled, so `--cfg-parallel-size` must remain
 
 The Qwen3-VL text encoder (~51.5 GB in BF16 for the retained 50 layers) is by
 default fully resident on the DiT main rank.  On multi-GPU no-offload runs that
-rank becomes the peak-memory hotspot.  Add `--text-encoder-tp-size N` to shard
-the encoder across the first `N` DiT ranks (the encoder is implemented with
-vLLM-style tensor-parallel layers and runs with distributed collectives over
-its own encoder process group):
+rank becomes the peak-memory hotspot.  The four-GPU speed command above uses
+`--text-encoder-tp-size 4`; use another valid `N` when the GPU topology or
+memory budget requires it.  The flag shards the encoder across the first `N`
+DiT ranks (the encoder is implemented with vLLM-style tensor-parallel layers
+and runs with distributed collectives over its own encoder process group):
 
 ```bash
 export MODEL="${MODEL_ROOT}/FL2VA"
