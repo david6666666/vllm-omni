@@ -161,12 +161,19 @@ def all_to_all_5D(
         else:
             output = input_t
 
-        # if scattering the seq-dim, transpose the heads back to the original dimension
+        # The diffusion FA4 path always uses batch one.  The collective output
+        # is already laid out as [destination, local_sequence, 3, batch,
+        # local_heads, head_dim], so folding the singleton batch into the
+        # leading dimension is a view.  The generic transpose below used to
+        # materialize an additional full QKV buffer before the caller split
+        # Q/K/V and made their required contiguous copies.
+        if bs == 1:
+            return output.reshape(1, seqlen, 3, shard_hc, hs)
+
+        # General batched callers retain the original destination-major to
+        # batch-major materialization semantics.
         output = output.reshape(seqlen, 3, bs, shard_hc, hs)
-
-        # (seq_len, 3, bs, hc/P, hs) -trans-> (bs, seq_len, 3, hc/P, hs)
         output = output.transpose(0, 2).transpose(1, 2).contiguous()
-
         return output.reshape(bs, seqlen, 3, shard_hc, hs).contiguous()
     elif scatter_idx == 1 and gather_idx == 3:
         # input (torch.tensor): a tensor sharded along dim 1 (bs, seqlen, hc/P, hs) output: (bs, seqlen/P, hc, hs)
