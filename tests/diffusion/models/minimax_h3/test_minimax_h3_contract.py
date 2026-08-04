@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 from multiprocessing.reduction import ForkingPickler
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -165,6 +166,43 @@ def test_reference_video_shape_uses_h3_adapt_shape_policy():
 
     assert _reference_video_shape(1280, 720) == (1344, 768)
     assert _reference_video_shape(3844, 2160) == (1344, 768)
+
+
+def test_reference_video_transcode_cache_reuses_completed_mp4(tmp_path, monkeypatch):
+    from vllm_omni.diffusion.models.minimax_h3 import reference_video
+
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"fixture")
+    calls = []
+
+    monkeypatch.setenv("VLLM_OMNI_MINIMAX_H3_REFERENCE_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr(
+        reference_video,
+        "_probe_video",
+        lambda _path: {"width": 1280, "height": 720, "fps": 24.0, "frame_count": 8},
+    )
+    monkeypatch.setattr(reference_video, "_has_audio", lambda _path: True)
+
+    def fake_transcode(_source, *, output_path, **_kwargs):
+        calls.append(output_path)
+        Path(output_path).write_bytes(b"prepared")
+        return output_path
+
+    monkeypatch.setattr(reference_video, "_transcode_reference_video", fake_transcode)
+    first = reference_video.prepare_reference_videos(
+        str(source),
+        target_frame_count=8,
+        workdir=str(tmp_path / "request-1"),
+    )
+    second = reference_video.prepare_reference_videos(
+        str(source),
+        target_frame_count=8,
+        workdir=str(tmp_path / "request-2"),
+    )
+
+    assert len(calls) == 1
+    assert first[0]["prepared_path"] == second[0]["prepared_path"]
+    assert Path(first[0]["prepared_path"]).read_bytes() == b"prepared"
 
 
 def test_reference_video_sampling_decodes_once_and_writes_reusable_cache(tmp_path, monkeypatch):

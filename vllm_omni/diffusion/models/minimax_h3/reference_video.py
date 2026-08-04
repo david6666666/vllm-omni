@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
 import subprocess
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -82,6 +84,20 @@ def _has_audio(path: str) -> bool:
     return bool(json.loads(result.stdout).get("streams") or [])
 
 
+@lru_cache(maxsize=16)
+def _probe_video_cached(path: str, mtime_ns: int, file_size: int) -> dict[str, Any]:
+    """Reuse ffprobe metadata while the source file remains unchanged."""
+    del mtime_ns, file_size
+    return _probe_video(path)
+
+
+@lru_cache(maxsize=16)
+def _has_audio_cached(path: str, mtime_ns: int, file_size: int) -> bool:
+    """Reuse the audio-stream probe while the source file remains unchanged."""
+    del mtime_ns, file_size
+    return _has_audio(path)
+
+
 def _reference_video_shape(width: int, height: int) -> tuple[int, int]:
     ratio = float(width) / float(height)
     if not 0.25 <= ratio <= 4.0:
@@ -110,8 +126,9 @@ def _transcode_reference_video(
     target_height: int,
     target_frame_count: int,
     workdir: str,
+    output_path: str | None = None,
 ) -> str:
-    output = str(Path(workdir) / "prepared.mp4")
+    output = output_path or str(Path(workdir) / "prepared.mp4")
     subprocess.run(
         [
             "ffmpeg",
@@ -140,6 +157,78 @@ def _transcode_reference_video(
     return output
 
 
+def _reference_cache_root() -> Path:
+    configured = os.environ.get("VLLM_OMNI_MINIMAX_H3_REFERENCE_CACHE_DIR")
+    if configured:
+        return Path(configured)
+    return Path(tempfile.gettempdir()) / "vllm_omni_minimax_h3_reference"
+
+
+def _reference_cache_key(
+    source: str,
+    *,
+    target_width: int,
+    target_height: int,
+    target_frame_count: int,
+) -> str:
+    stat = os.stat(source)
+    identity = "|".join(
+        (
+            str(Path(source).resolve()),
+            str(stat.st_mtime_ns),
+            str(stat.st_size),
+            str(target_width),
+            str(target_height),
+            str(target_frame_count),
+        )
+    )
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _prepare_cached_reference_video(
+    source: str,
+    *,
+    target_width: int,
+    target_height: int,
+    target_frame_count: int,
+) -> str:
+    """Transcode a source once and atomically reuse it across requests."""
+    cache_dir = _reference_cache_root() / _reference_cache_key(
+        source,
+        target_width=target_width,
+        target_height=target_height,
+        target_frame_count=target_frame_count,
+    )
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    prepared = cache_dir / "prepared.mp4"
+    if prepared.is_file() and prepared.stat().st_size > 0:
+        return str(prepared)
+
+    # Use a unique temporary target so simultaneous requests never observe a
+    # partially written MP4.  The completed file is published with one atomic
+    # rename; a racing request can safely discard its redundant transcode.
+    fd, temporary = tempfile.mkstemp(prefix=".prepared-", suffix=".mp4", dir=cache_dir)
+    os.close(fd)
+    try:
+        _transcode_reference_video(
+            source,
+            target_width=target_width,
+            target_height=target_height,
+            target_frame_count=target_frame_count,
+            workdir=str(cache_dir),
+            output_path=temporary,
+        )
+        if not Path(temporary).is_file() or Path(temporary).stat().st_size <= 0:
+            raise RuntimeError(f"reference video transcode produced no output: {source}")
+        os.replace(temporary, prepared)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+    return str(prepared)
+
+
 def prepare_reference_videos(
     values: Any,
     *,
@@ -157,22 +246,20 @@ def prepare_reference_videos(
                 f"MiniMax H3 multi-video Ref2VA currently requires file paths, got item {index}: {type(value)!r}"
             )
         source = str(value)
-        meta = _probe_video(source)
+        source_stat = os.stat(source)
+        meta = _probe_video_cached(source, source_stat.st_mtime_ns, source_stat.st_size)
         width, height = _reference_video_shape(meta["width"], meta["height"])
-        item_workdir = Path(workdir) / f"video_{index}"
-        item_workdir.mkdir(parents=True)
-        prepared_path = _transcode_reference_video(
+        prepared_path = _prepare_cached_reference_video(
             source,
             target_width=width,
             target_height=height,
             target_frame_count=target_frame_count,
-            workdir=str(item_workdir),
         )
         prepared.append(
             {
                 "original_path": source,
                 "prepared_path": prepared_path,
-                "input_has_audio": _has_audio(source),
+                "input_has_audio": _has_audio_cached(source, source_stat.st_mtime_ns, source_stat.st_size),
                 "width": width,
                 "height": height,
             }
