@@ -164,6 +164,9 @@ class MiniMaxH3VideoVAE(nn.Module, DistributedVaeMixin):
         self.remote.eval().to(device=device, dtype=torch.float32)
         self.model = self.remote.model
         _install_fast_tiled_collective(self.model)
+        # Batch the independent local tiles so the decoder can keep its GEMMs
+        # saturated instead of launching one kernel sequence per tile.
+        self.model.stack_tiling = True
         self.use_tiling = True
         self.use_slicing = False
         self.parallel_size = 1
