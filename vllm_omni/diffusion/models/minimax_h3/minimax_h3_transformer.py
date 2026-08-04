@@ -248,6 +248,23 @@ class MiniMaxH3Rope(nn.Module):
         half = torch.cat((t_f, h_f, w_f), dim=-1)  # [S, 48]
         return torch.cat((half, half), dim=-1)  # [S, 96]
 
+    def build_cache(
+        self,
+        img_position_ids: torch.Tensor,
+        *,
+        dtype: torch.dtype = _BF16_DTYPE,
+    ) -> torch.Tensor:
+        """Build the request-static cosine/sine table used by DiT attention.
+
+        The packed positions do not change during denoising.  Keeping the
+        trigonometric conversion here lets the pipeline build it once per
+        request instead of repeating ``cos``/``sin`` for every DiT step.
+        The returned layout is ``[cos, sin]`` and is understood by
+        :func:`_apply_rope`.
+        """
+        freqs = self.forward(img_position_ids)
+        return torch.cat((torch.cos(freqs), torch.sin(freqs)), dim=-1).to(dtype)
+
 
 def _apply_rope(x: torch.Tensor, freqs: torch.Tensor) -> torch.Tensor:
     """Rotate the first rot_dim head dims; pass the rest through.
@@ -1251,12 +1268,13 @@ class MiniMaxH3DiTModel(nn.Module):
         # denoise timestep when supplied by the pipeline.
         rope_freqs = kwargs.get("rope_freqs")
         if rope_freqs is None:
-            rope_freqs = self.rope(img_position_ids).to(device)
+            rope_freqs = self.rope.build_cache(img_position_ids).to(device)
         else:
             rope_freqs = rope_freqs.to(device=device)
-        # RoPE positions are timestep invariant.  Precompute the bf16
-        # trigonometric tables once per packed forward instead of launching
-        # cos/sin kernels independently in every one of the 50 DiT blocks.
+        # Keep accepting raw frequencies for direct callers/tests.  The
+        # serving pipeline passes the request-static cache produced by
+        # ``MiniMaxH3Rope.build_cache`` and therefore takes this branch only
+        # outside the normal serving path.
         if rope_freqs.shape[-1] <= self.arch.attention_head_dim:
             rope_freqs = torch.cat(
                 (

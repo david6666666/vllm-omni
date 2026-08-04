@@ -61,6 +61,30 @@ def test_packed_attention_is_a_regional_compile_boundary():
     assert getattr(MiniMaxH3Attention._run_packed_attention, "_torchdynamo_disable", False)
 
 
+def test_rope_build_cache_matches_raw_frequency_path():
+    from vllm_omni.diffusion.models.minimax_h3.minimax_h3_transformer import (
+        MiniMaxH3Rope,
+        _apply_rope,
+    )
+
+    rope = MiniMaxH3Rope(inv_freq_len=2)
+    with torch.no_grad():
+        rope.inv_freq.copy_(torch.tensor([1.0, 0.25]))
+    positions = torch.tensor([[[0, 1, 2], [1, 2, 3]]], dtype=torch.long)
+    raw = rope(positions)
+    cache = rope.build_cache(positions)
+
+    assert cache.shape == (2, 2 * raw.shape[-1])
+    assert cache.dtype == torch.bfloat16
+    x = torch.randn(2, 1, 16, dtype=torch.bfloat16)
+    torch.testing.assert_close(
+        _apply_rope(x, raw),
+        _apply_rope(x, cache),
+        atol=0,
+        rtol=0,
+    )
+
+
 @pytest.mark.parametrize(
     ("tp_size", "message"),
     [

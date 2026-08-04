@@ -947,9 +947,9 @@ class MiniMaxH3Pipeline(
                 refiner_max_seqlen=text_len,
                 device=self.device,
             )
-            rope_freqs = self.transformer.rope(
+            rope_freqs = self.transformer.rope.build_cache(
                 packed["img_position_ids"][None].to(self.device),
-            ).to(self.device)
+            )
         branch = MiniMaxH3DenoiseBranch(
             packed=packed,
             text_embeddings=text_embeddings,
