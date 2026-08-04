@@ -94,6 +94,8 @@ def test_fp8_scope_and_prefix_propagation(monkeypatch):
         _small_od_config(),
         quant_config=fp8_config,
     )
+    assert model.time_embedder._frequency_cache.shape == (2,)
+    assert "_frequency_cache" in model.time_embedder._non_persistent_buffers_set
     linears = {module.prefix: module.quant_config for module in model.modules() if isinstance(module, _FakeLinear)}
 
     quantized = {

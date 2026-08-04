@@ -297,6 +297,12 @@ class MiniMaxH3TimeEmbedder(nn.Module):
     ) -> None:
         super().__init__()
         self.frequency_embedding_size = arch.timestep_input_dim
+        half = self.frequency_embedding_size // 2
+        self.register_buffer(
+            "_frequency_cache",
+            torch.exp(-math.log(10000.0) * torch.arange(half, dtype=_FP32_DTYPE) / half),
+            persistent=False,
+        )
         self.proj_in = ColumnParallelLinear(
             arch.timestep_input_dim,
             arch.time_embed_hidden_size,
@@ -322,8 +328,12 @@ class MiniMaxH3TimeEmbedder(nn.Module):
         The sinusoidal embedding stays fp32 throughout and concatenates cosine
         values before sine values.
         """
-        half = self.frequency_embedding_size // 2
-        freqs = torch.exp(-math.log(10000.0) * torch.arange(half, dtype=_FP32_DTYPE, device=t.device) / half)
+        freqs = self._frequency_cache
+        if freqs.device != t.device:
+            # The normal serving path moves the non-persistent buffer with the
+            # module.  Keep a defensive fallback for direct callers that pass
+            # a tensor on a different device.
+            freqs = freqs.to(device=t.device)
         args = t.to(_FP32_DTYPE)[:, None] * freqs[None]
         t_freq = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
         hidden, _ = self.proj_in(t_freq)
