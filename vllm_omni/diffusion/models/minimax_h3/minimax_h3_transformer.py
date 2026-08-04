@@ -35,6 +35,8 @@ from vllm_omni.diffusion.distributed.sp_plan import (
     SequenceParallelOutput,
 )
 
+from .fused_ops import indexed_gate_bf16_, indexed_scale_shift_bf16_
+
 if TYPE_CHECKING:
     from vllm.model_executor.layers.quantization.base_config import (
         QuantizationConfig,
@@ -195,6 +197,8 @@ def _modulate_scale_shift(
     dtype: torch.dtype,
 ) -> torch.Tensor:
     # Apply per-index affine modulation: x * (1 + scale[idx]) + shift[idx].
+    if indexed_scale_shift_bf16_(x, shift, scale, indices):
+        return x
     return (x * (1.0 + scale.index_select(0, indices)) + shift.index_select(0, indices)).to(dtype)
 
 
@@ -207,6 +211,8 @@ def _modulate_gate(
     dtype: torch.dtype,
 ) -> torch.Tensor:
     # Apply the per-index gated residual: x + gate[idx] * other.
+    if indexed_gate_bf16_(x, gate, other, indices):
+        return x
     return (x + gate.index_select(0, indices) * other).to(dtype)
 
 

@@ -72,6 +72,28 @@ def test_mlp_uses_fused_silu_and_mul_activation():
     assert isinstance(SiluAndMul(), SiluAndMul)
 
 
+def test_indexed_modulation_falls_back_to_reference_math_on_cpu():
+    from vllm_omni.diffusion.models.minimax_h3 import minimax_h3_transformer as h3
+    from vllm_omni.diffusion.models.minimax_h3.fused_ops import (
+        indexed_gate_bf16_,
+        indexed_scale_shift_bf16_,
+    )
+
+    x = torch.ones(3, 4, dtype=torch.bfloat16)
+    other = torch.full_like(x, 2)
+    scale = torch.arange(8, dtype=torch.bfloat16).reshape(2, 4)
+    shift = torch.full((2, 4), 0.5, dtype=torch.bfloat16)
+    indices = torch.tensor([0, 1, 0], dtype=torch.long)
+    expected = x * (1 + scale.index_select(0, indices)) + shift.index_select(0, indices)
+    assert not indexed_scale_shift_bf16_(x, shift, scale, indices)
+    torch.testing.assert_close(h3._modulate_scale_shift(x, shift, scale, indices, dtype=torch.bfloat16), expected)
+
+    gate = torch.full((2, 4), 0.25, dtype=torch.bfloat16)
+    expected_gate = expected + gate.index_select(0, indices) * other
+    assert not indexed_gate_bf16_(x, gate, other, indices)
+    torch.testing.assert_close(h3._modulate_gate(expected, gate, other, indices, dtype=torch.bfloat16), expected_gate)
+
+
 def test_rope_build_cache_matches_raw_frequency_path():
     from vllm_omni.diffusion.models.minimax_h3.minimax_h3_transformer import (
         MiniMaxH3Rope,
