@@ -53,6 +53,55 @@ def _load_remote_component(
     return component_cls.from_pretrained(component_path)
 
 
+def _install_fast_tiled_collective(model: nn.Module) -> None:
+    """Use a fixed-shape gather when native VAE tiles have one shape.
+
+    H3's configured 256-pixel tiles are equal-sized after alignment.  The
+    bundled remote implementation uses a variable-shape gather for every
+    encode/decode, which first all-gathers shape tensors and pads each rank.
+    Keep that path as a fallback for unusual inputs, but avoid the metadata
+    collective for the normal recipe.
+    """
+    original = getattr(model, "_all_gather_tiled_results", None)
+    if original is None:
+        return
+
+    package = model.__class__.__module__.rsplit(".", 1)[0]
+    parallel_module = importlib.import_module(f"{package}.parallel")
+
+    def fast_all_gather_tiled_results(tasks, num_tiles):
+        if not tasks:
+            return original(tasks, num_tiles)
+        shapes = {tuple(task.shape) for task in tasks}
+        if len(shapes) != 1:
+            return original(tasks, num_tiles)
+
+        state = parallel_module.get_parallel_state()
+        group = state["sp_process_group"]
+        sp_size = int(state["sp_size"])
+        sp_rank = int(state["sp_rank"])
+        stacked = torch.stack(tasks, dim=0).contiguous()
+        max_tasks = (int(num_tiles) + sp_size - 1) // sp_size
+        if stacked.shape[0] < max_tasks:
+            padding = torch.zeros(
+                (max_tasks - stacked.shape[0], *stacked.shape[1:]),
+                dtype=stacked.dtype,
+                device=stacked.device,
+            )
+            stacked = torch.cat((stacked, padding), dim=0)
+        gathered = [torch.empty_like(stacked) for _ in range(sp_size)]
+        dist.all_gather(gathered, stacked, group=group)
+
+        results = [None] * int(num_tiles)
+        for rank, rank_tensors in enumerate(gathered):
+            count = max(0, min(max_tasks, (int(num_tiles) - rank + sp_size - 1) // sp_size))
+            for index in range(count):
+                results[index * sp_size + rank] = rank_tensors[index]
+        return results
+
+    model._all_gather_tiled_results = fast_all_gather_tiled_results
+
+
 class _AudioVAEDeterminismContext(AbstractContextManager):
     def __enter__(self):
         backends = torch.backends
@@ -114,6 +163,7 @@ class MiniMaxH3VideoVAE(nn.Module, DistributedVaeMixin):
         # checkpoint through FP16; decode still runs under FP16 autocast.
         self.remote.eval().to(device=device, dtype=torch.float32)
         self.model = self.remote.model
+        _install_fast_tiled_collective(self.model)
         self.use_tiling = True
         self.use_slicing = False
         self.parallel_size = 1
