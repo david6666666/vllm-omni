@@ -410,6 +410,38 @@ def test_video_vae_encode_uses_configured_parallel_tiling():
     assert shape == (2, 2, 2)
 
 
+def test_video_vae_encode_reuses_cached_latent():
+    from vllm_omni.diffusion.models.minimax_h3.vae import MiniMaxH3VideoVAE
+
+    class FakeModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones(1))
+            self.parallel_tiling = True
+            self.encode_calls = 0
+
+        def encode_videos(self, frames, *, use_fp16_latent):
+            del frames, use_fp16_latent
+            self.encode_calls += 1
+            return [torch.ones(1, 1, 2, 2, 2)]
+
+    video_vae = object.__new__(MiniMaxH3VideoVAE)
+    torch.nn.Module.__init__(video_vae)
+    video_vae.model = FakeModel()
+    video_vae.config_dict = {
+        "latent_channels": 1,
+        "latents_mean": [0.0],
+        "latents_std": [1.0],
+    }
+
+    first = video_vae.encode_video("frames", cache_key="prepared.mp4")
+    second = video_vae.encode_video("frames", cache_key="prepared.mp4")
+
+    assert video_vae.model.encode_calls == 1
+    assert first[1] == second[1] == (2, 2, 2)
+    torch.testing.assert_close(first[0], second[0])
+
+
 def test_distributed_video_vae_encodes_references_sequentially(monkeypatch):
     from vllm_omni.diffusion.models.minimax_h3 import MiniMaxH3Pipeline
     from vllm_omni.diffusion.models.minimax_h3 import (
@@ -428,7 +460,7 @@ def test_distributed_video_vae_encodes_references_sequentially(monkeypatch):
         def is_distributed_enabled(self):
             return True
 
-        def encode_video(self, frames):
+        def encode_video(self, frames, *, cache_key=None):
             self.calls.append(frames)
             index = len(self.calls)
             return torch.full((1, 2), index, dtype=torch.float32), (index, 2, 3)

@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
+from collections import OrderedDict
 from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
@@ -170,6 +172,8 @@ class MiniMaxH3VideoVAE(nn.Module, DistributedVaeMixin):
         self.use_tiling = True
         self.use_slicing = False
         self.parallel_size = 1
+        self._image_latent_cache: OrderedDict[str, torch.Tensor] = OrderedDict()
+        self._video_latent_cache: OrderedDict[str, tuple[torch.Tensor, tuple[int, int, int]]] = OrderedDict()
 
     def set_parallel_size(
         self,
@@ -212,7 +216,18 @@ class MiniMaxH3VideoVAE(nn.Module, DistributedVaeMixin):
         return self.parallel_size > 1 and dist.is_initialized()
 
     @torch.inference_mode()
-    def encode_image(self, image: Image.Image) -> torch.Tensor:
+    def encode_image(self, image: Image.Image, *, cache_key: str | None = None) -> torch.Tensor:
+        if cache_key is None:
+            digest = hashlib.sha256(image.tobytes()).hexdigest()
+            cache_key = f"{image.mode}:{image.size}:{digest}"
+        image_cache = getattr(self, "_image_latent_cache", None)
+        if image_cache is None:
+            image_cache = self._image_latent_cache = OrderedDict()
+        cached = image_cache.get(cache_key)
+        if cached is not None:
+            image_cache.move_to_end(cache_key)
+            return cached
+
         previous_parallel = self.model.parallel_tiling
         self.model.parallel_tiling = False
         parameter = next(self.parameters())
@@ -249,16 +264,32 @@ class MiniMaxH3VideoVAE(nn.Module, DistributedVaeMixin):
         std = torch.tensor(
             self.config_dict["latents_std"],
         ).view(1, channels, 1, 1, 1)
-        return minimax_h3_patchify_video_latent(
+        rows = minimax_h3_patchify_video_latent(
             (latent - mean) / std,
             patch_size=(1, 2, 2),
         ).float()
+        image_cache[cache_key] = rows
+        image_cache.move_to_end(cache_key)
+        while len(image_cache) > 8:
+            image_cache.popitem(last=False)
+        return rows
 
     @torch.inference_mode()
     def encode_video(
         self,
         frames: Any,
+        *,
+        cache_key: str | None = None,
     ) -> tuple[torch.Tensor, tuple[int, int, int]]:
+        video_cache = getattr(self, "_video_latent_cache", None)
+        if video_cache is None:
+            video_cache = self._video_latent_cache = OrderedDict()
+        if cache_key is not None:
+            cached = video_cache.get(cache_key)
+            if cached is not None:
+                video_cache.move_to_end(cache_key)
+                return cached
+
         parameter = next(self.parameters())
         previous_dtype = parameter.dtype
         if previous_dtype != torch.float32:
@@ -299,7 +330,13 @@ class MiniMaxH3VideoVAE(nn.Module, DistributedVaeMixin):
             (latent - mean) / std,
             patch_size=(1, 2, 2),
         ).float()
-        return rows, shape
+        result = (rows, shape)
+        if cache_key is not None:
+            video_cache[cache_key] = result
+            video_cache.move_to_end(cache_key)
+            while len(video_cache) > 4:
+                video_cache.popitem(last=False)
+        return result
 
     @torch.inference_mode()
     def decode_latent(self, latent: torch.Tensor) -> torch.Tensor:

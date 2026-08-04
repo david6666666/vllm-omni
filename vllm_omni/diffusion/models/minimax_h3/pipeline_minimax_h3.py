@@ -780,7 +780,8 @@ class MiniMaxH3Pipeline(
                 self.video_vae.encode_video(
                     item.get("decoded_frames")
                     if item.get("decoded_frames") is not None
-                    else load_video_frames(item.get("decoded_frames_path", item["prepared_path"]))
+                    else load_video_frames(item.get("decoded_frames_path", item["prepared_path"])),
+                    cache_key=item["prepared_path"],
                 )
                 for item in prepared_videos
             ]
