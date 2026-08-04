@@ -750,10 +750,11 @@ class MiniMaxH3AdalnProj(nn.Module):
             prefix=f"{prefix}.linear",
         )
 
-    def forward(self, t_emb: torch.Tensor) -> tuple[torch.Tensor, ...]:
+    def forward(self, t_emb: torch.Tensor, *, preactivated: bool = False) -> tuple[torch.Tensor, ...]:
         """t_emb: [M, t_dim] -> expand_ratio tensors of [M*modality_num, H]."""
-        x = nn.functional.silu(t_emb)
-        x, _ = self.linear(x.to(_BF16_DTYPE))
+        if not preactivated:
+            t_emb = nn.functional.silu(t_emb).to(_BF16_DTYPE)
+        x, _ = self.linear(t_emb)
         m = x.shape[0]
         x = x.view(m * self.modality_num, self.expand_ratio * self.hidden_size)
         return tuple(x.chunk(self.expand_ratio, dim=-1))
@@ -888,6 +889,7 @@ class MiniMaxH3DiTBlock(nn.Module):
         max_seqlen: int,
         attn_mask: torch.Tensor | None = None,
         sp_seq_lens: list[int] | None = None,
+        t_emb_preactivated: bool = False,
     ) -> torch.Tensor:
         """x: [T, H]; t_emb: [M, t_dim]; combined_indices: [T]
         (= inverse_indices * modality_num + token_tags.clamp(min=0)).
@@ -903,7 +905,7 @@ class MiniMaxH3DiTBlock(nn.Module):
             shift_mlp,
             scale_mlp,
             gate_mlp,
-        ) = self.adaln_proj(t_emb)
+        ) = self.adaln_proj(t_emb, preactivated=t_emb_preactivated)
 
         residual = x
         h = self.norm1(x)
@@ -969,13 +971,14 @@ class MiniMaxH3FinalLayer(nn.Module):
         *,
         t_emb: torch.Tensor,
         inverse_indices: torch.Tensor,
+        t_emb_preactivated: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """x: [T, H] -> (video_logits [T, 96] fp32, audio_logits [T, 32] fp32).
 
         Apply single-modality shift/scale AdaLN to the final normalized
         activations, cast to fp32, then apply both output heads to all rows.
         """
-        shift, scale = self.adaln_proj(t_emb)
+        shift, scale = self.adaln_proj(t_emb, preactivated=t_emb_preactivated)
         h = self.norm(x)
         h = _modulate_scale_shift(h, shift, scale, inverse_indices, dtype=_BF16_DTYPE)
         # Preserve full precision through both final output projections.
@@ -1423,6 +1426,11 @@ class MiniMaxH3DiTModel(nn.Module):
         inverse_indices = inverse_indices.to(device)
 
         hidden = decoder_input
+        # All 50 blocks and the final layer consume the same timestep
+        # embedding.  Move the fp32 SiLU and BF16 cast out of the repeated
+        # block loop; the per-block projections now receive the exact tensor
+        # they would have produced independently.
+        adaln_input = nn.functional.silu(t_emb).to(_BF16_DTYPE)
         cu_seqlens = cu_seqlens.to(device)
         if "packed_attn_mask" in kwargs:
             block_attn_mask = kwargs["packed_attn_mask"]
@@ -1440,7 +1448,8 @@ class MiniMaxH3DiTModel(nn.Module):
         for block in self.blocks:
             hidden = block(
                 hidden,
-                t_emb=t_emb,
+                t_emb=adaln_input,
+                t_emb_preactivated=True,
                 combined_indices=block_combined,
                 rope_freqs=block_rope,
                 cu_seqlens=cu_seqlens,
@@ -1463,8 +1472,9 @@ class MiniMaxH3DiTModel(nn.Module):
         )
         video_logits, audio_logits = self.final_layer(
             hidden,
-            t_emb=t_emb,
+            t_emb=adaln_input,
             inverse_indices=local_inverse_indices,
+            t_emb_preactivated=True,
         )
         compact_logits = torch.cat((video_logits, audio_logits), dim=-1)
         compact_logits = self.sp_gather(compact_logits)
