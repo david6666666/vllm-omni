@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+import os
+import tempfile
 from collections import deque
 from io import BytesIO
 from typing import Any, Literal
@@ -31,10 +33,17 @@ from vllm_omni.entrypoints.openai.protocol.videos import (
 class VideoFrames(list[Image.Image]):
     """Decoded video frames plus source metadata."""
 
-    def __init__(self, frames: list[Image.Image] | None = None, *, fps: float | None = None) -> None:
+    def __init__(
+        self,
+        frames: list[Image.Image] | None = None,
+        *,
+        fps: float | None = None,
+        source_path: str | None = None,
+    ) -> None:
         super().__init__(frames or [])
         self.fps = fps
         self.frame_rate = fps
+        self.source_path = source_path
 
 
 def positive_float(value: Any) -> float | None:
@@ -64,6 +73,7 @@ def _decode_video_bytes(
     source: str,
     max_frames: int | None = None,
     keep: Literal["first", "last"] = "first",
+    source_path: str | None = None,
 ) -> VideoFrames:
     try:
         import av
@@ -104,7 +114,7 @@ def _decode_video_bytes(
         frames = list(tail_frames)
     if not frames:
         raise InvalidInputReferenceError(f"Invalid {source}: provided content is not a valid video.")
-    return VideoFrames(frames, fps=fps)
+    return VideoFrames(frames, fps=fps, source_path=source_path)
 
 
 def _decode_media_bytes(
@@ -207,12 +217,26 @@ async def decode_video_url(
                 raise InvalidInputReferenceError(
                     "Invalid video_reference.video_url: failed to download video."
                 ) from exc
-        return _decode_video_bytes(
-            response.content,
-            source="video_reference.video_url",
-            max_frames=max_frames,
-            keep=keep,
-        )
+        path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+        try:
+            with open(path, "wb") as output:
+                output.write(response.content)
+        except Exception:
+            if os.path.exists(path):
+                os.unlink(path)
+            raise
+        try:
+            return _decode_video_bytes(
+                response.content,
+                source="video_reference.video_url",
+                max_frames=max_frames,
+                keep=keep,
+                source_path=path,
+            )
+        except Exception:
+            if os.path.exists(path):
+                os.unlink(path)
+            raise
 
     raise InvalidInputReferenceError("Invalid video_reference.video_url: must be an http(s) URL or data URL.")
 

@@ -35,7 +35,10 @@ def _probe_video(path: str) -> dict[str, Any]:
             "v:0",
             "-count_frames",
             "-show_entries",
-            ("stream=width,height,r_frame_rate,nb_read_frames,nb_frames,sample_aspect_ratio:stream_tags=rotate"),
+            (
+                "stream=width,height,r_frame_rate,nb_read_frames,nb_frames,duration,sample_aspect_ratio:"
+                "stream_tags=rotate:format=duration"
+            ),
             "-of",
             "json",
             path,
@@ -52,11 +55,20 @@ def _probe_video(path: str) -> dict[str, Any]:
     raw_count = stream.get("nb_read_frames") or stream.get("nb_frames")
     if raw_count in (None, "", "N/A"):
         raise ValueError(f"cannot determine video frame count: {path}")
+    raw_duration = stream.get("duration")
+    if raw_duration in (None, "", "N/A"):
+        raw_duration = json.loads(result.stdout).get("format", {}).get("duration")
+    duration = (
+        float(raw_duration)
+        if raw_duration not in (None, "", "N/A")
+        else int(raw_count) / (float(numerator) / float(denominator))
+    )
     return {
         "width": int(stream["width"]),
         "height": int(stream["height"]),
         "fps": float(numerator) / float(denominator),
         "frame_count": int(raw_count),
+        "duration": duration,
     }
 
 
@@ -83,8 +95,8 @@ def _has_audio(path: str) -> bool:
 
 def _reference_video_shape(width: int, height: int) -> tuple[int, int]:
     ratio = float(width) / float(height)
-    if not 0.25 <= ratio <= 4.0:
-        raise ValueError(f"reference video aspect ratio must be in [1:4, 4:1], got {width}x{height}")
+    if not 0.4 <= ratio <= 2.5:
+        raise ValueError(f"reference video aspect ratio must be in [0.4, 2.5], got {width}x{height}")
     if ratio >= 1.0:
         target_width = MINIMAX_H3_BASE_SHORT_EDGE * ratio
         target_height = float(MINIMAX_H3_BASE_SHORT_EDGE)
@@ -107,16 +119,20 @@ def _transcode_reference_video(
     *,
     target_width: int,
     target_height: int,
-    target_frame_count: int,
     workdir: str,
+    start_time_seconds: float = 0.0,
+    duration_seconds: float | None = None,
 ) -> str:
     output = str(Path(workdir) / "prepared.mp4")
+    duration_args = ["-t", f"{float(duration_seconds):.6f}"] if duration_seconds is not None else []
     subprocess.run(
         [
             "ffmpeg",
             "-y",
             "-loglevel",
             "error",
+            "-ss",
+            f"{float(start_time_seconds):.6f}",
             "-i",
             source,
             "-map",
@@ -124,8 +140,7 @@ def _transcode_reference_video(
             "-an",
             "-vf",
             (f"fps={MINIMAX_H3_FPS:g},scale={target_width}:{target_height}:flags=lanczos,setsar=1"),
-            "-frames:v",
-            str(target_frame_count),
+            *duration_args,
             "-metadata:s:v:0",
             "rotate=0",
             "-c:v",
@@ -144,19 +159,43 @@ def prepare_reference_videos(
     *,
     target_frame_count: int,
     workdir: str,
+    start_time_seconds: Any = None,
 ) -> list[dict[str, Any]]:
+    # Keep this argument for compatibility with existing pipeline callers;
+    # reference inputs are now bounded by their source/segment durations, not
+    # clipped to the generated frame count.
+    del target_frame_count
     if isinstance(values, (str, os.PathLike)):
         values = [values]
     if not isinstance(values, (list, tuple)) or not values:
         raise ValueError("MiniMax H3 Ref2VA video input must be a path or a non-empty list of paths")
+    if isinstance(start_time_seconds, (list, tuple)):
+        start_times = list(start_time_seconds)
+    else:
+        start_times = [start_time_seconds] * len(values)
+    if len(start_times) != len(values):
+        raise ValueError("start_time_seconds must contain one value per reference video")
+
     prepared: list[dict[str, Any]] = []
+    total_duration = 0.0
     for index, value in enumerate(values):
+        item_start = start_times[index]
+        if isinstance(value, dict):
+            item_start = value.get("start_time_seconds", item_start)
+            value = value.get("path", value.get("video_path", value.get("video_url")))
         if not isinstance(value, (str, os.PathLike)):
-            raise TypeError(
-                f"MiniMax H3 multi-video Ref2VA currently requires file paths, got item {index}: {type(value)!r}"
-            )
+            raise TypeError(f"MiniMax H3 Ref2VA video references require file paths, got item {index}: {type(value)!r}")
         source = str(value)
         meta = _probe_video(source)
+        start = float(item_start or 0.0)
+        if start < 0 or start >= float(meta["duration"]):
+            raise ValueError(f"reference video {index} start_time_seconds is outside the source duration")
+        duration = min(15.0 - total_duration, float(meta["duration"]) - start)
+        if duration < 2.0:
+            raise ValueError(
+                f"reference video {index} must provide at least 2 seconds after start_time_seconds, got {duration:.3f}"
+            )
+        total_duration += duration
         width, height = _reference_video_shape(meta["width"], meta["height"])
         item_workdir = Path(workdir) / f"video_{index}"
         item_workdir.mkdir(parents=True)
@@ -164,8 +203,9 @@ def prepare_reference_videos(
             source,
             target_width=width,
             target_height=height,
-            target_frame_count=target_frame_count,
             workdir=str(item_workdir),
+            start_time_seconds=start,
+            duration_seconds=duration,
         )
         prepared.append(
             {
@@ -174,6 +214,8 @@ def prepare_reference_videos(
                 "input_has_audio": _has_audio(source),
                 "width": width,
                 "height": height,
+                "start_time_seconds": start,
+                "duration_seconds": duration,
             }
         )
     return prepared
@@ -309,30 +351,37 @@ def load_audio_file(path: str) -> tuple[torch.Tensor, int]:
             return _soundfile_to_waveform(wav)
 
 
-def load_video_audio(path: str) -> tuple[torch.Tensor, int]:
+def load_video_audio(
+    path: str,
+    *,
+    start_time_seconds: float = 0.0,
+    duration_seconds: float | None = None,
+) -> tuple[torch.Tensor, int]:
     import tempfile
 
     with tempfile.TemporaryDirectory(prefix="minimax_h3_video_audio_") as tmpdir:
         output = str(Path(tmpdir) / "audio.wav")
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-loglevel",
-                "error",
-                "-i",
-                path,
-                "-vn",
-                "-ac",
-                "2",
-                "-ar",
-                "44100",
-                "-f",
-                "wav",
-                output,
-            ],
-            check=True,
-        )
+        command = [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-ss",
+            f"{float(start_time_seconds):.6f}",
+            "-i",
+            path,
+            "-vn",
+            "-ac",
+            "2",
+            "-ar",
+            "44100",
+            "-f",
+            "wav",
+        ]
+        if duration_seconds is not None:
+            command.extend(["-t", f"{float(duration_seconds):.6f}"])
+        command.append(output)
+        subprocess.run(command, check=True)
         return load_audio_file(output)
 
 

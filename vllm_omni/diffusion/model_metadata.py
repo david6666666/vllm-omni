@@ -38,7 +38,7 @@ _DIFFUSION_MODEL_METADATA: dict[str, DiffusionModelMetadata] = {
     ),
     "MiniMaxH3Pipeline": DiffusionModelMetadata(
         supports_multimodal_inputs=True,
-        max_multimodal_image_inputs=1,
+        max_multimodal_image_inputs=9,
     ),
     "WanPipeline": DiffusionModelMetadata(attention_mask_free=True),
     "WanImageToVideoPipeline": DiffusionModelMetadata(attention_mask_free=True),

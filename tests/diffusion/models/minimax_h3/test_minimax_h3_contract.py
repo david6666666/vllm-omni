@@ -102,6 +102,52 @@ def test_reference_image_resize_contract():
         _reference_image_shape(Image.new("RGB", (100, 501)))
 
 
+def test_fl2va_supports_first_last_and_explicit_frame_index_contracts():
+    from vllm_omni.diffusion.models.minimax_h3.pipeline_minimax_h3 import (
+        _resolve_fl2va_keyframe_indices,
+    )
+
+    assert _resolve_fl2va_keyframe_indices({}, 1) == [0]
+    assert _resolve_fl2va_keyframe_indices({}, 2) == [0, -1]
+    assert _resolve_fl2va_keyframe_indices({"frame_index": -1}, 1) == [-1]
+    assert _resolve_fl2va_keyframe_indices({"frame_indices": [0, -1]}, 2) == [0, -1]
+    with pytest.raises(ValueError, match="frame_indices"):
+        _resolve_fl2va_keyframe_indices({"frame_indices": [0, 1]}, 2)
+
+
+def test_minimax_h3_uses_the_official_output_canvas_policy():
+    from vllm_omni.diffusion.models.minimax_h3.pipeline_minimax_h3 import (
+        _resolve_output_canvas,
+    )
+
+    assert _resolve_output_canvas(21 / 9, 768) == (672, 1536)
+    assert _resolve_output_canvas(16 / 9, 768) == (768, 1344)
+    assert _resolve_output_canvas(9 / 16, 768) == (1344, 768)
+    with pytest.raises(ValueError, match="short_edge"):
+        _resolve_output_canvas(16 / 9, 720)
+
+
+def test_minimax_h3_accepts_sglang_auto_aspect_ratio_alias():
+    from vllm_omni.diffusion.models.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
+
+    pipeline = object.__new__(MiniMaxH3Pipeline)
+    sampling = SimpleNamespace(
+        fps=24,
+        num_frames=1,
+        height=None,
+        width=None,
+        extra_args={"duration": 5.0, "aspect_ratio": "auto"},
+    )
+    height, width, *_ = pipeline._resolve_shape("ref2va", sampling, None)
+    assert (height, width) == (768, 1344)
+
+
+def test_minimax_h3_advertises_the_official_ref2va_image_limit():
+    from vllm_omni.diffusion.model_metadata import get_diffusion_model_metadata
+
+    assert get_diffusion_model_metadata("MiniMaxH3Pipeline").max_multimodal_image_inputs == 9
+
+
 def test_encoder_forward_uses_hook_compatible_encode_entrypoint():
     from vllm_omni.diffusion.models.minimax_h3.encoder import (
         MiniMaxH3Qwen3VLEncoder,

@@ -510,6 +510,43 @@ def test_v2v_video_generation_with_video_reference_form(test_client, mocker: Moc
     assert input_video[0].size == (32, 24)
 
 
+def test_minimax_h3_http_accepts_mixed_image_video_references(test_client, mocker: MockerFixture):
+    mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video._encode_video_bytes",
+        return_value=b"fake-video",
+    )
+    response = test_client.post(
+        "/v1/videos",
+        data={
+            "prompt": "Use both references.",
+            "image_reference": json.dumps(
+                [
+                    {"image_url": _make_test_image_data_url((40, 24))},
+                    {"image_url": _make_test_image_data_url((40, 24))},
+                ]
+            ),
+            "video_reference": json.dumps(
+                {"video_url": _make_test_video_data_url((32, 24), 2)},
+            ),
+            "audio_reference": json.dumps(
+                [{"audio_url": "data:audio/mp3;base64,ZmFrZQ=="}],
+            ),
+            "extra_params": json.dumps({"task": "ref2va", "frame_indices": [0, -1], "start_time_seconds": 1.5}),
+            "num_outputs_per_prompt": "2",
+        },
+    )
+
+    assert response.status_code == 200
+    video_id = response.json()["id"]
+    _wait_for_status(test_client, video_id, VideoGenerationStatus.COMPLETED.value)
+    engine = test_client.app.state.openai_serving_video._engine_client
+    multi_modal_data = engine.captured_prompt["multi_modal_data"]
+    assert len(multi_modal_data["image"]) == 2
+    assert len(multi_modal_data["video"]) == 2
+    assert isinstance(multi_modal_data["audio"], str)
+    assert engine.captured_sampling_params_list[0].num_outputs_per_prompt == 2
+
+
 @pytest.mark.parametrize("endpoint", ["/v1/videos", "/v1/videos/sync"])
 def test_multi_video_generation_preserves_uploaded_files_until_generation(
     endpoint,
@@ -527,8 +564,10 @@ def test_multi_video_generation_preserves_uploaded_files_until_generation(
             "extra_params": json.dumps({"task": "ref2va", "duration": 15.0}),
         },
         files=[
+            ("input_references", ("subject.png", _make_test_image_bytes((40, 24)), "image/png")),
             ("input_references", ("subject.mp4", b"subject-video", "video/mp4")),
             ("input_references", ("background.mov", b"background-video", "video/quicktime")),
+            ("input_references", ("voice.wav", b"reference-audio", "audio/wav")),
         ],
     )
 
@@ -544,6 +583,8 @@ def test_multi_video_generation_preserves_uploaded_files_until_generation(
     assert engine.captured_reference_video_bytes == [b"subject-video", b"background-video"]
     assert len(input_videos) == 2
     assert all(not Path(path).exists() for path in input_videos)
+    assert isinstance(engine.captured_prompt["multi_modal_data"]["image"], Image.Image)
+    assert isinstance(engine.captured_prompt["multi_modal_data"]["audio"], str)
     assert engine.captured_sampling_params_list[0].extra_args["task"] == "ref2va"
     assert engine.captured_sampling_params_list[0].extra_args["duration"] == 15.0
 
@@ -1183,17 +1224,21 @@ def test_rejects_input_reference_and_image_reference_together(test_client):
     assert "only one of input_reference, image_reference, or video_reference" in response.json()["detail"].lower()
 
 
-def test_rejects_image_reference_and_video_reference_together(test_client):
+def test_accepts_image_reference_and_video_reference_together(test_client, mocker: MockerFixture):
+    mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video._encode_video_bytes",
+        return_value=b"fake-video",
+    )
     response = test_client.post(
         "/v1/videos",
         data={
-            "prompt": "bad refs",
-            "image_reference": '{"image_url": "https://example.com/cat.png"}',
-            "video_reference": '{"video_url": "https://example.com/cat.mp4"}',
+            "prompt": "use both references",
+            "image_reference": json.dumps({"image_url": _make_test_image_data_url((40, 24))}),
+            "video_reference": json.dumps({"video_url": _make_test_video_data_url((32, 24), 2)}),
         },
     )
-    assert response.status_code == 400
-    assert "only one of input_reference, image_reference, or video_reference" in response.json()["detail"].lower()
+    assert response.status_code == 200
+    _wait_for_status(test_client, response.json()["id"], VideoGenerationStatus.COMPLETED.value)
 
 
 def test_invalid_seconds_returns_422(test_client):

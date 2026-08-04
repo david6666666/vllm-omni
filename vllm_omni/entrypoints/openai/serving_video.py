@@ -42,7 +42,7 @@ logger = init_logger(__name__)
 class ReferenceImage:
     """Reference class for tracking additional metadata if needed"""
 
-    data: Image.Image
+    data: Image.Image | list[Image.Image]
 
 
 @dataclass
@@ -57,7 +57,8 @@ class ReferenceVideo:
 class ReferenceAudio:
     """Reference audio file path for speech-to-video generation."""
 
-    path: str
+    path: str | list[str]
+    cleanup_paths: tuple[str, ...] = ()
 
 
 @dataclass
@@ -129,22 +130,21 @@ class OmniOpenAIServingVideo:
 
         input_image = None if reference_image is None else reference_image.data
         input_video = None if reference_video is None else reference_video.data
-        if input_image is not None and input_video is not None:
-            raise HTTPException(
-                status_code=HTTPStatus.BAD_REQUEST.value,
-                detail="Provide either an image reference or a video reference, not both.",
-            )
         provided_fields = request.model_fields_set
         fps_provided = self._request_fps_provided(request)
         vp = request.resolve_video_params()
         if input_image is not None and vp.width is not None and vp.height is not None:
             target_size = (vp.width, vp.height)
-            if input_image.size != target_size:
-                input_image = input_image.resize(target_size, Image.Resampling.LANCZOS)
+            image_items = input_image if isinstance(input_image, list) else [input_image]
+            resized_images = [
+                image.resize(target_size, Image.Resampling.LANCZOS) if image.size != target_size else image
+                for image in image_items
+            ]
+            input_image = resized_images if isinstance(input_image, list) else resized_images[0]
         multi_modal_data: dict[str, Any] = {}
         if input_image is not None:
             multi_modal_data["image"] = input_image
-        elif input_video is not None:
+        if input_video is not None:
             multi_modal_data["video"] = input_video
         if reference_audio is not None:
             multi_modal_data["audio"] = reference_audio.path
@@ -155,6 +155,15 @@ class OmniOpenAIServingVideo:
             gen_params.height = vp.height
         if vp.num_frames is not None:
             gen_params.num_frames = vp.num_frames
+        gen_params.num_outputs_per_prompt = request.num_outputs_per_prompt
+        if request.seconds is not None:
+            gen_params.extra_args.setdefault("duration", float(request.seconds))
+        if request.aspect_ratio is not None:
+            gen_params.extra_args["aspect_ratio"] = request.aspect_ratio
+        if request.short_edge is not None:
+            gen_params.extra_args["short_edge"] = request.short_edge
+        if request.start_time_seconds is not None:
+            gen_params.extra_args["start_time_seconds"] = request.start_time_seconds
         # Leave fps/frame_rate as None when the user did not provide fps.
         if fps_provided and vp.fps is not None:
             gen_params.fps = vp.fps

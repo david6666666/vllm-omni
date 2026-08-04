@@ -144,7 +144,11 @@ from vllm_omni.entrypoints.openai.stage_params import (
 from vllm_omni.entrypoints.openai.storage import STORAGE_MANAGER, FileStorageHandle
 from vllm_omni.entrypoints.openai.stores import VIDEO_STORE, VIDEO_TASKS
 from vllm_omni.entrypoints.openai.utils import get_stage_type, parse_lora_request
-from vllm_omni.entrypoints.openai.video_api_utils import decode_audio_url, decode_input_reference
+from vllm_omni.entrypoints.openai.video_api_utils import (
+    VideoFrames,
+    decode_audio_url,
+    decode_input_reference,
+)
 from vllm_omni.entrypoints.openpi.serving import ServingRealtimeRobotOpenPI
 from vllm_omni.errors import OmniClientError
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniTextPrompt
@@ -2865,8 +2869,11 @@ def _cleanup_video_references(
         for path in reference_video.cleanup_paths:
             if os.path.exists(path):
                 os.unlink(path)
-    if reference_audio is not None and os.path.exists(reference_audio.path):
-        os.unlink(reference_audio.path)
+    if reference_audio is not None:
+        cleanup_paths = reference_audio.cleanup_paths or tuple(_reference_list(reference_audio.path))
+        for path in cleanup_paths:
+            if os.path.exists(path):
+                os.unlink(path)
 
 
 async def _run_video_generation_job(
@@ -2975,6 +2982,68 @@ async def _persist_uploaded_video_references(uploads: list[UploadFile]) -> list[
     return paths
 
 
+def _reference_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    return list(value) if isinstance(value, list) else [value]
+
+
+def _uploaded_media_kind(upload: UploadFile) -> str:
+    content_type = (upload.content_type or "").lower()
+    if content_type.startswith("image/"):
+        return "image"
+    if content_type.startswith("audio/"):
+        return "audio"
+    suffix = Path(upload.filename or "").suffix.lower()
+    if suffix in {".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"}:
+        return "image"
+    if suffix in {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg"}:
+        return "audio"
+    return "video"
+
+
+async def _persist_uploaded_media_references(
+    uploads: list[UploadFile],
+) -> tuple[list[Image.Image], list[str], list[str]]:
+    """Persist a mixed MiniMax H3 multipart reference list.
+
+    Images are decoded in memory; videos and audio remain files because H3's
+    reference encoders need the original container streams (including video
+    soundtracks).
+    """
+    images: list[Image.Image] = []
+    videos: list[str] = []
+    audios: list[str] = []
+    paths: list[str] = []
+    try:
+        for upload in uploads:
+            kind = _uploaded_media_kind(upload)
+            payload = await upload.read()
+            if kind == "image":
+                try:
+                    images.append(Image.open(io.BytesIO(payload)).convert("RGB"))
+                except (OSError, ValueError) as exc:
+                    raise HTTPException(400, detail=f"Invalid uploaded image reference: {upload.filename}") from exc
+                continue
+            suffix = Path(upload.filename or "").suffix.lower()
+            if not suffix or len(suffix) > 8:
+                suffix = ".mp3" if kind == "audio" else ".mp4"
+            fd, path = tempfile.mkstemp(prefix="vllm_omni_reference_", suffix=suffix)
+            paths.append(path)
+            with os.fdopen(fd, "wb") as output:
+                output.write(payload)
+            if kind == "audio":
+                audios.append(path)
+            else:
+                videos.append(path)
+    except Exception:
+        for path in paths:
+            if os.path.exists(path):
+                os.unlink(path)
+        raise
+    return images, videos, audios
+
+
 async def _parse_video_form(
     raw_request: Request,
     prompt: str = Form(...),
@@ -2991,6 +3060,10 @@ async def _parse_video_form(
     height: int | None = Form(default=None),
     num_frames: int | None = Form(default=None),
     fps: int | None = Form(default=None),
+    aspect_ratio: str | None = Form(default=None),
+    short_edge: int | None = Form(default=None, ge=1),
+    num_outputs_per_prompt: int = Form(default=1, ge=1, le=10),
+    start_time_seconds: float | None = Form(default=None, ge=0.0),
     num_inference_steps: int | None = Form(default=None),
     guidance_scale: float | None = Form(default=None),
     guidance_scale_2: float | None = Form(default=None),
@@ -3033,13 +3106,13 @@ async def _parse_video_form(
             status_code=HTTPStatus.BAD_REQUEST.value,
             detail="Provide input_references alone, without input_reference, image_reference, or video_reference.",
         )
-    provided_references = sum(
-        item is not None for item in (parsed_image_reference, parsed_video_reference, input_reference_bytes)
-    )
-    if provided_references > 1:
+    if input_reference_bytes is not None and (parsed_image_reference is not None or parsed_video_reference is not None):
         raise HTTPException(
             status_code=HTTPStatus.BAD_REQUEST.value,
-            detail="Provide only one of input_reference, image_reference, or video_reference.",
+            detail=(
+                "Provide only one of input_reference, image_reference, or video_reference when using "
+                "input_reference; image_reference and video_reference may be combined."
+            ),
         )
 
     request_data: dict[str, Any] = {
@@ -3055,6 +3128,10 @@ async def _parse_video_form(
         "height": height,
         "num_frames": num_frames,
         "fps": fps,
+        "aspect_ratio": aspect_ratio,
+        "short_edge": short_edge,
+        "num_outputs_per_prompt": num_outputs_per_prompt,
+        "start_time_seconds": start_time_seconds,
         "num_inference_steps": num_inference_steps,
         "guidance_scale": guidance_scale,
         "guidance_scale_2": guidance_scale_2,
@@ -3113,32 +3190,98 @@ async def _parse_video_form(
         decode_spec = _reference_video_decode_spec(request, stage_configs)
     reference_image = None
     reference_video = None
+    reference_audio: ReferenceAudio | None = None
     if input_references:
-        paths = await _persist_uploaded_video_references(input_references)
-        reference_video = ReferenceVideo(data=paths, cleanup_paths=tuple(paths))
+        images, video_paths, audio_paths = await _persist_uploaded_media_references(input_references)
+        if images:
+            reference_image = ReferenceImage(data=images if len(images) > 1 else images[0])
+        if video_paths:
+            reference_video = ReferenceVideo(data=video_paths, cleanup_paths=tuple(video_paths))
+        if audio_paths:
+            reference_audio = ReferenceAudio(path=audio_paths, cleanup_paths=tuple(audio_paths))
     else:
+        video_paths: list[str] = []
         try:
-            media_data = await decode_input_reference(
-                request.image_reference,
-                request.video_reference,
-                input_reference_bytes,
-                max_video_frames=decode_spec.max_frames,
-                video_keep=decode_spec.keep,
-            )
+            image_items = _reference_list(request.image_reference)
+            video_items = _reference_list(request.video_reference)
+            image_data = []
+            for item in image_items:
+                media_data = await decode_input_reference(item, None, None)
+                if not isinstance(media_data, Image.Image):
+                    raise InvalidInputReferenceError("image_reference did not decode to an image")
+                image_data.append(media_data)
+
+            video_frames: list[Image.Image] | None = None
+            for item in video_items:
+                media_data = await decode_input_reference(
+                    None,
+                    item,
+                    None,
+                    max_video_frames=decode_spec.max_frames,
+                    video_keep=decode_spec.keep,
+                )
+                if not isinstance(media_data, VideoFrames):
+                    raise InvalidInputReferenceError("video_reference did not decode to a video")
+                if media_data.source_path is not None:
+                    video_paths.append(media_data.source_path)
+                else:
+                    if len(video_items) != 1:
+                        raise InvalidInputReferenceError(
+                            "multiple video URL references must be downloadable source videos"
+                        )
+                    video_frames = list(media_data)
+
+            if input_reference_bytes is not None:
+                media_data = await decode_input_reference(
+                    None,
+                    None,
+                    input_reference_bytes,
+                    max_video_frames=decode_spec.max_frames,
+                    video_keep=decode_spec.keep,
+                )
+                if isinstance(media_data, Image.Image):
+                    image_data.append(media_data)
+                elif isinstance(media_data, VideoFrames):
+                    if media_data.source_path is not None:
+                        video_paths.append(media_data.source_path)
+                    else:
+                        video_frames = list(media_data)
+
+            if image_data:
+                reference_image = ReferenceImage(data=image_data if len(image_data) > 1 else image_data[0])
+            if video_paths:
+                reference_video = ReferenceVideo(data=video_paths, cleanup_paths=tuple(video_paths))
+            elif video_frames is not None:
+                reference_video = ReferenceVideo(data=video_frames)
         except InvalidInputReferenceError as exc:
+            for path in video_paths:
+                if os.path.exists(path):
+                    os.unlink(path)
             raise HTTPException(400, detail=str(exc) or "Invalid input reference.") from exc
 
-        reference_image = ReferenceImage(data=media_data) if isinstance(media_data, Image.Image) else None
-        reference_video = ReferenceVideo(data=media_data) if isinstance(media_data, list) else None
-
-    reference_audio: ReferenceAudio | None = None
+    audio_paths = [] if reference_audio is None else list(_reference_list(reference_audio.path))
     if request.audio_reference is not None:
         try:
-            audio_path = await decode_audio_url(request.audio_reference.audio_url)
+            for audio_reference in _reference_list(request.audio_reference):
+                audio_paths.append(await decode_audio_url(audio_reference.audio_url))
         except InvalidInputReferenceError as exc:
-            _cleanup_video_references(reference_video, None)
+            _cleanup_video_references(reference_video, reference_audio)
+            cleanup_paths = set(() if reference_audio is None else reference_audio.cleanup_paths)
+            for path in audio_paths:
+                if path not in cleanup_paths and os.path.exists(path):
+                    os.unlink(path)
             raise HTTPException(400, detail=str(exc)) from exc
-        reference_audio = ReferenceAudio(path=audio_path)
+    if audio_paths:
+        cleanup_paths = (
+            tuple(audio_paths)
+            if reference_audio is None
+            else reference_audio.cleanup_paths
+            + tuple(path for path in audio_paths if path not in reference_audio.cleanup_paths)
+        )
+        reference_audio = ReferenceAudio(
+            path=audio_paths if len(audio_paths) > 1 else audio_paths[0],
+            cleanup_paths=cleanup_paths,
+        )
 
     return request, handler, effective_model_name, reference_image, reference_video, reference_audio
 
