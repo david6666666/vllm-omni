@@ -1352,7 +1352,12 @@ class MiniMaxH3Pipeline(
                 condition_labels=condition_labels if task == "ref2va" else None,
             )
 
-            if prepared_videos is not None or prepared_images:
+            # ``prepared_videos`` is intentionally ``None`` on non-zero DiT
+            # ranks; the distributed video encoder broadcasts the prepared
+            # metadata inside ``_encode_visual_conditions``.  Use the global
+            # video count here so video + standalone-audio Ref2VA requests do
+            # not look like audio-only requests on those ranks.
+            if video_count or prepared_images:
                 visual_condition, visual_shapes = self._encode_visual_conditions(
                     prepared_images,
                     prepared_videos,
