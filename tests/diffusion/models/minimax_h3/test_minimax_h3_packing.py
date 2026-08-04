@@ -149,6 +149,8 @@ def test_denoise_branch_reuses_packed_buffers_and_timestep_roles():
     assert first["x"] is second["x"] is branch.x_base
     assert first["audio_x"] is second["audio_x"] is branch.audio_x_base
     assert first["unique_timesteps"] is second["unique_timesteps"] is branch.unique_timesteps_dev
+    assert branch.unique_timesteps_dev[0].item() == pytest.approx(0.4)
+    assert branch.unique_timesteps_dev[1].item() == pytest.approx(0.5)
     assert first["combined_indices"] is second["combined_indices"] is branch.combined_indices_dev
     torch.testing.assert_close(
         second["unique_timesteps"],

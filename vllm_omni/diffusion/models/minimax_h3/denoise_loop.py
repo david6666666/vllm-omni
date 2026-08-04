@@ -244,7 +244,9 @@ def minimax_h3_denoise_loop(
             x0_video = minimax_h3_rf_v_to_x0(
                 video_rows[update],
                 mv_video_t,
-                torch.tensor(t_v, dtype=torch.float32, device=device),
+                # The branch has already populated these scalar values for
+                # the transformer call; reuse the resident views here too.
+                positive.unique_timesteps_dev[0],
             )
             new_target = minimax_h3_euler_eta0_step(video_rows[update], x0_video, sigma_curr=s_v, sigma_next=s_v_next)
             # The model consumes copied rows in the branch buffers above, so
@@ -256,7 +258,7 @@ def minimax_h3_denoise_loop(
             x0_audio = minimax_h3_rf_v_to_x0(
                 audio_rows[audio_update],
                 mv_audio_t,
-                torch.tensor(t_a, dtype=torch.float32, device=device),
+                positive.unique_timesteps_dev[1],
             )
             new_audio = minimax_h3_euler_eta0_step(
                 audio_rows[audio_update], x0_audio, sigma_curr=s_a, sigma_next=s_a_next
