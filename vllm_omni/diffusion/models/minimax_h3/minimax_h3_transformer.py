@@ -255,11 +255,19 @@ def _apply_rope(x: torch.Tensor, freqs: torch.Tensor) -> torch.Tensor:
     x: [T, heads, head_dim]; freqs: [T, rot_dim]. In the unfused path, cos/sin
     are cast to the activation dtype before the elementwise math.
     """
-    rot_dim = freqs.shape[-1]
+    # The model passes a [cos, sin] cache through the SP boundary when the
+    # same positions are reused by all DiT blocks.  Keep accepting raw
+    # frequencies for callers/tests that exercise the helper directly.
+    cached = freqs.shape[-1] > x.shape[-1]
+    if cached:
+        rot_dim = freqs.shape[-1] // 2
+        cos, sin = freqs.split(rot_dim, dim=-1)
+    else:
+        rot_dim = freqs.shape[-1]
+        cos = torch.cos(freqs).to(x.dtype)
+        sin = torch.sin(freqs).to(x.dtype)
     x_rot, x_pass = x[..., :rot_dim], x[..., rot_dim:]
-    cos = torch.cos(freqs).to(x.dtype).unsqueeze(1)  # [T, 1, rot_dim]
-    sin = torch.sin(freqs).to(x.dtype).unsqueeze(1)
-    x_rot = (x_rot * cos) + (_rotate_half(x_rot) * sin)
+    x_rot = (x_rot * cos.unsqueeze(1)) + (_rotate_half(x_rot) * sin.unsqueeze(1))
     return torch.cat((x_rot, x_pass), dim=-1)
 
 
@@ -1157,6 +1165,17 @@ class MiniMaxH3DiTModel(nn.Module):
             rope_freqs = self.rope(img_position_ids).to(device)
         else:
             rope_freqs = rope_freqs.to(device=device)
+        # RoPE positions are timestep invariant.  Precompute the bf16
+        # trigonometric tables once per packed forward instead of launching
+        # cos/sin kernels independently in every one of the 50 DiT blocks.
+        if rope_freqs.shape[-1] <= self.arch.attention_head_dim:
+            rope_freqs = torch.cat(
+                (
+                    torch.cos(rope_freqs).to(_BF16_DTYPE),
+                    torch.sin(rope_freqs).to(_BF16_DTYPE),
+                ),
+                dim=-1,
+            )
 
         decoder_input, t_emb = self._embed(
             x=x,
