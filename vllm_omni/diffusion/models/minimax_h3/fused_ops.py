@@ -115,11 +115,77 @@ def _qknorm_rope_kernel(
     # tensors and then adds the two BF16 products.
     first_product = (normed.to(tl.float32) * cos).to(x_ptr.dtype.element_ty)
     second_product = (pair_normed.to(tl.float32) * sin).to(x_ptr.dtype.element_ty)
-    rotated = (first_product.to(tl.float32) + sign * second_product.to(tl.float32)).to(
-        x_ptr.dtype.element_ty
-    )
+    rotated = (first_product.to(tl.float32) + sign * second_product.to(tl.float32)).to(x_ptr.dtype.element_ty)
     result = tl.where(cols < rope_dim, rotated, normed)
     tl.store(x_base + cols * x_stride_2, result, mask=mask)
+
+
+@triton.jit
+def _qk_norm_rope_kernel(
+    q_ptr,
+    k_ptr,
+    q_weight_ptr,
+    k_weight_ptr,
+    rope_cache_ptr,
+    n_tokens,
+    n_heads,
+    head_dim,
+    rope_dim,
+    q_stride_0,
+    q_stride_1,
+    q_stride_2,
+    k_stride_0,
+    k_stride_1,
+    k_stride_2,
+    q_norm_stride,
+    k_norm_stride,
+    rope_stride_0,
+    rope_stride_1,
+    eps,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """Apply the same token/head's Q and K norm+RoPE work in one launch."""
+    token = tl.program_id(0)
+    head = tl.program_id(1)
+    cols = tl.arange(0, BLOCK_SIZE)
+    mask = cols < head_dim
+
+    q_base = q_ptr + token * q_stride_0 + head * q_stride_1
+    k_base = k_ptr + token * k_stride_0 + head * k_stride_1
+    q_values = tl.load(q_base + cols * q_stride_2, mask=mask, other=0.0).to(tl.float32)
+    k_values = tl.load(k_base + cols * k_stride_2, mask=mask, other=0.0).to(tl.float32)
+    q_weight = tl.load(q_weight_ptr + cols * q_norm_stride, mask=mask, other=1.0).to(tl.float32)
+    k_weight = tl.load(k_weight_ptr + cols * k_norm_stride, mask=mask, other=1.0).to(tl.float32)
+    q_rms = tl.rsqrt(tl.sum(q_values * q_values, axis=0) / head_dim + eps)
+    k_rms = tl.rsqrt(tl.sum(k_values * k_values, axis=0) / head_dim + eps)
+    q_normed = (q_values * q_rms * q_weight).to(q_ptr.dtype.element_ty)
+    k_normed = (k_values * k_rms * k_weight).to(k_ptr.dtype.element_ty)
+
+    half_rope = rope_dim // 2
+    pair = tl.where(cols < half_rope, cols + half_rope, cols - half_rope)
+    pair_mask = (cols < rope_dim) & (pair < head_dim)
+    q_pair_values = tl.load(q_base + pair * q_stride_2, mask=pair_mask, other=0.0).to(tl.float32)
+    k_pair_values = tl.load(k_base + pair * k_stride_2, mask=pair_mask, other=0.0).to(tl.float32)
+    q_pair_weight = tl.load(q_weight_ptr + pair * q_norm_stride, mask=pair_mask, other=1.0).to(tl.float32)
+    k_pair_weight = tl.load(k_weight_ptr + pair * k_norm_stride, mask=pair_mask, other=1.0).to(tl.float32)
+    q_pair_normed = (q_pair_values * q_rms * q_pair_weight).to(q_ptr.dtype.element_ty)
+    k_pair_normed = (k_pair_values * k_rms * k_pair_weight).to(k_ptr.dtype.element_ty)
+
+    rope_base = rope_cache_ptr + token * rope_stride_0
+    cos = tl.load(rope_base + cols * rope_stride_1, mask=pair_mask, other=1.0).to(tl.float32)
+    sin = tl.load(rope_base + (rope_dim + cols) * rope_stride_1, mask=pair_mask, other=0.0).to(tl.float32)
+    sign = tl.where(cols < half_rope, -1.0, 1.0)
+    # Keep the reference BF16 rounding order for both projections.
+    q_first = (q_normed.to(tl.float32) * cos).to(q_ptr.dtype.element_ty)
+    q_second = (q_pair_normed.to(tl.float32) * sin).to(q_ptr.dtype.element_ty)
+    k_first = (k_normed.to(tl.float32) * cos).to(k_ptr.dtype.element_ty)
+    k_second = (k_pair_normed.to(tl.float32) * sin).to(k_ptr.dtype.element_ty)
+    q_rotated = (q_first.to(tl.float32) + sign * q_second.to(tl.float32)).to(q_ptr.dtype.element_ty)
+    k_rotated = (k_first.to(tl.float32) + sign * k_second.to(tl.float32)).to(k_ptr.dtype.element_ty)
+    q_result = tl.where(cols < rope_dim, q_rotated, q_normed)
+    k_result = tl.where(cols < rope_dim, k_rotated, k_normed)
+    tl.store(q_base + cols * q_stride_2, q_result, mask=mask)
+    tl.store(k_base + cols * k_stride_2, k_result, mask=mask)
 
 
 def _can_use_indexed_common(
@@ -219,7 +285,7 @@ def fused_qknorm_rope_bf16_(
     eps: float,
     rope_dim: int,
 ) -> bool:
-    """Fuse q/k RMSNorm and H3's partial RoPE into two in-place kernels."""
+    """Fuse q/k RMSNorm and H3's partial RoPE into one in-place kernel."""
     if (
         not q.is_cuda
         or q.dtype != torch.bfloat16
@@ -247,24 +313,53 @@ def fused_qknorm_rope_bf16_(
     ):
         return False
 
-    for x, weight in ((q, q_weight), (k, k_weight)):
-        grid = (x.shape[0], x.shape[1])
-        _qknorm_rope_kernel[grid](
-            x,
-            weight,
+    if q.shape == k.shape:
+        grid = (q.shape[0], q.shape[1])
+        _qk_norm_rope_kernel[grid](
+            q,
+            k,
+            q_weight,
+            k_weight,
             rope_cache,
-            x.shape[0],
-            x.shape[1],
-            x.shape[-1],
+            q.shape[0],
+            q.shape[1],
+            q.shape[-1],
             rope_dim,
-            x.stride(0),
-            x.stride(1),
-            x.stride(2),
-            weight.stride(0),
+            q.stride(0),
+            q.stride(1),
+            q.stride(2),
+            k.stride(0),
+            k.stride(1),
+            k.stride(2),
+            q_weight.stride(0),
+            k_weight.stride(0),
             rope_cache.stride(0),
             rope_cache.stride(1),
             eps,
             BLOCK_SIZE=_QK_BLOCK_SIZE,
             num_warps=4,
         )
+    else:
+        # Preserve the generic GQA fallback when Q and K have different head
+        # counts; the fused H3 path always has equal Q/K shapes.
+        for x, weight in ((q, q_weight), (k, k_weight)):
+            grid = (x.shape[0], x.shape[1])
+            _qknorm_rope_kernel[grid](
+                x,
+                weight,
+                rope_cache,
+                x.shape[0],
+                x.shape[1],
+                x.shape[-1],
+                rope_dim,
+                x.stride(0),
+                x.stride(1),
+                x.stride(2),
+                weight.stride(0),
+                rope_cache.stride(0),
+                rope_cache.stride(1),
+                eps,
+                BLOCK_SIZE=_QK_BLOCK_SIZE,
+                num_warps=4,
+            )
     return True
