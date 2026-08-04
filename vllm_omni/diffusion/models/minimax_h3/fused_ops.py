@@ -110,17 +110,21 @@ def _qknorm_rope_kernel(
     cos = tl.load(rope_base + cols * rope_stride_1, mask=pair_mask, other=1.0).to(tl.float32)
     sin = tl.load(rope_base + (rope_dim + cols) * rope_stride_1, mask=pair_mask, other=0.0).to(tl.float32)
     sign = tl.where(cols < half_rope, -1.0, 1.0)
-    rotated = (normed.to(tl.float32) * cos + sign * pair_normed.to(tl.float32) * sin).to(
+    # Match the reference order: each BF16 product is rounded before the
+    # rotated pair is added, just as the unfused Torch path multiplies BF16
+    # tensors and then adds the two BF16 products.
+    first_product = (normed.to(tl.float32) * cos).to(x_ptr.dtype.element_ty)
+    second_product = (pair_normed.to(tl.float32) * sin).to(x_ptr.dtype.element_ty)
+    rotated = (first_product.to(tl.float32) + sign * second_product.to(tl.float32)).to(
         x_ptr.dtype.element_ty
     )
     result = tl.where(cols < rope_dim, rotated, normed)
     tl.store(x_base + cols * x_stride_2, result, mask=mask)
 
 
-def _can_use_indexed_kernel(
+def _can_use_indexed_common(
     x: torch.Tensor,
     parameter: torch.Tensor,
-    other: torch.Tensor,
     indices: torch.Tensor,
 ) -> bool:
     is_compiling = getattr(torch.compiler, "is_compiling", lambda: False)()
@@ -129,18 +133,14 @@ def _can_use_indexed_kernel(
         and x.is_cuda
         and x.dtype == torch.bfloat16
         and parameter.dtype == torch.bfloat16
-        and other.dtype == torch.bfloat16
         and indices.dtype in (torch.int32, torch.int64)
         and x.dim() == 2
         and parameter.dim() == 2
-        and other.dim() == 2
         and indices.dim() == 1
-        and x.shape == other.shape
         and x.shape[0] == indices.shape[0]
         and x.shape[1] == parameter.shape[1]
         and x.is_contiguous()
         and parameter.is_contiguous()
-        and other.is_contiguous()
         and indices.is_contiguous()
     )
 
@@ -152,7 +152,12 @@ def indexed_scale_shift_bf16_(
     indices: torch.Tensor,
 ) -> bool:
     """Apply ``x = x * (1 + scale[index]) + shift[index]`` in place."""
-    if not _can_use_indexed_kernel(x, scale, shift, indices):
+    if not (
+        _can_use_indexed_common(x, scale, indices)
+        and shift.dtype == torch.bfloat16
+        and shift.shape == scale.shape
+        and shift.is_contiguous()
+    ):
         return False
     grid = (x.shape[0], triton.cdiv(x.shape[1], _BLOCK_SIZE))
     _indexed_scale_shift_kernel[grid](
@@ -180,7 +185,12 @@ def indexed_gate_bf16_(
     indices: torch.Tensor,
 ) -> bool:
     """Apply ``x += gate[index] * other`` in place."""
-    if not _can_use_indexed_kernel(x, gate, other, indices):
+    if not (
+        _can_use_indexed_common(x, gate, indices)
+        and other.dtype == torch.bfloat16
+        and other.shape == x.shape
+        and other.is_contiguous()
+    ):
         return False
     grid = (x.shape[0], triton.cdiv(x.shape[1], _BLOCK_SIZE))
     _indexed_gate_kernel[grid](
