@@ -94,6 +94,16 @@ def test_indexed_modulation_falls_back_to_reference_math_on_cpu():
     torch.testing.assert_close(h3._modulate_gate(expected, gate, other, indices, dtype=torch.bfloat16), expected_gate)
 
 
+def test_fused_qknorm_rope_is_cuda_only():
+    from vllm_omni.diffusion.models.minimax_h3.fused_ops import fused_qknorm_rope_bf16_
+
+    q = torch.zeros(2, 2, 128, dtype=torch.bfloat16)
+    k = torch.zeros_like(q)
+    weight = torch.ones(128, dtype=torch.bfloat16)
+    cache = torch.ones(2, 192, dtype=torch.bfloat16)
+    assert not fused_qknorm_rope_bf16_(q, k, weight, weight, cache, eps=1e-5, rope_dim=96)
+
+
 def test_rope_build_cache_matches_raw_frequency_path():
     from vllm_omni.diffusion.models.minimax_h3.minimax_h3_transformer import (
         MiniMaxH3Rope,

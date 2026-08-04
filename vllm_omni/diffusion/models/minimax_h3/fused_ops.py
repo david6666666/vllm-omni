@@ -8,6 +8,7 @@ import torch
 from vllm.triton_utils import tl, triton
 
 _BLOCK_SIZE = 256
+_QK_BLOCK_SIZE = 128
 
 
 @triton.jit
@@ -68,6 +69,52 @@ def _indexed_gate_kernel(
     other_value = tl.load(other_ptr + other_offset, mask=mask, other=0.0).to(tl.float32)
     result = (x_value + gate_value * other_value).to(x_ptr.dtype.element_ty)
     tl.store(x_ptr + x_offset, result, mask=mask)
+
+
+@triton.jit
+def _qknorm_rope_kernel(
+    x_ptr,
+    norm_weight_ptr,
+    rope_cache_ptr,
+    n_tokens,
+    n_heads,
+    head_dim,
+    rope_dim,
+    x_stride_0,
+    x_stride_1,
+    x_stride_2,
+    norm_stride,
+    rope_stride_0,
+    rope_stride_1,
+    eps,
+    BLOCK_SIZE: tl.constexpr,
+):
+    token = tl.program_id(0)
+    head = tl.program_id(1)
+    cols = tl.arange(0, BLOCK_SIZE)
+    mask = cols < head_dim
+    x_base = x_ptr + token * x_stride_0 + head * x_stride_1
+    values = tl.load(x_base + cols * x_stride_2, mask=mask, other=0.0).to(tl.float32)
+    norm_weight = tl.load(norm_weight_ptr + cols * norm_stride, mask=mask, other=1.0).to(tl.float32)
+    rms = tl.rsqrt(tl.sum(values * values, axis=0) / head_dim + eps)
+    normed = (values * rms * norm_weight).to(x_ptr.dtype.element_ty)
+
+    half_rope = rope_dim // 2
+    pair = tl.where(cols < half_rope, cols + half_rope, cols - half_rope)
+    pair_mask = (cols < rope_dim) & (pair < head_dim)
+    pair_values = tl.load(x_base + pair * x_stride_2, mask=pair_mask, other=0.0).to(tl.float32)
+    pair_weight = tl.load(norm_weight_ptr + pair * norm_stride, mask=pair_mask, other=1.0).to(tl.float32)
+    pair_normed = (pair_values * rms * pair_weight).to(x_ptr.dtype.element_ty)
+
+    rope_base = rope_cache_ptr + token * rope_stride_0
+    cos = tl.load(rope_base + cols * rope_stride_1, mask=pair_mask, other=1.0).to(tl.float32)
+    sin = tl.load(rope_base + (rope_dim + cols) * rope_stride_1, mask=pair_mask, other=0.0).to(tl.float32)
+    sign = tl.where(cols < half_rope, -1.0, 1.0)
+    rotated = (normed.to(tl.float32) * cos + sign * pair_normed.to(tl.float32) * sin).to(
+        x_ptr.dtype.element_ty
+    )
+    result = tl.where(cols < rope_dim, rotated, normed)
+    tl.store(x_base + cols * x_stride_2, result, mask=mask)
 
 
 def _can_use_indexed_kernel(
@@ -151,4 +198,67 @@ def indexed_gate_bf16_(
         BLOCK_SIZE=_BLOCK_SIZE,
         num_warps=4,
     )
+    return True
+
+
+def fused_qknorm_rope_bf16_(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    q_weight: torch.Tensor,
+    k_weight: torch.Tensor,
+    rope_cache: torch.Tensor,
+    *,
+    eps: float,
+    rope_dim: int,
+) -> bool:
+    """Fuse q/k RMSNorm and H3's partial RoPE into two in-place kernels."""
+    is_compiling = getattr(torch.compiler, "is_compiling", lambda: False)()
+    if (
+        is_compiling
+        or not q.is_cuda
+        or q.dtype != torch.bfloat16
+        or k.dtype != torch.bfloat16
+        or q_weight.dtype != torch.bfloat16
+        or k_weight.dtype != torch.bfloat16
+        or rope_cache.dtype != torch.bfloat16
+        or q.dim() != 3
+        or k.dim() != 3
+        or q.shape[-1] != _QK_BLOCK_SIZE
+        or k.shape[-1] != _QK_BLOCK_SIZE
+        or q.shape[0] != k.shape[0]
+        or q_weight.shape != (q.shape[-1],)
+        or k_weight.shape != (k.shape[-1],)
+        or rope_cache.dim() != 2
+        or rope_cache.shape[0] != q.shape[0]
+        or rope_cache.shape[1] < 2 * rope_dim
+        or not q.is_contiguous()
+        or not k.is_contiguous()
+        or not q_weight.is_contiguous()
+        or not k_weight.is_contiguous()
+        or not rope_cache.is_contiguous()
+        or q.requires_grad
+        or k.requires_grad
+    ):
+        return False
+
+    for x, weight in ((q, q_weight), (k, k_weight)):
+        grid = (x.shape[0], x.shape[1])
+        _qknorm_rope_kernel[grid](
+            x,
+            weight,
+            rope_cache,
+            x.shape[0],
+            x.shape[1],
+            x.shape[-1],
+            rope_dim,
+            x.stride(0),
+            x.stride(1),
+            x.stride(2),
+            weight.stride(0),
+            rope_cache.stride(0),
+            rope_cache.stride(1),
+            eps,
+            BLOCK_SIZE=_QK_BLOCK_SIZE,
+            num_warps=4,
+        )
     return True

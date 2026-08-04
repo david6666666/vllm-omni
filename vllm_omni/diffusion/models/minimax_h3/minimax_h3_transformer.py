@@ -35,7 +35,11 @@ from vllm_omni.diffusion.distributed.sp_plan import (
     SequenceParallelOutput,
 )
 
-from .fused_ops import indexed_gate_bf16_, indexed_scale_shift_bf16_
+from .fused_ops import (
+    fused_qknorm_rope_bf16_,
+    indexed_gate_bf16_,
+    indexed_scale_shift_bf16_,
+)
 
 if TYPE_CHECKING:
     from vllm.model_executor.layers.quantization.base_config import (
@@ -607,11 +611,23 @@ class MiniMaxH3Attention(nn.Module):
         q = q.view(total, self.num_heads, self.head_dim)
         k = k.view(total, self.num_kv_heads, self.head_dim)
         v = v.view(total, self.num_kv_heads, self.head_dim)
-        q = self.q_norm(q)
-        k = self.k_norm(k)
+        fused_qk_rope = False
         if rope_freqs is not None:
-            q = _apply_rope(q, rope_freqs)
-            k = _apply_rope(k, rope_freqs)
+            fused_qk_rope = fused_qknorm_rope_bf16_(
+                q,
+                k,
+                self.q_norm.weight,
+                self.k_norm.weight,
+                rope_freqs,
+                eps=self.q_norm.eps,
+                rope_dim=rope_freqs.shape[-1] // 2,
+            )
+        if not fused_qk_rope:
+            q = self.q_norm(q)
+            k = self.k_norm(k)
+            if rope_freqs is not None:
+                q = _apply_rope(q, rope_freqs)
+                k = _apply_rope(k, rope_freqs)
 
         # The packed layout uses a second document for alignment padding.
         # Local/Ulysses backends unpad it, while Ring keeps aligned rows for
