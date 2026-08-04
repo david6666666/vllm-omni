@@ -162,33 +162,6 @@ The following tables show which models support each feature:
 | **Cosmos3**                  |     ❌     |     ✅      |           ✅           |       ✅        |         ✅         |         ❌         |   ✅    |             ✅             |  ✅ (encode/decode)   |       ✅        |        ❌         |
 | **MiniMax-H3**               |     ❌     |     ✅      |           ✅           |       ❌        |       ✅ (DiT/TE)  |         ❌         |   ✅    |             ✅             |       ✅ (tile)       |        ❓        |        ❌         |
 
-**MiniMax-H3** is a joint video/audio model supporting T2VA, first/last-keyframe
-FL2VA, and mixed-reference Ref2VA through the OpenAI-compatible video API. It is
-CFG-distilled, so CFG-Parallel must remain 1. The validated multi-GPU path uses
-Ulysses/Ring sequence parallelism, optional text-encoder tensor parallelism,
-HSDP, and the native tiled VAE patch-parallel mode. Cache-DiT is available
-through the model-declared adapter; TeaCache, Pipeline-Parallel, and Step
-Execution are not supported, and quantization is not yet qualified.
-
-The official-reference accuracy case is **Diffusion X2V · MiniMax H3 T2VA
-Accuracy Test**. It runs the 50-step T2VA workload with the pinned
-`MiniMaxAI/MiniMax-H3` model revision and verifies the official
-`assets/t2va.mp4` content SHA before checking SSIM (>= 0.82) and PSNR (>= 20 dB):
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 \
-FLASHINFER_DISABLE_VERSION_CHECK=1 \
-VLLM_WORKER_MULTIPROC_METHOD=spawn \
-VLLM_TEST_MINIMAX_H3_FL2VA_MODEL=/path/to/MiniMax-H3/FL2VA \
-pytest -s -v \
-  tests/e2e/accuracy/minimax_h3/test_minimax_h3_t2va_similarity.py::test_minimax_h3_t2va_matches_official_reference
-```
-
-The test starts the four-GPU HSDP/Ulysses server itself and writes the generated
-video and comparison reference under `tests/e2e/accuracy/artifacts/minimax_h3_t2va`.
-For the full serving/API setup, see the [MiniMax-H3 recipe](https://github.com/vllm-project/vllm-omni/blob/main/recipes/MiniMaxAI/MiniMax-H3.md).
-
-
 **Frame Interpolation Support**
 
 - **Supported**: Wan2.2 text-to-video, image-to-video, and TI2V pipelines
