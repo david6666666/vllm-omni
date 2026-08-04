@@ -573,6 +573,12 @@ class MiniMaxH3Attention(nn.Module):
         qkv = torch.stack((q, k, v), dim=1).unsqueeze(0)
         qkv = all_to_all_5D(qkv, scatter_idx=3, gather_idx=1, group=group)
         q, k, v = qkv.unbind(dim=2)
+        # FA4 requires independently contiguous Q/K/V strides.  The 5-D
+        # result is QKV-interleaved along the sequence dimension, so keep the
+        # collective packing but materialize the three kernel inputs here.
+        q = q.contiguous()
+        k = k.contiguous()
+        v = v.contiguous()
         out = flash_attn_varlen_func(
             q=q.flatten(0, 1),
             k=k.flatten(0, 1),
