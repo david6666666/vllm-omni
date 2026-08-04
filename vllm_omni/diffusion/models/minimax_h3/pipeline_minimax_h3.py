@@ -756,10 +756,7 @@ class MiniMaxH3Pipeline(
             # arrays through ``broadcast_object_list``.  Non-zero ranks use
             # the persistent prepared path and decode locally instead.
             broadcast_videos = [
-                [
-                    {key: value for key, value in item.items() if key != "decoded_frames"}
-                    for item in prepared_videos
-                ]
+                [{key: value for key, value in item.items() if key != "decoded_frames"} for item in prepared_videos]
                 if prepared_videos is not None
                 else None
             ]
@@ -820,7 +817,13 @@ class MiniMaxH3Pipeline(
             if prepared_videos is None:
                 raise ValueError("rank 0 reference-video preparation is incomplete")
             encoded = [
-                self.audio_vae.encode_waveform(*load_video_audio(item["original_path"]))
+                self.audio_vae.encode_waveform(
+                    *load_video_audio(item["original_path"]),
+                    # The prepared path includes the source stat signature,
+                    # so replacing a video at the same source path naturally
+                    # invalidates the in-process latent cache.
+                    cache_key=item["prepared_path"],
+                )
                 for item in prepared_videos
                 if item["input_has_audio"]
             ]

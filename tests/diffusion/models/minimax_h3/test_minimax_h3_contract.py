@@ -442,6 +442,21 @@ def test_video_vae_encode_reuses_cached_latent():
     torch.testing.assert_close(first[0], second[0])
 
 
+def test_audio_vae_encode_reuses_cached_latent():
+    from collections import OrderedDict
+
+    from vllm_omni.diffusion.models.minimax_h3.vae import MiniMaxH3AudioVAE
+
+    audio_vae = object.__new__(MiniMaxH3AudioVAE)
+    torch.nn.Module.__init__(audio_vae)
+    audio_vae._audio_latent_cache = OrderedDict({"source.wav:32000": (torch.ones(2, 1), 1)})
+
+    cached = audio_vae.encode_waveform(torch.zeros(2, 4), 32000, cache_key="source.wav")
+
+    assert cached[1] == 1
+    torch.testing.assert_close(cached[0], torch.ones(2, 1))
+
+
 def test_distributed_video_vae_encodes_references_sequentially(monkeypatch):
     from vllm_omni.diffusion.models.minimax_h3 import MiniMaxH3Pipeline
     from vllm_omni.diffusion.models.minimax_h3 import (

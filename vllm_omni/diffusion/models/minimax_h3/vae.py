@@ -81,7 +81,6 @@ def _install_fast_tiled_collective(model: nn.Module) -> None:
         state = parallel_module.get_parallel_state()
         group = state["sp_process_group"]
         sp_size = int(state["sp_size"])
-        sp_rank = int(state["sp_rank"])
         stacked = torch.stack(tasks, dim=0).contiguous()
         max_tasks = (int(num_tiles) + sp_size - 1) // sp_size
         if stacked.shape[0] < max_tasks:
@@ -386,6 +385,7 @@ class MiniMaxH3AudioVAE(nn.Module):
             tuple[str, int | None, torch.dtype], tuple[torch.Tensor, torch.Tensor]
         ] = {}
         self._resamplers: dict[int, Any] = {}
+        self._audio_latent_cache: OrderedDict[str, tuple[torch.Tensor, int]] = OrderedDict()
 
     def _latent_stats(
         self,
@@ -405,7 +405,19 @@ class MiniMaxH3AudioVAE(nn.Module):
         self,
         waveform: torch.Tensor,
         sample_rate: int,
+        *,
+        cache_key: str | None = None,
     ) -> tuple[torch.Tensor, int]:
+        audio_cache = getattr(self, "_audio_latent_cache", None)
+        if audio_cache is None:
+            audio_cache = self._audio_latent_cache = OrderedDict()
+        if cache_key is not None:
+            cache_key = f"{cache_key}:{int(sample_rate)}"
+            cached = audio_cache.get(cache_key)
+            if cached is not None:
+                audio_cache.move_to_end(cache_key)
+                return cached
+
         import torchaudio
 
         waveform = waveform.float()
@@ -447,7 +459,13 @@ class MiniMaxH3AudioVAE(nn.Module):
             latent = latent.transpose(1, 2).contiguous()
         mean, std = self._latent_stats(device=latent.device, dtype=latent.dtype)
         rows = ((latent - mean) / std).reshape(-1, channels)
-        return rows.float(), int(latent.shape[1])
+        result = (rows.float(), int(latent.shape[1]))
+        if cache_key is not None:
+            audio_cache[cache_key] = result
+            audio_cache.move_to_end(cache_key)
+            while len(audio_cache) > 4:
+                audio_cache.popitem(last=False)
+        return result
 
     @torch.inference_mode()
     def decode_latent(self, latent: torch.Tensor) -> torch.Tensor:
