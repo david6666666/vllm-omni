@@ -7,6 +7,7 @@ import json
 import math
 import os
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -300,7 +301,19 @@ def load_audio_file(path: str) -> tuple[torch.Tensor, int]:
             return _soundfile_to_waveform(wav)
 
 
-def load_video_audio(path: str) -> tuple[torch.Tensor, int]:
+@lru_cache(maxsize=8)
+def _load_video_audio_cached(
+    path: str,
+    mtime_ns: int,
+    file_size: int,
+) -> tuple[torch.Tensor, int]:
+    """Decode one reference soundtrack and reuse it across requests.
+
+    The cache key includes the source metadata so replacing a file at the same
+    path cannot silently reuse stale audio.  The returned waveform is treated
+    as read-only by the H3 VAE path; resampling and device transfer create new
+    tensors before model execution.
+    """
     import tempfile
 
     with tempfile.TemporaryDirectory(prefix="minimax_h3_video_audio_") as tmpdir:
@@ -325,6 +338,12 @@ def load_video_audio(path: str) -> tuple[torch.Tensor, int]:
             check=True,
         )
         return load_audio_file(output)
+
+
+def load_video_audio(path: str) -> tuple[torch.Tensor, int]:
+    source = os.fspath(path)
+    stat = os.stat(source)
+    return _load_video_audio_cached(source, stat.st_mtime_ns, stat.st_size)
 
 
 __all__ = [

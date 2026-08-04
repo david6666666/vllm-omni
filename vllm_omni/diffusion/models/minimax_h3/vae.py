@@ -288,6 +288,27 @@ class MiniMaxH3AudioVAE(nn.Module):
         self.remote.eval().to(device=device, dtype=torch.float32)
         self.model = self.remote.model
         self.sample_rate = int(self.config_dict["sample_rate"])
+        self._latent_stats_cpu = (
+            torch.tensor(self.config_dict["latents_mean"], dtype=torch.float32).view(1, 1, -1),
+            torch.tensor(self.config_dict["latents_std"], dtype=torch.float32).view(1, 1, -1),
+        )
+        self._latent_stats_device_cache: dict[
+            tuple[str, int | None, torch.dtype], tuple[torch.Tensor, torch.Tensor]
+        ] = {}
+        self._resamplers: dict[int, Any] = {}
+
+    def _latent_stats(
+        self,
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        key = (device.type, device.index, dtype)
+        stats = self._latent_stats_device_cache.get(key)
+        if stats is None:
+            stats = tuple(value.to(device=device, dtype=dtype) for value in self._latent_stats_cpu)
+            self._latent_stats_device_cache[key] = stats
+        return stats
 
     @torch.inference_mode()
     def encode_waveform(
@@ -301,10 +322,15 @@ class MiniMaxH3AudioVAE(nn.Module):
         if waveform.ndim == 1:
             waveform = waveform[None]
         if int(sample_rate) != MINIMAX_H3_AUDIO_SAMPLE_RATE:
-            waveform = torchaudio.transforms.Resample(
-                int(sample_rate),
-                MINIMAX_H3_AUDIO_SAMPLE_RATE,
-            )(waveform)
+            input_rate = int(sample_rate)
+            resampler = self._resamplers.get(input_rate)
+            if resampler is None:
+                resampler = torchaudio.transforms.Resample(
+                    input_rate,
+                    MINIMAX_H3_AUDIO_SAMPLE_RATE,
+                )
+                self._resamplers[input_rate] = resampler
+            waveform = resampler(waveform)
         if waveform.shape[0] < MINIMAX_H3_AUDIO_CHANNELS:
             waveform = waveform.repeat(
                 MINIMAX_H3_AUDIO_CHANNELS,
@@ -329,28 +355,15 @@ class MiniMaxH3AudioVAE(nn.Module):
             if latent.shape[1] != channels:
                 raise ValueError(f"cannot canonicalize audio latent {tuple(latent.shape)}")
             latent = latent.transpose(1, 2).contiguous()
-        mean = torch.tensor(
-            self.config_dict["latents_mean"],
-        ).view(1, 1, channels)
-        std = torch.tensor(
-            self.config_dict["latents_std"],
-        ).view(1, 1, channels)
+        mean, std = self._latent_stats(device=latent.device, dtype=latent.dtype)
         rows = ((latent - mean) / std).reshape(-1, channels)
         return rows.float(), int(latent.shape[1])
 
     @torch.inference_mode()
     def decode_latent(self, latent: torch.Tensor) -> torch.Tensor:
-        channels = int(self.config_dict["latent_channels"])
-        mean = torch.tensor(
-            self.config_dict["latents_mean"],
-            device=latent.device,
-            dtype=latent.dtype,
-        ).view(1, channels, 1)
-        std = torch.tensor(
-            self.config_dict["latents_std"],
-            device=latent.device,
-            dtype=latent.dtype,
-        ).view(1, channels, 1)
+        mean, std = self._latent_stats(device=latent.device, dtype=latent.dtype)
+        mean = mean.transpose(1, 2)
+        std = std.transpose(1, 2)
         waveform = self.remote.decode(latent * std + mean)
         if waveform.ndim != 3 or waveform.shape[1] != 1:
             raise ValueError(f"unexpected decoded audio shape {tuple(waveform.shape)}")

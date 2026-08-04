@@ -200,6 +200,33 @@ def test_cached_reference_video_frames_validate_shape(tmp_path):
         load_video_frames(str(bad))
 
 
+def test_reference_video_audio_cache_reuses_decode_for_unchanged_file(tmp_path, monkeypatch):
+    from vllm_omni.diffusion.models.minimax_h3 import reference_video
+
+    source = tmp_path / "reference.mp4"
+    source.write_bytes(b"fixture")
+    calls = []
+    expected = torch.arange(8, dtype=torch.float32).reshape(2, 4)
+
+    def fake_run(*args, **kwargs):
+        calls.append(args[0])
+
+    monkeypatch.setattr(reference_video.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        reference_video,
+        "load_audio_file",
+        lambda _path: (expected, 44100),
+    )
+    reference_video._load_video_audio_cached.cache_clear()
+
+    first = reference_video.load_video_audio(str(source))
+    second = reference_video.load_video_audio(str(source))
+
+    assert len(calls) == 1
+    assert first[1] == second[1] == 44100
+    assert first[0] is second[0]
+
+
 def test_text_encoder_stub_constructs_without_group_or_weights():
     from vllm_omni.diffusion.models.minimax_h3.encoder import (
         MiniMaxH3Qwen3VLEncoder,
