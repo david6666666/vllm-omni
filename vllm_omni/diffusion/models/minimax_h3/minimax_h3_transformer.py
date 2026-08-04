@@ -412,6 +412,21 @@ class MiniMaxH3Attention(nn.Module):
         regional compile fuse projections, norms, RoPE, and the surrounding
         DiT block without repeatedly graph-breaking inside the FA4 compiler.
         """
+        if self._can_use_direct_fa4(
+            q,
+            k,
+            v,
+            cu_seqlens=cu_seqlens,
+            attn_mask=attn_mask,
+        ):
+            return self._run_direct_fa4(
+                q,
+                k,
+                v,
+                cu_seqlens=cu_seqlens,
+                max_seqlen=max_seqlen,
+            )
+
         metadata = AttentionMetadata(
             attn_mask=attn_mask,
             extra={
@@ -427,6 +442,80 @@ class MiniMaxH3Attention(nn.Module):
             v.unsqueeze(0),
             metadata,
         ).squeeze(0)
+
+    @staticmethod
+    def _can_use_direct_fa4(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        *,
+        cu_seqlens: torch.Tensor,
+        attn_mask: torch.Tensor | None,
+    ) -> bool:
+        """Check the fixed-shape H3 Ulysses fast path.
+
+        H3's production recipe is strict Ulysses-4 with no ring stage and a
+        packed, mask-free sequence.  In that shape the generic Attention
+        wrapper adds strategy/metadata dispatch around the same FA4 call.
+        Keep the direct path narrowly gated so other parallel layouts and
+        alignment-mask cases retain the generic semantics.
+        """
+        if attn_mask is not None or q.device.type != "cuda":
+            return False
+        if q.shape != k.shape or q.shape != v.shape:
+            return False
+        if cu_seqlens.numel() < 2:
+            return False
+        try:
+            from vllm_omni.diffusion.attention.backends.utils.fa import flash_attn_varlen_func
+            from vllm_omni.diffusion.distributed.parallel_state import get_sp_group
+
+            sp_group = get_sp_group()
+            if sp_group.ulysses_world_size <= 1 or sp_group.ring_world_size != 1:
+                return False
+            if sp_group.ulysses_world_size != 4:
+                return False
+            if getattr(flash_attn_varlen_func, "__module__", "") != "flash_attn.cute.interface":
+                return False
+            # Strict Ulysses uses equal local sequence shards.  This also
+            # rules out the advanced-UAA variable-length path.
+            return int(cu_seqlens[-1].item()) == int(q.shape[0]) * int(sp_group.ulysses_world_size)
+        except (AssertionError, ImportError, RuntimeError):
+            return False
+
+    def _run_direct_fa4(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        *,
+        cu_seqlens: torch.Tensor,
+        max_seqlen: int,
+    ) -> torch.Tensor:
+        """Run FA4 with the two fixed-shape Ulysses collectives inline."""
+        from vllm_omni.diffusion.attention.backends.utils.fa import flash_attn_varlen_func
+        from vllm_omni.diffusion.distributed.comm import all_to_all_4D
+        from vllm_omni.diffusion.distributed.parallel_state import get_sp_group
+
+        group = get_sp_group().ulysses_group
+        q = all_to_all_4D(q.unsqueeze(0), scatter_idx=2, gather_idx=1, group=group)
+        k = all_to_all_4D(k.unsqueeze(0), scatter_idx=2, gather_idx=1, group=group)
+        v = all_to_all_4D(v.unsqueeze(0), scatter_idx=2, gather_idx=1, group=group)
+        out = flash_attn_varlen_func(
+            q=q.flatten(0, 1),
+            k=k.flatten(0, 1),
+            v=v.flatten(0, 1),
+            cu_seqlens_q=cu_seqlens,
+            cu_seqlens_k=cu_seqlens,
+            max_seqlen_q=max_seqlen,
+            max_seqlen_k=max_seqlen,
+            causal=False,
+            softmax_scale=self.softmax_scale,
+        )
+        if isinstance(out, tuple):
+            out = out[0]
+        out = out.reshape(q.shape)
+        return all_to_all_4D(out, scatter_idx=1, gather_idx=2, group=group).squeeze(0)
 
     def forward(
         self,
