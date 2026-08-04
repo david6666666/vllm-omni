@@ -298,6 +298,56 @@ def _qk_norm_rope_kernel(
     tl.store(k_base + cols * k_stride_2, k_result, mask=mask)
 
 
+@triton.jit
+def _qk_rope_inplace_kernel(
+    q_ptr,
+    k_ptr,
+    rope_cache_ptr,
+    n_tokens,
+    n_heads,
+    head_dim,
+    rope_dim,
+    q_stride_0,
+    q_stride_1,
+    q_stride_2,
+    k_stride_0,
+    k_stride_1,
+    k_stride_2,
+    rope_stride_0,
+    rope_stride_1,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """Apply H3's partial RoPE in place to already-normalized Q and K."""
+    token = tl.program_id(0)
+    head = tl.program_id(1)
+    cols = tl.arange(0, BLOCK_SIZE)
+    mask = cols < head_dim
+
+    half_rope = rope_dim // 2
+    pair = tl.where(cols < half_rope, cols + half_rope, cols - half_rope)
+    pair_mask = (cols < rope_dim) & (pair < head_dim)
+    rope_base = rope_cache_ptr + token * rope_stride_0
+    cos = tl.load(rope_base + cols * rope_stride_1, mask=pair_mask, other=1.0).to(tl.float32)
+    sin = tl.load(rope_base + (rope_dim + cols) * rope_stride_1, mask=pair_mask, other=0.0).to(tl.float32)
+    sign = tl.where(cols < half_rope, -1.0, 1.0)
+
+    q_base = q_ptr + token * q_stride_0 + head * q_stride_1
+    k_base = k_ptr + token * k_stride_0 + head * k_stride_1
+    q_values = tl.load(q_base + cols * q_stride_2, mask=mask, other=0.0).to(tl.float32)
+    k_values = tl.load(k_base + cols * k_stride_2, mask=mask, other=0.0).to(tl.float32)
+    q_pair = tl.load(q_base + pair * q_stride_2, mask=pair_mask, other=0.0).to(tl.float32)
+    k_pair = tl.load(k_base + pair * k_stride_2, mask=pair_mask, other=0.0).to(tl.float32)
+
+    q_first = (q_values * cos).to(q_ptr.dtype.element_ty)
+    q_second = (q_pair * sin).to(q_ptr.dtype.element_ty)
+    k_first = (k_values * cos).to(k_ptr.dtype.element_ty)
+    k_second = (k_pair * sin).to(k_ptr.dtype.element_ty)
+    q_rotated = (q_first.to(tl.float32) + sign * q_second.to(tl.float32)).to(q_ptr.dtype.element_ty)
+    k_rotated = (k_first.to(tl.float32) + sign * k_second.to(tl.float32)).to(k_ptr.dtype.element_ty)
+    tl.store(q_base + cols * q_stride_2, tl.where(cols < rope_dim, q_rotated, q_values), mask=mask)
+    tl.store(k_base + cols * k_stride_2, tl.where(cols < rope_dim, k_rotated, k_values), mask=mask)
+
+
 def _can_use_indexed_common(
     x: torch.Tensor,
     parameter: torch.Tensor,
@@ -601,3 +651,104 @@ def fused_qknorm_rope_bf16_(
                 num_warps=4,
             )
     return True
+
+
+def fused_rope_bf16_(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    rope_cache: torch.Tensor,
+    *,
+    rope_dim: int,
+) -> bool:
+    """Apply H3's partial RoPE to normalized Q/K without materializing cats."""
+    if not (
+        q.is_cuda
+        and k.is_cuda
+        and q.dtype == torch.bfloat16
+        and k.dtype == torch.bfloat16
+        and q.shape == k.shape
+        and q.dim() == 3
+        and q.shape[-1] == _QK_BLOCK_SIZE
+        and q.stride(-1) == k.stride(-1) == 1
+        and q.is_contiguous()
+        and k.is_contiguous()
+        and rope_cache.dtype == torch.bfloat16
+        and rope_cache.dim() == 2
+        and rope_cache.shape[0] == q.shape[0]
+        and rope_cache.shape[1] >= 2 * rope_dim
+        and rope_cache.is_contiguous()
+        and not q.requires_grad
+        and not k.requires_grad
+    ):
+        return False
+
+    if torch.compiler.is_compiling():
+        torch.ops.vllm_omni.minimax_h3_rope(q, k, rope_cache, rope_dim)
+        return True
+
+    grid = (q.shape[0], q.shape[1])
+    _qk_rope_inplace_kernel[grid](
+        q,
+        k,
+        rope_cache,
+        q.shape[0],
+        q.shape[1],
+        q.shape[-1],
+        rope_dim,
+        q.stride(0),
+        q.stride(1),
+        q.stride(2),
+        k.stride(0),
+        k.stride(1),
+        k.stride(2),
+        rope_cache.stride(0),
+        rope_cache.stride(1),
+        BLOCK_SIZE=_QK_BLOCK_SIZE,
+        num_warps=4,
+    )
+    return True
+
+
+if not hasattr(torch.ops.vllm_omni, "minimax_h3_rope"):
+
+    @torch.library.custom_op(
+        "vllm_omni::minimax_h3_rope",
+        mutates_args=("q", "k"),
+    )
+    def _minimax_h3_rope_op(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        rope_cache: torch.Tensor,
+        rope_dim: int,
+    ) -> None:
+        grid = (q.shape[0], q.shape[1])
+        _qk_rope_inplace_kernel[grid](
+            q,
+            k,
+            rope_cache,
+            q.shape[0],
+            q.shape[1],
+            q.shape[-1],
+            rope_dim,
+            q.stride(0),
+            q.stride(1),
+            q.stride(2),
+            k.stride(0),
+            k.stride(1),
+            k.stride(2),
+            rope_cache.stride(0),
+            rope_cache.stride(1),
+            BLOCK_SIZE=_QK_BLOCK_SIZE,
+            num_warps=4,
+        )
+        return None
+
+    @_minimax_h3_rope_op.register_fake
+    def _minimax_h3_rope_fake(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        rope_cache: torch.Tensor,
+        rope_dim: int,
+    ) -> None:
+        del q, k, rope_cache, rope_dim
+        return None

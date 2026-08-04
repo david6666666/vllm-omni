@@ -37,6 +37,7 @@ from vllm_omni.diffusion.distributed.sp_plan import (
 
 from .fused_ops import (
     fused_qknorm_rope_bf16_,
+    fused_rope_bf16_,
     indexed_gate_bf16_,
     indexed_scale_shift_bf16_,
 )
@@ -748,8 +749,10 @@ class MiniMaxH3Attention(nn.Module):
             q = self.q_norm(q)
             k = self.k_norm(k)
             if rope_freqs is not None:
-                q = _apply_rope(q, rope_freqs)
-                k = _apply_rope(k, rope_freqs)
+                rope_dim = rope_freqs.shape[-1] // 2
+                if not fused_rope_bf16_(q, k, rope_freqs, rope_dim=rope_dim):
+                    q = _apply_rope(q, rope_freqs)
+                    k = _apply_rope(k, rope_freqs)
 
         # The packed layout uses a second document for alignment padding.
         # Local/Ulysses backends unpad it, while Ring keeps aligned rows for
