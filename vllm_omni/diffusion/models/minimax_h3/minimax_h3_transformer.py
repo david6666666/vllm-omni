@@ -34,7 +34,6 @@ from vllm_omni.diffusion.distributed.sp_plan import (
     SequenceParallelOutput,
 )
 from vllm_omni.diffusion.layers.norm import RMSNorm
-from vllm_omni.diffusion.layers.rope import RotaryEmbedding
 
 if TYPE_CHECKING:
     from vllm.model_executor.layers.quantization.base_config import (
@@ -176,6 +175,25 @@ def _norm(size: int, *, eps: float, dtype: torch.dtype = _BF16_DTYPE) -> RMSNorm
     # torch.nn.RMSNorm upcasts reduced-precision inputs for the variance
     # reduction, matching that accumulation semantic.
     return RMSNorm(size, eps=eps, dtype=dtype)
+
+
+def _rotate_half(x: torch.Tensor) -> torch.Tensor:
+    x1, x2 = torch.chunk(x, 2, dim=-1)
+    return torch.cat((-x2, x1), dim=-1)
+
+
+def _apply_rope(x: torch.Tensor, freqs: torch.Tensor) -> torch.Tensor:
+    """Rotate the first rot_dim head dims; pass the rest through.
+
+    x: [T, heads, head_dim]; freqs: [T, rot_dim]. In the unfused path, cos/sin
+    are cast to the activation dtype before the elementwise math.
+    """
+    rot_dim = freqs.shape[-1]
+    x_rot, x_pass = x[..., :rot_dim], x[..., rot_dim:]
+    cos = torch.cos(freqs).to(x.dtype).unsqueeze(1)  # [T, 1, rot_dim]
+    sin = torch.sin(freqs).to(x.dtype).unsqueeze(1)
+    x_rot = (x_rot * cos) + (_rotate_half(x_rot) * sin)
+    return torch.cat((x_rot, x_pass), dim=-1)
 
 
 def _modulate_scale_shift(
@@ -333,7 +351,6 @@ class MiniMaxH3Attention(nn.Module):
         self.num_kv_heads = self.qkv_proj.num_kv_heads
         self.q_norm = _norm(arch.attention_head_dim, eps=arch.qk_norm_eps)
         self.k_norm = _norm(arch.attention_head_dim, eps=arch.qk_norm_eps)
-        self.rope = RotaryEmbedding(is_neox_style=True, half_head_dim=False)
         self.out_proj = RowParallelLinear(
             inner_dim,
             arch.hidden_size,
@@ -355,19 +372,6 @@ class MiniMaxH3Attention(nn.Module):
             role="self",
             prefix=prefix,
         )
-
-    def _apply_rope(self, x: torch.Tensor, freqs: torch.Tensor) -> torch.Tensor:
-        """Rotate the first rot_dim head dims; pass the rest through.
-
-        x: [T, heads, head_dim]; freqs: [T, rot_dim]. In the unfused path, cos/sin
-        are cast to the activation dtype before the elementwise math.
-        """
-        rot_dim = freqs.shape[-1]
-        x_rot, x_pass = x[..., :rot_dim], x[..., rot_dim:]
-        cos = torch.cos(freqs).to(x.dtype)  # [T, rot_dim]
-        sin = torch.sin(freqs).to(x.dtype)
-        x_rot = self.rope(x_rot, cos, sin)
-        return torch.cat((x_rot, x_pass), dim=-1)
 
     @torch.compiler.disable
     def _run_packed_attention(
@@ -455,8 +459,8 @@ class MiniMaxH3Attention(nn.Module):
         q = self.q_norm(q)
         k = self.k_norm(k)
         if rope_freqs is not None:
-            q = self._apply_rope(q, rope_freqs)
-            k = self._apply_rope(k, rope_freqs)
+            q = _apply_rope(q, rope_freqs)
+            k = _apply_rope(k, rope_freqs)
 
         # The packed layout uses a second document for alignment padding.
         # Local/Ulysses backends unpad it, while Ring keeps aligned rows for
