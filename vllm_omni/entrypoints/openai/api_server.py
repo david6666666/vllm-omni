@@ -2989,26 +2989,6 @@ async def _persist_uploaded_video_references(uploads: list[UploadFile]) -> list[
     return paths
 
 
-def _persist_uploaded_video_bytes(video_bytes: bytes, *, suffix: str = ".mp4") -> str:
-    """Persist raw uploaded video bytes to a temporary file and return its path.
-
-    Mixed-reference pipelines (e.g. MiniMax H3 Ref2VA) consume reference videos
-    as file paths rather than decoded frame lists, so single ``input_reference``
-    uploads must be written to disk before they are handed to the pipeline.
-    """
-    if suffix not in {".mkv", ".mov", ".mp4", ".webm"}:
-        suffix = ".mp4"
-    fd, path = tempfile.mkstemp(prefix="vllm_omni_video_reference_", suffix=suffix)
-    try:
-        with os.fdopen(fd, "wb") as output:
-            output.write(video_bytes)
-    except Exception:
-        if os.path.exists(path):
-            os.unlink(path)
-        raise
-    return path
-
-
 def _reference_list(value: Any) -> list[Any]:
     if value is None:
         return []
@@ -3369,12 +3349,6 @@ async def _parse_video_form(
                 elif isinstance(media_data, VideoFrames):
                     if media_data.source_path is not None:
                         video_paths.append(media_data.source_path)
-                    elif supports_mixed_reference_inputs:
-                        # Mixed-reference pipelines (e.g. MiniMax H3 Ref2VA)
-                        # consume reference videos as file paths, so persist the
-                        # single ``input_reference`` upload instead of passing a
-                        # decoded frame list.
-                        video_paths.append(_persist_uploaded_video_bytes(input_reference_bytes))
                     else:
                         video_frames = list(media_data)
 
