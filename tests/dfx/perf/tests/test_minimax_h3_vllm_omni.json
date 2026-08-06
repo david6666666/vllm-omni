@@ -37,7 +37,7 @@
     },
     "benchmark_params": [
       {
-        "name": "1344x768_frames209_steps50",
+        "name": "1344x768_frames209_steps8",
         "dataset": "random",
         "task": "t2v",
         "num-prompts": 3,
@@ -50,7 +50,7 @@
             "width": 1344,
             "height": 768,
             "prompt": "Cinematic drone shot pushing through misty mountain ridges at sunrise, golden light catching the clouds, slow and smooth.",
-            "num_inference_steps": 50,
+            "num_inference_steps": 8,
             "num_frames": 209,
             "fps": 24,
             "weight": 1
@@ -108,7 +108,7 @@
     },
     "benchmark_params": [
       {
-        "name": "1344x768_frames209_steps50",
+        "name": "1344x768_frames209_steps8",
         "dataset": "random",
         "task": "ti2v",
         "num-prompts": 3,
@@ -121,7 +121,7 @@
             "width": 1344,
             "height": 768,
             "prompt": "Continue the scene: the camera slowly pushes in on the subject as the background city lights drift and blur, with the actor singing softly and emotionally.",
-            "num_inference_steps": 50,
+            "num_inference_steps": 8,
             "num_frames": 209,
             "fps": 24,
             "weight": 1
@@ -180,7 +180,7 @@
     },
     "benchmark_params": [
       {
-        "name": "1344x768_frames209_steps50",
+        "name": "1344x768_frames209_steps8",
         "dataset": "random",
         "task": "v2v",
         "num-prompts": 3,
@@ -193,7 +193,7 @@
             "width": 1344,
             "height": 768,
             "prompt": "Restyle the reference footage into a cinematic night scene with neon reflections, keeping the same camera motion and subject.",
-            "num_inference_steps": 50,
+            "num_inference_steps": 8,
             "num_frames": 209,
             "fps": 24,
             "weight": 1
@@ -227,7 +227,7 @@
       "full_model",
       "diffusion"
     ],
-    "description": "MiniMax-H3 T2VA with 4-card distributed layerwise offload (DLO), 5 denoise steps (USP4 + HSDP4, encoder-TP4, VAE-PP4 tile)",
+    "description": "MiniMax-H3 T2VA with 4-card distributed layerwise offload (DLO), 8 denoise steps (USP4 + HSDP4, encoder-TP4, VAE-PP4 tile)",
     "server_type": "vllm-omni",
     "benchmark_endpoint": "/v1/videos",
     "server_params": {
@@ -255,7 +255,7 @@
     },
     "benchmark_params": [
       {
-        "name": "1344x768_frames209_steps5",
+        "name": "1344x768_frames209_steps8",
         "dataset": "random",
         "task": "t2v",
         "num-prompts": 3,
@@ -268,7 +268,7 @@
             "width": 1344,
             "height": 768,
             "prompt": "Cinematic drone shot pushing through misty mountain ridges at sunrise, golden light catching the clouds, slow and smooth.",
-            "num_inference_steps": 5,
+            "num_inference_steps": 8,
             "num_frames": 209,
             "fps": 24,
             "weight": 1
