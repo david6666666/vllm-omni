@@ -365,8 +365,11 @@ def _resolve_offline_model(model: str) -> str:
     # MiniMax-H3 custom code uses relative imports across files, which breaks
     # when the HF cache snapshot is symlinked (``get_class_from_dynamic_module``
     # resolves ``realpath`` into the blobs dir). Mirror the accuracy test's env
-    # overrides so CI / local runs can point at a materialized partition.
+    # overrides so CI / local runs can point at a materialized partition. The
+    # repo-root key (used with ``--task-type fl2va|ref2va``) expects a
+    # materialized root containing the FL2VA/Ref2VA subfolders.
     model_env_overrides = {
+        "MiniMaxAI/MiniMax-H3": "VLLM_TEST_MINIMAX_H3_MODEL",
         "MiniMaxAI/MiniMax-H3/FL2VA": "VLLM_TEST_MINIMAX_H3_FL2VA_MODEL",
         "MiniMaxAI/MiniMax-H3/Ref2VA": "VLLM_TEST_MINIMAX_H3_REF2VA_MODEL",
     }

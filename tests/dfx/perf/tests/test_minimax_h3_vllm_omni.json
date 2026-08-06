@@ -17,9 +17,10 @@
     "server_type": "vllm-omni",
     "benchmark_endpoint": "/v1/videos",
     "server_params": {
-      "model": "MiniMaxAI/MiniMax-H3/FL2VA",
+      "model": "MiniMaxAI/MiniMax-H3",
       "serve_args": {
         "trust-remote-code": true,
+        "task-type": "fl2va",
         "num-gpus": 4,
         "usp": 4,
         "ring": 1,
@@ -88,9 +89,10 @@
     "server_type": "vllm-omni",
     "benchmark_endpoint": "/v1/videos",
     "server_params": {
-      "model": "MiniMaxAI/MiniMax-H3/FL2VA",
+      "model": "MiniMaxAI/MiniMax-H3",
       "serve_args": {
         "trust-remote-code": true,
+        "task-type": "fl2va",
         "num-gpus": 4,
         "usp": 4,
         "ring": 1,
@@ -160,9 +162,10 @@
     "server_type": "vllm-omni",
     "benchmark_endpoint": "/v1/videos",
     "server_params": {
-      "model": "MiniMaxAI/MiniMax-H3/Ref2VA",
+      "model": "MiniMaxAI/MiniMax-H3",
       "serve_args": {
         "trust-remote-code": true,
+        "task-type": "ref2va",
         "num-gpus": 4,
         "usp": 4,
         "ring": 1,
@@ -231,9 +234,10 @@
     "server_type": "vllm-omni",
     "benchmark_endpoint": "/v1/videos",
     "server_params": {
-      "model": "MiniMaxAI/MiniMax-H3/FL2VA",
+      "model": "MiniMaxAI/MiniMax-H3",
       "serve_args": {
         "trust-remote-code": true,
+        "task-type": "fl2va",
         "num-gpus": 4,
         "usp": 4,
         "ring": 1,
@@ -243,14 +247,14 @@
         "vae-patch-parallel-size": 4,
         "vae-parallel-mode": "tile",
         "vae-use-tiling": true,
-        "enable-distributed-layerwise-offload": true,
-        "dlo-no-use-allgather": true,
-        "dlo-resident-layers": 8,
-        "enforce-eager": true,
         "diffusion-attention-backend": "FLASH_ATTN",
         "stage-init-timeout": 1800,
         "init-timeout": 1800,
-        "enable-diffusion-pipeline-profiler": true
+        "enable-diffusion-pipeline-profiler": true,
+        "enable-distributed-layerwise-offload": true,
+        "dlo-no-use-allgather": true,
+        "dlo-resident-layers": 8,
+        "enforce-eager": true
       }
     },
     "benchmark_params": [
