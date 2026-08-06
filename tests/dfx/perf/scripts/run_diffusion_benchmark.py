@@ -423,6 +423,11 @@ class DiffusionServer:
     def _start_server(self) -> None:
         env = os.environ.copy()
         env["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+        # Give each run its own writable video-storage dir. The server default
+        # (/tmp/storage) may be missing or not writable on shared hosts / CI.
+        storage_path = Path(os.environ.get("VLLM_OMNI_STORAGE_PATH", str(BENCHMARK_RESULT_DIR / "storage")))
+        storage_path.mkdir(parents=True, exist_ok=True)
+        env["VLLM_OMNI_STORAGE_PATH"] = str(storage_path)
 
         cmd = [
             sys.executable,
