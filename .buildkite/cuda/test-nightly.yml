@@ -420,6 +420,15 @@ steps:
           - pytest -s -v tests/e2e/online_serving/test_wan_2_1_vace_expansion.py tests/e2e/online_serving/test_ltx2_expansion.py -m "full_model and cuda" --run-level "full_model"
         mirror_hardwares: h100_2
 
+      # H100 function coverage. MiniMax-H3 DLO is the first X2V model with an
+      # H100 function test (2x H100, DLO keeps the per-GPU peak far below the
+      # 80 GiB budget); add more H100-marked X2V cases here as validated.
+      - label: ":full_moon: Diffusion X2V(&A&T) · Function Test with H100"
+        timeout_in_minutes: 120
+        commands:
+          - pytest -sv tests/diffusion/models/minimax_h3/test_minimax_h3_dlo.py -m "full_model and diffusion and H100" --run-level "full_model"
+        mirror_hardwares: h100_2
+
       - label: ":full_moon: Diffusion X2V · Wan2.2 Accuracy Test"
         timeout_in_minutes: 180
         commands:
