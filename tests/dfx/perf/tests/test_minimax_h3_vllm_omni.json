@@ -61,10 +61,10 @@
           "extra_params": "{\"task\":\"t2va\",\"duration\":8.7,\"aspect_ratio\":\"16:9\",\"audio_flow_shift\":3.0}"
         },
         "baseline": {
-          "B300": {
-            "throughput_qps": 0.0437,
-            "latency_mean": 22.871,
-            "peak_memory_mb_mean": 60162.0
+          "H100": {
+            "throughput_qps": 0.0211,
+            "latency_mean": 38.3252,
+            "peak_memory_mb_mean": 54219.6
           }
         }
       }
@@ -133,10 +133,10 @@
         },
         "num-input-images": 1,
         "baseline": {
-          "B300": {
-            "throughput_qps": 0.042,
-            "latency_mean": 23.83,
-            "peak_memory_mb_mean": 60672.0
+          "H100": {
+            "throughput_qps": 0.0212,
+            "latency_mean": 38.1385,
+            "peak_memory_mb_mean": 54622.8
           }
         }
       }
@@ -204,10 +204,10 @@
           "extra_params": "{\"task\":\"ref2va\",\"duration\":8.7,\"aspect_ratio\":\"16:9\",\"audio_flow_shift\":3.0}"
         },
         "baseline": {
-          "B300": {
-            "throughput_qps": 0.0133,
-            "latency_mean": 75.309,
-            "peak_memory_mb_mean": 61312.0
+          "H100": {
+            "throughput_qps": 0.0077,
+            "latency_mean": 105.7508,
+            "peak_memory_mb_mean": 55180.8
           }
         }
       }
@@ -279,10 +279,10 @@
           "extra_params": "{\"task\":\"t2va\",\"duration\":8.7,\"aspect_ratio\":\"16:9\",\"audio_flow_shift\":3.0}"
         },
         "baseline": {
-          "B300": {
-            "throughput_qps": 0.039,
-            "latency_mean": 25.627,
-            "peak_memory_mb_mean": 40134.0
+          "H100": {
+            "throughput_qps": 0.0212,
+            "latency_mean": 38.2089,
+            "peak_memory_mb_mean": 36218.4
           }
         }
       }
