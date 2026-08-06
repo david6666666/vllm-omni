@@ -362,6 +362,20 @@ def _resolve_offline_model(model: str) -> str:
     if not model or os.path.isdir(model):
         return model
 
+    # MiniMax-H3 custom code uses relative imports across files, which breaks
+    # when the HF cache snapshot is symlinked (``get_class_from_dynamic_module``
+    # resolves ``realpath`` into the blobs dir). Mirror the accuracy test's env
+    # overrides so CI / local runs can point at a materialized partition.
+    model_env_overrides = {
+        "MiniMaxAI/MiniMax-H3/FL2VA": "VLLM_TEST_MINIMAX_H3_FL2VA_MODEL",
+        "MiniMaxAI/MiniMax-H3/Ref2VA": "VLLM_TEST_MINIMAX_H3_REF2VA_MODEL",
+    }
+    env_name = model_env_overrides.get(model)
+    if env_name:
+        env_model = os.environ.get(env_name)
+        if env_model:
+            return env_model
+
     parts = model.split("/")
     if len(parts) >= 3:
         repo_id = "/".join(parts[:2])
