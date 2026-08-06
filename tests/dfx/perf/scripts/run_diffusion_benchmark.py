@@ -350,10 +350,32 @@ def _kill_process_tree(pid: int) -> None:
 
 
 def _resolve_offline_model(model: str) -> str:
-    """Under HF_HUB_OFFLINE, resolve a HF repo id to its local snapshot dir."""
+    """Resolve a model string to a local directory.
+
+    Local paths pass through unchanged. HF repo ids are resolved to their local
+    snapshot dir when ``HF_HUB_OFFLINE`` is set. ``repo_id/subfolder`` (e.g.
+    ``MiniMaxAI/MiniMax-H3/FL2VA``) is resolved to the matching partition
+    subfolder of the snapshot, downloading only that subfolder when online.
+    """
     import huggingface_hub
 
-    if not model or os.path.isdir(model) or not huggingface_hub.constants.HF_HUB_OFFLINE:
+    if not model or os.path.isdir(model):
+        return model
+
+    parts = model.split("/")
+    if len(parts) >= 3:
+        repo_id = "/".join(parts[:2])
+        subfolder = "/".join(parts[2:])
+        from huggingface_hub import snapshot_download
+
+        snapshot_root = snapshot_download(
+            repo_id,
+            allow_patterns=[f"{subfolder}/**"],
+            local_files_only=huggingface_hub.constants.HF_HUB_OFFLINE,
+        )
+        return str(Path(snapshot_root) / subfolder)
+
+    if not huggingface_hub.constants.HF_HUB_OFFLINE:
         return model
     from huggingface_hub import snapshot_download
 

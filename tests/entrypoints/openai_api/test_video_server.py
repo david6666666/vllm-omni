@@ -491,6 +491,42 @@ def test_v2v_video_generation_form(test_client, mocker: MockerFixture):
     assert input_video[0].size == (32, 24)
 
 
+def test_h3_ref2va_single_video_upload_persists_path(test_client, mocker: MockerFixture):
+    """MiniMax H3 Ref2VA consumes single ``input_reference`` video uploads as paths.
+
+    Mixed-reference pipelines need the uploaded video persisted to a file so the
+    H3 reference-video preparer can ffprobe/ffmpeg it; it must not be handed a
+    decoded frame list (which H3 would treat as many video references).
+    """
+    video_bytes = _make_test_video_bytes((32, 24), num_frames=3)
+
+    mocker.patch(
+        "vllm_omni.entrypoints.openai.serving_video._encode_video_bytes",
+        return_value=b"fake-video",
+    )
+    test_client.app.state.openai_serving_video._engine_client.model_class_name = "MiniMaxH3Pipeline"
+    response = test_client.post(
+        "/v1/videos",
+        data={
+            "prompt": "Restyle this footage.",
+            "extra_params": json.dumps({"task": "ref2va", "duration": 8.0}),
+        },
+        files={"input_reference": ("input.mp4", video_bytes, "video/mp4")},
+    )
+
+    assert response.status_code == 200
+    video_id = response.json()["id"]
+    _wait_for_status(test_client, video_id, VideoGenerationStatus.COMPLETED.value)
+
+    engine = test_client.app.state.openai_serving_video._engine_client
+    input_video = engine.captured_prompt["multi_modal_data"]["video"]
+    assert len(input_video) == 1
+    assert all(isinstance(item, str) for item in input_video)
+    assert engine.captured_reference_video_bytes is not None
+    assert len(engine.captured_reference_video_bytes) == 1
+    assert engine.captured_reference_video_bytes[0] == video_bytes
+
+
 def test_r9_typed_video_reference_form(test_client, mocker: MockerFixture):
     mocker.patch(
         "vllm_omni.entrypoints.openai.serving_video._encode_video_bytes",
