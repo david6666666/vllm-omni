@@ -460,7 +460,7 @@ steps:
             exit $$EXIT2
         mirror_hardwares: h100_2
 
-      - label: ":full_moon: Diffusion X2V 路 Perf Test 路 MiniMax-H3"
+      - label: ":full_moon: Diffusion X2V · Perf Test · MiniMax-H3"
         key: nightly-diffusion-x2v-performance-minimax-h3
         timeout_in_minutes: 180
         commands:
