@@ -1274,7 +1274,11 @@ def test_ref2va_qwen_sampling_decodes_prepared_video_once(monkeypatch):
     )
 
     assert load_calls == ["prepared.mp4"]
-    assert [int(frame[0, 0, 0]) for frame in sampled["frames"]] == [0, int(decoded[12, 0, 0, 0]), int(decoded[24, 0, 0, 0])]
+    assert [int(frame[0, 0, 0]) for frame in sampled["frames"]] == [
+        0,
+        int(decoded[12, 0, 0, 0]),
+        int(decoded[24, 0, 0, 0]),
+    ]
 
 
 def test_ref2va_two_video_recipe_tolerates_container_rounding(monkeypatch, tmp_path):
