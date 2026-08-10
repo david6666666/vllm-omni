@@ -109,10 +109,8 @@ DURATION_SECONDS = 10.0
 I2VA_DURATION_SECONDS = 8.0
 REF2VA_DURATION_SECONDS = 5.0
 SEED = 0
-SSIM_THRESHOLD = 0.82
-PSNR_THRESHOLD = 20.0
-T2VA_SSIM_THRESHOLD = 0.97
-T2VA_PSNR_THRESHOLD = 34.0
+SSIM_THRESHOLD = 0.97
+PSNR_THRESHOLD = 34.0
 REQUEST_TIMEOUT_SECONDS = 60 * 60
 
 
@@ -304,8 +302,6 @@ def test_minimax_h3_t2va_matches_official_reference(
         reference_path,
         frame_count=NUM_FRAMES,
         label="minimax_h3_t2va_official_reference",
-        ssim_threshold=T2VA_SSIM_THRESHOLD,
-        psnr_threshold=T2VA_PSNR_THRESHOLD,
     )
 
 
