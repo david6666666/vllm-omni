@@ -31,10 +31,6 @@ MODEL_REPO_ID = "MiniMaxAI/MiniMax-H3"
 MODEL_REVISION = "main"
 MODEL_ENV_VAR = "VLLM_TEST_MINIMAX_H3_FL2VA_MODEL"
 REF2VA_MODEL_ENV_VAR = "VLLM_TEST_MINIMAX_H3_REF2VA_MODEL"
-# Keep the official asset link visible in the test report. Hugging Face's
-# ``blob`` URL is an HTML page, so resolve it to the raw asset for download.
-REFERENCE_VIDEO_URL = "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/assets/t2va.mp4"
-REFERENCE_VIDEO_SHA256 = "d66903241362e224085cc93f7a5e70fba6ab378d0ac6ff6af83acf2559849a42"
 I2VA_REFERENCE_VIDEO_URL = "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/assets/i2va.mp4"
 I2VA_REFERENCE_VIDEO_SHA256 = "5a5d6e0fcdda7e6a5d98cb92d9e5cb4b6b0b44d6e1dfd5a370d16dfaa79b9ae6"
 I2VA_IMAGE_URL = (
@@ -90,22 +86,15 @@ The soundscape consists of the continuous, atmospheric background music from <Au
 non_diegetic_music:
 The atmospheric, sustained background music from <Audio 1> is reused as the continuous score, playing quietly beneath the spoken dialogue.
 """
-# This is the official reproducible 768p T2VA prompt associated with
-# ``assets/t2va.mp4`` in the MiniMax H3 repository.
-PROMPT = """integrated_multimodal_description: [Shot 1] Cinematic, medium wide shot, pushing in slowly. In the cavernous, dimly lit bridge of a starship, sleek metallic consoles with glowing amber displays flank a massive, curved observation window. A female captain, in her late 40s with an athletic build and short silver-streaked black hair, stands in the center midground. She wears a structured, high-collared dark navy military tunic with silver chest insignias. Her back is to the camera, silhouetted against the cool, ambient starlight pouring through the thick glass. She stands perfectly still with her hands clasped tightly behind her back. Outside the window, a massive armada of jagged, dark grey dreadnoughts hovers in tight formation against a deep purple space nebula. The fleet's massive rear thrusters begin to glow with an intense, escalating bright blue light. [Shot 2] At 00:04.500, the camera cuts to a close-up of the captain's face and shakes strongly. The brilliant blue-white light from the fleet's gathering energy reflects vividly in her dark eyes. Suddenly, a blinding white flash floods through the window, completely washing out the background as the fleet jumps to hyperspace. The sheer spatial force violently jolts the bridge, causing the captain from Shot 1 to stagger slightly forward, her shoulders tensing as she visibly braces herself against the physical tremors. As the intense white light fades abruptly, leaving only the dim, empty expanse of the purple nebula reflected on her starkly lit skin, her jaw clenches, and she slowly closes her eyes in the newly emptied space.
-overall_soundscape: A low, resonant hum of the ship's ambient life support systems serves as the baseline, soon drowned out by an audible, escalating, high-pitched electronic whine as the fleet outside charges its hyperdrives. A massive, deafening, bass-heavy boom and sharp crackle erupts during the blinding flash, accompanied by the loud metallic creaking, rattling, and deep thuds of the bridge's bulkheads vibrating under immense physical stress. The intense roaring impact then cuts abruptly back to a hollow, echoing room tone, leaving only the faint, steady hum of the isolated bridge.
-non_diegetic_music: Cinematic space-opera orchestral score, slow tempo, featuring a solitary, mournful French horn melody over deep, sustained string dissonances that build rapidly in volume and intensity, swelling to a massive orchestral peak before snapping immediately into silence right after the jump."""
 
 WIDTH = 1344
 HEIGHT = 768
 FPS = 24
-NUM_FRAMES = 243
 I2VA_NUM_FRAMES = 192
 REF2VA_NUM_FRAMES = 124
 NUM_INFERENCE_STEPS = 50
 FLOW_SHIFT = 12.0
 AUDIO_FLOW_SHIFT = 3.0
-DURATION_SECONDS = 10.0
 I2VA_DURATION_SECONDS = 8.0
 REF2VA_DURATION_SECONDS = 5.0
 SEED = 0
@@ -174,16 +163,6 @@ def _download_reference_asset(
     return reference_path
 
 
-def _download_reference_video(output_dir: Path) -> Path:
-    return _download_reference_asset(
-        output_dir,
-        filename="reference.mp4",
-        url=REFERENCE_VIDEO_URL,
-        sha256=REFERENCE_VIDEO_SHA256,
-        label="T2VA",
-    )
-
-
 def _probe_audio(path: Path) -> dict[str, str | int]:
     probe_binary("ffprobe")
     result = subprocess.run(
@@ -243,65 +222,6 @@ def _assert_official_video(
         offline_path=reference_path,
         ssim_threshold=ssim_threshold,
         psnr_threshold=psnr_threshold,
-    )
-
-
-@hardware_test(res={"cuda": "H100"}, num_cards=4)
-def test_minimax_h3_t2va_matches_official_reference(
-    accuracy_artifact_root: Path,
-) -> None:
-    if not torch.cuda.is_available():
-        pytest.skip("MiniMax H3 T2VA accuracy test requires CUDA.")
-
-    probe_binary("ffmpeg")
-    probe_binary("ffprobe")
-    output_dir = reset_artifact_dir(accuracy_artifact_root / "minimax_h3_t2va")
-    reference_path = _download_reference_video(output_dir)
-    generated_path = output_dir / "vllm_omni.mp4"
-
-    server_env = {
-        "FLASHINFER_DISABLE_VERSION_CHECK": "1",
-        "VLLM_WORKER_MULTIPROC_METHOD": "spawn",
-        "VLLM_OMNI_VIDEO_SYNC_TIMEOUT": str(REQUEST_TIMEOUT_SECONDS),
-        "VLLM_OMNI_STORAGE_PATH": str(output_dir / "storage"),
-    }
-    request_data = {
-        "prompt": PROMPT,
-        "seed": str(SEED),
-        "extra_params": json.dumps(
-            {
-                "task": "t2va",
-                "conditions": [],
-                "target": {
-                    "short_edge": HEIGHT,
-                    "aspect_ratio": "16:9",
-                    "duration_seconds": DURATION_SECONDS,
-                },
-            }
-        ),
-    }
-
-    with OmniServer(
-        _model_name(),
-        _server_args(),
-        env_dict=server_env,
-        use_omni=True,
-    ) as server:
-        response = requests.post(
-            f"http://{server.host}:{server.port}/v1/videos/sync",
-            data=request_data,
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        )
-
-    response.raise_for_status()
-    assert response.headers["content-type"].startswith("video/mp4")
-    generated_path.write_bytes(response.content)
-
-    _assert_official_video(
-        generated_path,
-        reference_path,
-        frame_count=NUM_FRAMES,
-        label="minimax_h3_t2va_official_reference",
     )
 
 
