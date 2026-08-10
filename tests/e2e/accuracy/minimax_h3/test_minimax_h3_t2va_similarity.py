@@ -93,9 +93,7 @@ The atmospheric, sustained background music from <Audio 1> is reused as the cont
 # This is the official reproducible 768p T2VA prompt associated with
 # ``assets/t2va.mp4`` in the MiniMax H3 repository.
 PROMPT = """integrated_multimodal_description: [Shot 1] Cinematic, medium wide shot, pushing in slowly. In the cavernous, dimly lit bridge of a starship, sleek metallic consoles with glowing amber displays flank a massive, curved observation window. A female captain, in her late 40s with an athletic build and short silver-streaked black hair, stands in the center midground. She wears a structured, high-collared dark navy military tunic with silver chest insignias. Her back is to the camera, silhouetted against the cool, ambient starlight pouring through the thick glass. She stands perfectly still with her hands clasped tightly behind her back. Outside the window, a massive armada of jagged, dark grey dreadnoughts hovers in tight formation against a deep purple space nebula. The fleet's massive rear thrusters begin to glow with an intense, escalating bright blue light. [Shot 2] At 00:04.500, the camera cuts to a close-up of the captain's face and shakes strongly. The brilliant blue-white light from the fleet's gathering energy reflects vividly in her dark eyes. Suddenly, a blinding white flash floods through the window, completely washing out the background as the fleet jumps to hyperspace. The sheer spatial force violently jolts the bridge, causing the captain from Shot 1 to stagger slightly forward, her shoulders tensing as she visibly braces herself against the physical tremors. As the intense white light fades abruptly, leaving only the dim, empty expanse of the purple nebula reflected on her starkly lit skin, her jaw clenches, and she slowly closes her eyes in the newly emptied space.
-
 overall_soundscape: A low, resonant hum of the ship's ambient life support systems serves as the baseline, soon drowned out by an audible, escalating, high-pitched electronic whine as the fleet outside charges its hyperdrives. A massive, deafening, bass-heavy boom and sharp crackle erupts during the blinding flash, accompanied by the loud metallic creaking, rattling, and deep thuds of the bridge's bulkheads vibrating under immense physical stress. The intense roaring impact then cuts abruptly back to a hollow, echoing room tone, leaving only the faint, steady hum of the isolated bridge.
-
 non_diegetic_music: Cinematic space-opera orchestral score, slow tempo, featuring a solitary, mournful French horn melody over deep, sustained string dissonances that build rapidly in volume and intensity, swelling to a massive orchestral peak before snapping immediately into silence right after the jump."""
 
 WIDTH = 1344
@@ -113,6 +111,8 @@ REF2VA_DURATION_SECONDS = 5.0
 SEED = 0
 SSIM_THRESHOLD = 0.82
 PSNR_THRESHOLD = 20.0
+T2VA_SSIM_THRESHOLD = 0.97
+T2VA_PSNR_THRESHOLD = 34.0
 REQUEST_TIMEOUT_SECONDS = 60 * 60
 
 
@@ -221,6 +221,8 @@ def _assert_official_video(
     *,
     frame_count: int,
     label: str,
+    ssim_threshold: float = SSIM_THRESHOLD,
+    psnr_threshold: float = PSNR_THRESHOLD,
 ) -> None:
     reference_metadata = probe_video(reference_path)
     generated_metadata = probe_video(generated_path)
@@ -241,8 +243,8 @@ def _assert_official_video(
         label=label,
         online_path=generated_path,
         offline_path=reference_path,
-        ssim_threshold=SSIM_THRESHOLD,
-        psnr_threshold=PSNR_THRESHOLD,
+        ssim_threshold=ssim_threshold,
+        psnr_threshold=psnr_threshold,
     )
 
 
@@ -267,18 +269,16 @@ def test_minimax_h3_t2va_matches_official_reference(
     }
     request_data = {
         "prompt": PROMPT,
-        "width": str(WIDTH),
-        "height": str(HEIGHT),
-        "fps": str(FPS),
-        "num_inference_steps": str(NUM_INFERENCE_STEPS),
-        "flow_shift": str(FLOW_SHIFT),
         "seed": str(SEED),
         "extra_params": json.dumps(
             {
                 "task": "t2va",
-                "duration": DURATION_SECONDS,
-                "aspect_ratio": "16:9",
-                "audio_flow_shift": AUDIO_FLOW_SHIFT,
+                "conditions": [],
+                "target": {
+                    "short_edge": HEIGHT,
+                    "aspect_ratio": "16:9",
+                    "duration_seconds": DURATION_SECONDS,
+                },
             }
         ),
     }
@@ -304,6 +304,8 @@ def test_minimax_h3_t2va_matches_official_reference(
         reference_path,
         frame_count=NUM_FRAMES,
         label="minimax_h3_t2va_official_reference",
+        ssim_threshold=T2VA_SSIM_THRESHOLD,
+        psnr_threshold=T2VA_PSNR_THRESHOLD,
     )
 
 
