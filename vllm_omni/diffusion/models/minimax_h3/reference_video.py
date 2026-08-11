@@ -419,12 +419,7 @@ def load_video_frames(path: str) -> np.ndarray:
     return frames.asnumpy() if hasattr(frames, "asnumpy") else np.asarray(frames)
 
 
-def sample_reference_video_frames(
-    prepared_path: str,
-    *,
-    workdir: str,
-) -> dict[str, Any]:
-    del workdir
+def sample_reference_video_frames(prepared_path: str) -> dict[str, Any]:
     meta = _probe_video(prepared_path)
     ratio = MINIMAX_H3_FPS / MINIMAX_H3_QWEN_VIDEO_SAMPLE_FPS
     indices: list[int] = []
