@@ -1268,17 +1268,16 @@ def test_ref2va_qwen_sampling_decodes_prepared_video_once(monkeypatch):
         lambda path: load_calls.append(path) or decoded,
     )
 
-    sampled = reference_video_module.sample_reference_video_frames(
-        "prepared.mp4",
-        workdir="unused",
-    )
+    sampled = reference_video_module.sample_reference_video_frames("prepared.mp4")
 
     assert load_calls == ["prepared.mp4"]
-    assert [int(frame[0, 0, 0]) for frame in sampled["frames"]] == [
-        0,
-        int(decoded[12, 0, 0, 0]),
-        int(decoded[24, 0, 0, 0]),
-    ]
+    for frame, expected in zip(
+        sampled["frames"],
+        (decoded[0], decoded[12], decoded[24]),
+        strict=True,
+    ):
+        np.testing.assert_array_equal(frame, expected)
+    assert sampled["block_timestamps"] == [0.25, 1.0]
 
 
 def test_ref2va_two_video_recipe_tolerates_container_rounding(monkeypatch, tmp_path):
@@ -1515,6 +1514,21 @@ def test_g4_standalone_audio_duration_and_total_duration_contract():
                 (torch.zeros(1, 8 * sample_rate), sample_rate),
                 (torch.zeros(1, 8 * sample_rate), sample_rate),
             ]
+        )
+
+
+def test_ref2va_audio_duration_validation_precedes_rank_branch(monkeypatch):
+    from vllm_omni.diffusion.models.minimax_h3 import pipeline_minimax_h3 as pipeline_module
+
+    pipeline = object.__new__(pipeline_module.MiniMaxH3Pipeline)
+    pipeline.device = torch.device("cpu")
+    monkeypatch.setattr(pipeline_module, "_dit_rank_world", lambda: (None, 1, 2))
+
+    waveform = torch.zeros(1, 10)
+    with pytest.raises(ValueError, match="max_duration_seconds must be positive"):
+        pipeline._encode_audio_conditions(
+            [(waveform, 10)],
+            max_duration_seconds=0,
         )
 
 
