@@ -1523,8 +1523,8 @@ class SolAttnSpec:
         if self.dense_steps < 0:
             raise ValueError(f"sol_attn.dense_steps must be >= 0; got {self.dense_steps!r}.")
         if isinstance(self.kv_splits, int):
-            if self.kv_splits < 1:
-                raise ValueError(f"sol_attn.kv_splits must be >= 1; got {self.kv_splits!r}.")
+            if self.kv_splits not in (1, 2, 4):
+                raise ValueError(f"sol_attn.kv_splits must be 1, 2, or 4; got {self.kv_splits!r}.")
         elif isinstance(self.kv_splits, str) and self.kv_splits.lower() == "auto":
             self.kv_splits = "auto"
         else:
@@ -1691,13 +1691,13 @@ class AttentionConfig:
             normalized[role] = node
             return
 
-        spec_keys = {"backend", "skip_softmax", "quant", "block_sparse"}
+        spec_keys = {"backend", "skip_softmax", "quant", "block_sparse", "sol_attn"}
         node_dict = dict(node)
         node_keys = set(node_dict)
         if node_keys & spec_keys:
             if not node_keys <= spec_keys:
                 raise ValueError(
-                    f"Invalid per_role entry for role {role!r}: cannot mix backend/skip_softmax with nested role keys."
+                    f"Invalid per_role entry for role {role!r}: cannot mix backend config with nested role keys."
                 )
             normalized[role] = node_dict
             return

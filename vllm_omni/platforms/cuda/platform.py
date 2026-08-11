@@ -199,6 +199,12 @@ class CudaOmniPlatform(OmniPlatform, CudaPlatformBase):
                         "TRTLLM_ATTN diffusion attention backend requires flashinfer, which is not installed."
                     )
             if backend_upper == "SOL_ATTN":
+                if not compute_supported:
+                    raise ValueError(
+                        "SOL_ATTN diffusion attention backend requires an SM80+ CUDA GPU. "
+                        f"Detected {sm_str or 'an unknown compute capability'}. Select a "
+                        "different --diffusion-attention-backend."
+                    )
                 if head_size != 128:
                     raise ValueError(
                         "SOL_ATTN diffusion attention backend requires head_dim=128 "
