@@ -878,10 +878,7 @@ class MiniMaxH3Pipeline(
                     videos = []
                     sampled_videos = []
                     for index, item in enumerate(prepared_videos):
-                        sampled = sample_reference_video_frames(
-                            item["prepared_path"],
-                            workdir=str(Path(item["prepared_path"]).parent / f"qwen_frames_{index}"),
-                        )
+                        sampled = sample_reference_video_frames(item["prepared_path"])
                         videos.append(np.stack(sampled["frames"]))
                         sampled_videos.append(sampled)
                     vision = self.processor.video_processor(
@@ -1210,14 +1207,14 @@ class MiniMaxH3Pipeline(
     ) -> tuple[torch.Tensor | None, list[int]]:
         if not audios:
             return None, []
+        if max_duration_seconds is not None:
+            max_duration_seconds = float(max_duration_seconds)
+            if max_duration_seconds <= 0:
+                raise ValueError("max_duration_seconds must be positive")
         _, rank, _ = _dit_rank_world()
         rows = None
         lengths = torch.zeros(len(audios), dtype=torch.long, device=self.device)
         if rank == 0:
-            if max_duration_seconds is not None:
-                max_duration_seconds = float(max_duration_seconds)
-                if max_duration_seconds <= 0:
-                    raise ValueError("max_duration_seconds must be positive")
             bounded_audios = []
             for waveform, sample_rate in audios:
                 if max_duration_seconds is not None:
