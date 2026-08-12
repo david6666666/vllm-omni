@@ -1,0 +1,408 @@
+# Production Feature Patterns
+
+## Contents
+
+1. [Compatibility matrix](#compatibility-matrix)
+2. [Online FP8](#online-fp8)
+3. [Strict fused-weight loading](#strict-fused-weight-loading)
+4. [Distributed layerwise offload](#distributed-layerwise-offload)
+5. [Per-request Cache-DiT](#per-request-cache-dit)
+6. [Combination gates](#combination-gates)
+
+## Compatibility matrix
+
+Create rows at the granularity below. Add evidence links and a reason for every
+non-validated state.
+
+| Task/shape | Execution mode/capacity | Backend/layout | Quant | Cache policy | Offload | Topology | Hardware/dtype | State | Evidence |
+|---|---|---|---|---|---|---|---|---|---|
+| `<task>/<shape>/<schedule>` | serial request / 1 | SDPA, padded | BF16 | none | resident | 1 device | `<card>` BF16 | `not tested` | — |
+| `<task>/<shape>/<schedule>` | step / N | `<fast>`, packed | BF16 | none | resident | `<TP/SP>` | `<card>` BF16 | `not tested` | — |
+| `<task>/<shape>/<schedule>` | step / N | `<fast>`, packed | FP8 | high | DLO no-AG | `<TP/SP>` | `<card>` | `not tested` | — |
+
+Initialize every row as `not tested`; the table is a work queue, not evidence.
+Promote the dense BF16 row to the oracle only after its scoped parity passes.
+Add one axis at a time. If the runtime cannot
+enforce a known-incompatible combination, add construction/admission
+validation before writing a recipe.
+
+## Online FP8
+
+### Component routing
+
+The public builder accepts one method or a longest-prefix component map:
+
+```python
+from vllm_omni.quantization import build_quant_config
+
+config = build_quant_config({
+    "transformer": {
+        "method": "fp8",
+        "ignored_layers": ["transformer.final_layer"],
+    },
+    "text_encoder": None,
+    "vae": None,
+    "default": None,
+})
+
+assert config.resolve("transformer.blocks.0.attn.qkv_proj") is not None
+assert config.resolve("text_encoder.layers.0.mlp") is None
+assert config.resolve("vae.decoder.conv_out") is None
+```
+
+Use actual runtime prefixes. Multi-DiT or nested pipelines may not use the
+generic names `transformer` and `vae`. A prefix that falls through to a default
+is not component validation. Add tests for every included and ignored prefix.
+
+For CLI serving, first validate resident DiT-only FP8:
+
+```bash
+vllm serve '<model>' --omni --quantization fp8 --max-num-seqs 1
+```
+
+For scoped routing:
+
+```bash
+vllm serve '<model>' --omni \
+  --diffusion-quantization-config \
+  '{"<dit-runtime-prefix>":{"method":"fp8","ignored_layers":["<exact-linear-prefix>"]},"<vae-runtime-prefix>":null,"default":null}' \
+  --max-num-seqs 1
+```
+
+Do not publish these placeholders. A recipe must contain the target model's
+verified prefixes.
+
+### Quantizable module wiring
+
+Pass `quant_config` and a stable prefix through every vLLM linear. Keep
+precision-sensitive modulation/norm layers safe unless proven otherwise.
+
+```python
+from vllm.model_executor.layers.activation import SiluAndMul
+from vllm.model_executor.layers.linear import (
+    MergedColumnParallelLinear,
+    QKVParallelLinear,
+    RowParallelLinear,
+)
+
+self.qkv_proj = QKVParallelLinear(
+    hidden_size=hidden_size,
+    head_size=head_dim,
+    total_num_heads=num_heads,
+    total_num_kv_heads=num_kv_heads,
+    bias=False,
+    quant_config=quant_config,
+    prefix=f"{prefix}.attn.qkv_proj",
+)
+self.gate_up_proj = MergedColumnParallelLinear(
+    hidden_size,
+    [intermediate_size, intermediate_size],
+    bias=False,
+    quant_config=quant_config,
+    prefix=f"{prefix}.mlp.gate_up_proj",
+)
+self.act_fn = SiluAndMul()
+self.down_proj = RowParallelLinear(
+    intermediate_size,
+    hidden_size,
+    bias=False,
+    input_is_parallel=True,
+    quant_config=quant_config,
+    prefix=f"{prefix}.mlp.down_proj",
+)
+```
+
+Set required checkpoint parameters to fail rather than silently initialize if
+the current loader supports `missing_param_init = "error"`.
+
+### FP8 evidence
+
+For each task/hardware row, capture:
+
+- startup proves the FP8 quant method is attached to intended linear modules;
+- no unexpected BF16 fallback and no meta/uninitialized parameters;
+- same-seed component, trajectory, and final-artifact comparison with BF16;
+- HBM at load, resident, encode, denoise, decode, and peak;
+- cold load time, warm latency, p50/p95/p99, and throughput;
+- named ignored layers and why their BF16 retention is required.
+
+DiT FP8 evidence does not cover the text encoder or VAE. CUDA evidence does not
+cover ROCm/NPU/XPU. A pre-quantized checkpoint is a different loading path from
+online FP8 and needs its own state.
+
+## Strict fused-weight loading
+
+Never use `param.data.copy_()` for quantizable vLLM parameters. Transform the
+checkpoint layout before invoking the parameter loader so the online quant
+loader remains outermost:
+
+```python
+from vllm.model_executor.model_loader.weight_utils import default_weight_loader
+
+param = params[target_name]
+weight_loader = getattr(param, "weight_loader", default_weight_loader)
+
+if target_name.endswith(".qkv_proj.weight"):
+    packed_qkv = reorder_checkpoint_qkv(checkpoint_weight)
+    weight_loader(param, packed_qkv)
+elif target_name.endswith(".gate_up_proj.weight"):
+    gate, up = checkpoint_weight.chunk(2, dim=0)
+    weight_loader(param, gate, 0)
+    weight_loader(param, up, 1)
+else:
+    weight_loader(param, checkpoint_weight)
+```
+
+Track source shards per fused destination:
+
+```python
+expected = {
+    "blocks.0.attn.qkv_proj.weight": {"q", "k", "v"},
+    "blocks.0.mlp.gate_up_proj.weight": {0, 1},
+}
+seen = {name: set() for name in expected}
+
+# After mapping/loading each source:
+seen[target_name].add(shard_id)
+
+incomplete = {
+    name: sorted(shards - seen[name], key=str)
+    for name, shards in expected.items()
+    if shards - seen[name]
+}
+if incomplete:
+    raise RuntimeError(f"incomplete fused checkpoint parameters: {incomplete}")
+```
+
+Also compare retained model parameters with the returned loaded set. Explicit
+checkpoint ignores need a reason and test; an unknown or missing weight is not
+an ignore policy.
+
+## Distributed layerwise offload
+
+### Declare component topology
+
+Use `SupportsComponentDiscovery` and `OffloadPlan`. Validate all dotted paths
+at construction/test time because discovery may otherwise warn and skip.
+
+Treat a future/requested `--layerwise-offload-components` selector as a public
+API only if it exists in the target revision. Today, express component topology
+with `OffloadPlan` (`on_demand_component_paths`, `block_attrs`,
+`encoder_block_attrs`, `resident_dit_paths`, and `offload_submodules`). Do not
+invent a CLI flag or claim component-selective DLO from discovery declarations
+alone; validate the selector separately when it lands.
+
+```python
+from operator import attrgetter
+
+import torch
+
+def assert_offload_path(root, path):
+    value = attrgetter(path)(root)
+    if not isinstance(value, torch.nn.Module):
+        raise TypeError(f"offload path {path!r} is not an nn.Module")
+    return value
+
+for path in (
+    *pipeline._dit_modules,
+    *pipeline._encoder_modules,
+    *pipeline._vae_modules,
+    *pipeline._offload_plan.on_demand_component_paths,
+):
+    assert_offload_path(pipeline, path)
+```
+
+For `block_attrs`, resolve the DiT first and then each declared block attribute.
+Require an indexable block container with at least one `nn.Module`. Validate
+`offload_submodules`, `resident_dit_paths`, and `encoder_block_attrs` similarly.
+
+### DLO deployment modes
+
+Treat these paths separately:
+
+| Path | Weight/runtime behavior | Required boundaries |
+|---|---|---|
+| DLO AllGather | Host shards + mmap loading; reconstruct layer through collective | TP>1, HSDP, and online quant are rejected; concurrent ranks must participate consistently |
+| DLO no-AllGather | Standard loader; each rank streams its rank-local weights | Candidate for TP/HSDP/online quant, but host memory and E2E coverage differ |
+| SP + DLO | SP group can supply the DLO collective group | Packed boundaries and collective order require E2E |
+
+Single-stage examples:
+
+```bash
+# SP + DLO AllGather candidate; validate exact model/card before publishing.
+vllm serve '<model>' --omni \
+  --enable-distributed-layerwise-offload \
+  --usp 4 \
+  --max-num-seqs 1
+
+# TP + DLO rank-local candidate; not a support statement.
+vllm serve '<model>' --omni \
+  --tensor-parallel-size 2 \
+  --enable-distributed-layerwise-offload \
+  --dlo-no-use-allgather \
+  --max-num-seqs 1
+```
+
+Under `--omni`, configure DP in a deploy YAML rather than passing vLLM DP CLI
+flags:
+
+```yaml
+pipeline: <registered-pipeline>
+async_chunk: false
+data_parallel_size: 4
+stages:
+  - stage_id: 0
+    devices: "0,1,2,3"
+    max_num_seqs: 1
+    enable_distributed_layerwise_offload: true
+    dlo_use_allgather: true
+    parallel_config:
+      tensor_parallel_size: 1
+      sequence_parallel_size: 1
+```
+
+```bash
+vllm serve '<model>' --omni --deploy-config /path/to/dlo_dp4.yaml
+```
+
+Keep the YAML next to the validated recipe. Match its schema to the target
+revision; do not assume a model accepts another pipeline's deploy config.
+
+### DLO validation sequence
+
+1. Resident BF16 reference.
+2. Ordinary layerwise offload parity.
+3. DLO enable, warmup, same-seed generation, disable/restart.
+4. AllGather and no-AllGather separately.
+5. Concurrent requests with different prompts and identical collective-affecting
+   parameters; then reject or schedule incompatible steps/shapes safely.
+6. Queued/in-flight abort, error, idle rank, worker exit, and next request.
+7. TP, SP, cache, compile, online FP8 one axis at a time.
+8. Per-rank HBM, host PSS for the full process tree, H2D and collective trace.
+
+On a small-HBM card, measure transient encode/VAE peaks as well as resident DiT
+weights. If a non-DiT component still exceeds HBM, combine only independently
+validated on-demand component staging, VAE tiling/patching, or another topology;
+do not hide the remaining peak behind the phrase “DLO enabled.”
+
+## Per-request Cache-DiT
+
+### Policy and lifecycle skeleton
+
+First verify that the target revision contains the shared protocol/runtime.
+If not, follow the nearest current model's lifecycle without inventing a new
+public API.
+
+The following is a **serial/exclusive request-mode sketch only**. Pipeline-wide
+hooks are mutable; concurrent requests need an admission/batching key and
+runner-owned transition serialization before this shape is safe.
+
+```python
+import torch.nn as nn
+
+from vllm_omni.diffusion.cache.cachedit import (
+    CacheDiTBackend,
+    CacheDiTRequestSpec,
+    RequestScopedCacheDiTRuntime,
+)
+
+class MyPipeline(nn.Module):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        # ... components ...
+        self._cache_dit_runtime = RequestScopedCacheDiTRuntime(self)
+
+    def adopt_cache_dit_backend(self, backend: CacheDiTBackend) -> None:
+        self._cache_dit_runtime.adopt(
+            backend,
+            installation_key="my_model.generic",
+        )
+
+    def is_cache_dit_enabled(self) -> bool:
+        return self._cache_dit_runtime.is_enabled
+
+    def _cache_spec(self, quality, steps):
+        if quality == "lossless":
+            return None
+        if quality == "high":
+            return CacheDiTRequestSpec(
+                installation_key="my_model.high.v1",
+                cache_config=self._validated_high_config,
+                num_inference_steps=steps,
+            )
+        raise ValueError(f"unsupported quality tier: {quality!r}")
+
+    def forward(self, req):
+        quality, steps = validate_and_resolve_request(req)
+        self._cache_dit_runtime.prepare(self._cache_spec(quality, steps))
+        return self._run_validated_request(req)
+```
+
+The snippet shows the model-owned transition for exclusive execution. Put
+disable/restore handling in the runtime/runner lifecycle that owns success,
+exception, disconnect, and asynchronous abort; a `try/finally` inside
+`forward()` alone cannot observe every server cancellation boundary.
+
+The `installation_key` must include every policy dimension that changes hook
+installation; changes in step count can use runtime refresh. `None` disables
+installed hooks. Do not mutate the global startup cache config for a request.
+
+Centralize cleanup in the owning request/runner boundary. An exception, abort,
+disconnect, or admission failure must not leave a changed hook policy visible
+to the next request. The exact owner depends on the target revision; add a
+failure-injection test rather than relying on `forward()` alone to observe
+asynchronous abort.
+
+Example model-specific request form after calibration:
+
+```bash
+curl --fail-with-body -sS -X POST http://127.0.0.1:8091/v1/videos/sync \
+  -F 'model=<model>' \
+  -F 'prompt=<prompt>' \
+  -F 'quality=lossless' \
+  -F 'num_inference_steps=<validated-steps>' \
+  -o lossless.mp4
+
+curl --fail-with-body -sS -X POST http://127.0.0.1:8091/v1/videos/sync \
+  -F 'model=<model>' \
+  -F 'prompt=<prompt>' \
+  -F 'quality=high' \
+  -F 'num_inference_steps=<validated-steps>' \
+  -o high.mp4
+```
+
+Do not expose these tier names merely because another model uses them.
+
+### Cache-DiT evidence
+
+For every tier/task/shape/schedule:
+
+- show real cache hits/skipped blocks, not only “backend enabled” logs;
+- measure fixed-work speed and quality against lossless/native;
+- publish a speed/quality frontier and chosen tier mapping;
+- alternate lossless/high/lossless and vary steps to prove restore/refresh;
+- interleave tasks and shapes; run concurrent requests only when scheduling
+  guarantees exclusive compatible hook state;
+- inject validation error, denoise error, disconnect, and abort, then prove the
+  next request starts with its requested policy;
+- bound any cached tensors and clear request-local state.
+
+## Combination gates
+
+Start every combination as `not tested`.
+
+| Combination | Default production posture |
+|---|---|
+| Online FP8 + DLO AllGather mmap | Reject; incompatible loading paths |
+| Online FP8 + DLO no-AllGather | Candidate only after model/card/topology E2E |
+| TP>1 or HSDP + DLO AllGather mmap | Reject |
+| TP/HSDP + DLO no-AllGather | Candidate with limited generic coverage |
+| Cache-DiT + online FP8 | Separate trajectory, hit-rate, HBM, latency test |
+| Cache-DiT + DLO | Verify hooks, streamed blocks, memory peaks, abort cleanup |
+| Cache-DiT + step execution | Do not advertise until lifecycle/batching support is explicit |
+| Sparse attention + Ring | Verify backend execution; reject silently ignored sparse settings |
+| Packed attention + any topology | Unequal-sample boundary parity is mandatory |
+
+A startup-only test never upgrades a combination. Require request output,
+parity/quality, actual fast-path evidence, resource cleanup, and a benchmark on
+the named hardware.
