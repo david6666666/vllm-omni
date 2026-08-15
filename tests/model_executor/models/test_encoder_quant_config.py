@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Regression test for #2686: pre-quantized methods must not apply
 quant config to vision / audio encoders.
 
@@ -101,5 +101,5 @@ def test_component_config_passed_through() -> None:
 
 def test_pre_quantized_methods_contains_expected() -> None:
     """Guard against accidental removal of a known pre-quantized method."""
-    expected = {"modelopt", "modelopt_fp4", "modelopt_mxfp8", "modelopt_mixed"}
+    expected = {"modelopt", "modelopt_fp4", "modelopt_mxfp8", "modelopt_mixed", "svdquant"}
     assert PRE_QUANTIZED_METHODS == expected
