@@ -189,11 +189,28 @@ the pass-through suffix. If 3D cos/sin includes a batch axis, the current
 shared path assumes the values are shared across the batch; per-sample
 different positions require a proven representation/path.
 
-The shared RMSNorm and RotaryEmbedding already dispatch across supported
-platform implementations and native fallbacks. They are not one universal
-RMSNorm+RoPE kernel. A model-specific fused Triton kernel must keep a guarded
-shared/native fallback and cannot be generalized without compatible shape,
-layout, frequency partition, dtype, and platform evidence.
+For packed `[tokens, heads, head_dim]` tensors with a non-interleaved
+`[cos | sin]` table, the current shared fused boundary is:
+
+```python
+from vllm_omni.diffusion.layers.fused_qk_norm_rope import fused_qk_norm_rope
+
+q, k = fused_qk_norm_rope(
+    q,
+    k,
+    self.norm_q.weight,
+    self.norm_k.weight,
+    rope_table,
+    self.norm_q.variance_epsilon,
+)
+```
+
+Its CUDA fast path currently specializes BF16 `head_dim=128` and
+`rotary_dim=96`; other valid inputs take the eager implementation. The separate
+shared RMSNorm and RotaryEmbedding still provide the general cross-platform
+baseline. Treat NPU/MUSA and other vendor fusions as independent qualification
+rows, and do not generalize a model-specific Triton kernel without compatible
+shape, layout, frequency partition, dtype, and platform evidence.
 
 ### Fused QKV projection
 

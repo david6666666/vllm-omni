@@ -216,14 +216,32 @@ For `block_attrs`, resolve the DiT first and then each declared block attribute.
 Require an indexable block container with at least one `nn.Module`. Validate
 `offload_submodules`, `resident_dit_paths`, and `encoder_block_attrs` similarly.
 
+### Keep host storage loader-owned
+
+Current DLO accepts a loader-produced `HostWeightPlan`. Pipeline authors should
+not instantiate this plan or add ad hoc mmap capability flags. The loader must
+preflight complete runtime/checkpoint bindings, names, shapes, dtypes, persistent
+buffers, and represented transforms before it skips ordinary materialization.
+The exact accepted plan is consumed once by DLO; a rejected plan records an
+observable fallback reason and continues through the ordinary loader.
+
+Direct checkpoint mmap currently requires TP1 without HSDP or online
+quantization. TP>1 and online-FP8+DLO can still be functional through the
+ordinary loader plus no-AllGather, but do not receive the direct-mmap host-page
+sharing benefit. If a target revision adds a normalized runtime cache, qualify
+cold build, warm reuse, manifest/content integrity, concurrent writers,
+corruption recovery, node-local PSS, and transfer latency. A host-memory saving
+that materially regresses H2D/E2E latency is a separate memory-first deployment,
+not an automatic replacement for the recommended path.
+
 ### DLO deployment modes
 
 Treat these paths separately:
 
 | Path | Weight/runtime behavior | Required boundaries |
 |---|---|---|
-| DLO AllGather | Host shards + mmap loading; reconstruct layer through collective | TP>1, HSDP, and online quant are rejected; concurrent ranks must participate consistently |
-| DLO no-AllGather | Standard loader; each rank streams its rank-local weights | Candidate for TP/HSDP/online quant, but host memory and E2E coverage differ |
+| DLO AllGather | Rank-sharded pinned host tensors; reconstruct layer through collective | TP>1, HSDP, and online quant are rejected; concurrent ranks must participate consistently |
+| DLO no-AllGather | Loader-approved checkpoint mmap or ordinary runtime tensors; each rank streams a complete block | Candidate for TP/HSDP/online quant, but host sharing, H2D, and E2E coverage differ |
 | SP + DLO | SP group can supply the DLO collective group | Packed boundaries and collective order require E2E |
 
 Single-stage examples:
@@ -278,7 +296,9 @@ revision; do not assume a model accepts another pipeline's deploy config.
    parameters; then reject or schedule incompatible steps/shapes safely.
 6. Queued/in-flight abort, error, idle rank, worker exit, and next request.
 7. TP, SP, cache, compile, online FP8 one axis at a time.
-8. Per-rank HBM, host PSS for the full process tree, H2D and collective trace.
+8. Loader-plan selection/fallback reason, cold/warm storage lifecycle, and
+   corruption/stale-entry recovery when mmap/cache backing is advertised.
+9. Per-rank HBM, host PSS for the full process tree, H2D and collective trace.
 
 On a small-HBM card, measure transient encode/VAE peaks as well as resident DiT
 weights. If a non-DiT component still exceeds HBM, combine only independently

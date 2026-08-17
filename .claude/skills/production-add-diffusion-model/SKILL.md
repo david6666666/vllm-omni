@@ -16,7 +16,7 @@ work is incomplete, read that skill first and finish the Day-0 vertical slice.
 MiniMax-H3 [PR #5691](https://github.com/vllm-project/vllm-omni/pull/5691)
 is the merged Day-0 case study. Its open optimization
 [issue #5700](https://github.com/vllm-project/vllm-omni/issues/5700) is an
-as-of-2026-08-12 roadmap, not a list of already supported features. Treat every
+as-of-2026-08-17 roadmap, not a list of already supported features. Treat every
 roadmap item as `not tested` until the target revision has scoped evidence.
 
 Read these references before the corresponding gate:
@@ -122,6 +122,27 @@ Verify `is_neox_style`, `half_head_dim`, partial rotary dimensions, cos/sin
 layout, and packed row ownership against the official model. `False` means
 interleaved/GPT-J style; do not assume the default is NeoX. Shared RMSNorm and
 RoPE are two dispatched operators, not automatically one fused kernel.
+
+For packed non-interleaved RoPE, use the shared fused boundary when its contract
+matches the model:
+
+```python
+from vllm_omni.diffusion.layers.fused_qk_norm_rope import fused_qk_norm_rope
+
+query, key = fused_qk_norm_rope(
+    query,                    # [T, Hq, D]
+    key,                      # [T, Hkv, D]
+    self.norm_q.weight,       # [D]
+    self.norm_k.weight,       # [D]
+    rope_table,               # [T, rotary_dim] = [cos | sin]
+    self.norm_q.variance_epsilon,
+)
+```
+
+The current CUDA fast path specializes BF16 `head_dim=128`, `rotary_dim=96`;
+the public function keeps an eager fallback for unsupported inputs. Verify the
+packed row/frequency contract and trace the actual fast path. Do not reshape an
+incompatible official RoPE layout merely to enter this kernel.
 
 MiniMax-H3-style partial NeoX RoPE rotates a prefix and passes the suffix
 through:
@@ -265,6 +286,14 @@ missing or is not the expected module/container; discovery may otherwise warn
 and skip. Validate ordinary layerwise offload and distributed layerwise
 offload (DLO) independently.
 
+Keep component lifecycle and host-weight storage separate. `OffloadPlan`
+declares what can be streamed; the diffusion loader owns any `HostWeightPlan`
+and hands the exact prevalidated plan to DLO. Do not make the offloader rescan
+checkpoint files or duplicate loader name/shape/dtype decisions. Direct mmap is
+a fail-closed optimization: current preflight requires TP1, no HSDP, no online
+quantization, complete bindings, and represented transforms. Otherwise the
+ordinary loader remains authoritative.
+
 On small-HBM cards, record load/materialization peak, resident peak, encode,
 each denoise wave, decode, transient per-rank HBM, host PSS, H2D, and collective
 time. Test DLO AllGather and `--dlo-no-use-allgather` as different deployments.
@@ -328,6 +357,10 @@ batching is experimental and is not automatically compatible with Cache-DiT.
 Test queued and in-flight abort, client disconnect, timeout, OOM, worker error,
 and restart. Require one terminal result, idempotent cleanup, no post-decode
 after abort, no cache/temp/VRAM/request-ID leak, and a successful next request.
+Inject late worker results/exceptions after cancellation and prove the result
+pump stays alive instead of raising `InvalidStateError`. For large batched video
+outputs, validate shared-memory/handle ownership, per-request slicing, cleanup,
+and remote encoding/transport separately from model latency.
 Run below-, near-, and above-saturation mixed-RPS soaks and report success/error
 rate, p50/p95/p99, throughput, queue time, memory slope, temp growth, and worker
 health. See [serving and CI validation](references/production-validation.md).

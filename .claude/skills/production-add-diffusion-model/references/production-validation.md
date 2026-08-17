@@ -230,6 +230,8 @@ For queued and in-flight abort/disconnect:
   messages, uploaded/temp files, and output buffers;
 - keep other requests alive;
 - make cleanup idempotent when disconnect, timeout, and worker error race;
+- drop late results/exceptions for already-resolved or cancelled futures
+  without terminating the shared result-pump thread;
 - complete the next valid request with its requested cache/offload policy.
 
 Test cancellation before engine admission, while queued, after encode, during
@@ -246,11 +248,25 @@ output. Include async job cancellation and client socket disconnect.
 | Denoise | exception/OOM/worker exit | peers handled, hooks/buffers released, health behavior explicit |
 | Scheduler | invalid state/shape | no latent/step partial commit |
 | Decode/post | exception/codec error | no corrupt successful result, partial output removed |
+| Result/IPC | late result after cancel, large split tensor, orphan SHM | pump remains alive, one terminal result, exact ownership cleanup |
 | Connector/disagg | timeout/retry/duplicate | idempotency, backpressure, no orphan payload |
 
 After each injection, check server health and issue a known-good request. If
 the process must restart, document and test the restart policy; do not claim
 transparent recovery.
+
+### Large-output transport
+
+Treat worker-to-engine IPC and engine-to-client transport as separate hops.
+For batched video, prove that each logical output does not accidentally retain
+or serialize the complete batch storage. Exercise the target revision's shared
+memory or artifact-handle path above and below its threshold, including
+non-contiguous views, multiple outputs, consumer failure, timeout, abort, and
+worker exit. Verify every shared segment/file is released exactly once.
+
+Measure remote MP4 encoding, serialization/copies, network transfer, and client
+materialization separately from denoise/decode. An inference-kernel speedup does
+not establish serving throughput if output transport dominates or leaks.
 
 ## Mixed-RPS soak
 
@@ -297,6 +313,7 @@ Report:
 - throughput per device and batch/wave utilization;
 - per-rank HBM and process-tree PSS trend/slope;
 - cache size/hit rate, temp-file/disk growth, open FDs/handles;
+- outstanding shared-memory/artifact handles and encoded/network bytes;
 - worker/engine health, restarts, OOM/timeouts, backpressure response;
 - total duration, request count/mix, raw logs/JSON/monitor artifact hashes.
 
