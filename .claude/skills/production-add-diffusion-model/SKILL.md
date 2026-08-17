@@ -297,9 +297,11 @@ ordinary loader remains authoritative.
 On small-HBM cards, record load/materialization peak, resident peak, encode,
 each denoise wave, decode, transient per-rank HBM, host PSS, H2D, and collective
 time. Test DLO AllGather and `--dlo-no-use-allgather` as different deployments.
-The mmap AllGather path rejects TP>1, HSDP, and online quantization; no-AllGather
-is only a compatibility candidate until the exact model/card/topology passes
-E2E. Use deploy YAML for DP under `--omni`; vLLM DP CLI flags are rejected.
+Direct checkpoint mmap preflight is limited to TP1 without HSDP or online
+quantization; TP>1 falls back to the ordinary TP-aware loader and can still feed
+DLO AllGather or no-AllGather after scoped E2E. HSDP and online quantization
+remain incompatible with DLO AllGather and must use no-AllGather candidates.
+Use deploy YAML for DP under `--omni`; vLLM DP CLI flags are rejected.
 
 ### Gate 5: Add request-scoped acceleration safely
 

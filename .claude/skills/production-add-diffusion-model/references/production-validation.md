@@ -54,15 +54,25 @@ class MyPipeline(torch.nn.Module):
         validate_batch_compatibility(req.sampling_params_list, req.prompts)
         common = req.sampling_params_list[0]
 
+        text_prompts: list[str] | None = [
+            prompt
+            if isinstance(prompt, str)
+            else (prompt.get("prompt") or "")
+            for prompt in req.prompts
+        ]
+
         prompt_fields = DiffusionRequestBatch.collate_prompt_field_map(
             req.prompts,
             {"prompt_embeds": None, "prompt_mask": None},
         )
+        if prompt_fields["prompt_embeds"] is not None:
+            text_prompts = None
         generators = req.collate_request_generators(
             common.num_outputs_per_prompt,
             default_generator=None,
         )
         output = self._generate_batch(
+            prompt=text_prompts,
             prompt_fields=prompt_fields,
             generators=generators,
             sampling=common,
@@ -74,9 +84,13 @@ class MyPipeline(torch.nn.Module):
         )
 ```
 
-The exact prompt aliases and generator device depend on the model. Use current
-collators rather than manual `torch.cat` when they cover the contract; they
-reject mixed present/missing tensors and incompatible shape/dtype/device.
+The prompt-field collator only handles tensor fields; extract raw text prompts
+and model-specific negative/alias fields separately, as current in-tree batched
+pipelines do. Set a raw prompt field to `None` when the matching precomputed
+embedding is supplied. The exact aliases and generator device depend on the
+model. Use current collators rather than manual `torch.cat` when they cover the
+contract; they reject mixed present/missing tensors and incompatible
+shape/dtype/device.
 
 Before reading `sampling_params_list[0]`, validate every field that must be
 common. Tests must cover:
@@ -321,7 +335,19 @@ A short burst or repeated serial curl loop is not a stability test.
 
 ## Four CI tracks
 
-Keep the tracks independent so a failure answers a specific question.
+Keep the tracks independent so a failure answers a specific question. These
+four readiness tracks are not the repository's numbered CI levels. Map them
+onto the current L1-L5 taxonomy:
+
+| Readiness track | Repository CI placement |
+|---|---|
+| Function | L1 unit/logic plus L2 basic online/offline E2E; extend real-model scenarios in L3/L4 |
+| Accuracy | L3 real-model gates for important cases; deeper and broader nightly coverage in L4 |
+| Performance | Important thresholds in L3 where they fit the time budget; full baselines/regression jobs in nightly L4 |
+| Reliability | Cheap rejection/recovery assertions can run earlier, but long stability, fault injection, and reliability suites belong to weekly L5 |
+
+Distributed topology is a test case within the appropriate level, not a
+replacement definition for a level.
 
 ### 1. Function CI
 
@@ -334,9 +360,6 @@ Cover:
 - single-device reference plus every advertised topology smoke;
 - output type/count/order and request ID isolation;
 - feature rejection paths that must fail early.
-
-Use the repository's current L1-L4 taxonomy. Distributed topology is a test
-case within the appropriate level, not a replacement definition for a level.
 
 ### 2. Accuracy CI
 

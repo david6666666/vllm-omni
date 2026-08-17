@@ -226,13 +226,16 @@ The exact accepted plan is consumed once by DLO; a rejected plan records an
 observable fallback reason and continues through the ordinary loader.
 
 Direct checkpoint mmap currently requires TP1 without HSDP or online
-quantization. TP>1 and online-FP8+DLO can still be functional through the
-ordinary loader plus no-AllGather, but do not receive the direct-mmap host-page
-sharing benefit. If a target revision adds a normalized runtime cache, qualify
-cold build, warm reuse, manifest/content integrity, concurrent writers,
-corruption recovery, node-local PSS, and transfer latency. A host-memory saving
-that materially regresses H2D/E2E latency is a separate memory-first deployment,
-not an automatic replacement for the recommended path.
+quantization. TP>1 falls back to the ordinary TP-aware loader and may feed DLO
+AllGather or no-AllGather; the current design records a bounded DP2xTP2
+AllGather smoke, but that path does not receive direct-mmap host-page sharing.
+Online-FP8+DLO must use the ordinary loader plus no-AllGather because online
+quantization remains incompatible with DLO AllGather. If a target revision adds
+a normalized runtime cache, qualify cold build, warm reuse, manifest/content
+integrity, concurrent writers, corruption recovery, node-local PSS, and
+transfer latency. A host-memory saving that materially regresses H2D/E2E
+latency is a separate memory-first deployment, not an automatic replacement
+for the recommended path.
 
 ### DLO deployment modes
 
@@ -240,8 +243,8 @@ Treat these paths separately:
 
 | Path | Weight/runtime behavior | Required boundaries |
 |---|---|---|
-| DLO AllGather | Rank-sharded pinned host tensors; reconstruct layer through collective | TP>1, HSDP, and online quant are rejected; concurrent ranks must participate consistently |
-| DLO no-AllGather | Loader-approved checkpoint mmap or ordinary runtime tensors; each rank streams a complete block | Candidate for TP/HSDP/online quant, but host sharing, H2D, and E2E coverage differ |
+| DLO AllGather | Rank-sharded pinned host tensors; reconstruct layer through collective | TP>1 uses ordinary TP-aware loader output; HSDP and online quant are rejected; concurrent ranks must participate consistently |
+| DLO no-AllGather | Loader-approved checkpoint mmap or ordinary runtime tensors; each rank streams a complete block | Direct mmap is TP1/non-HSDP/non-online-quant only; TP/HSDP/online quant use ordinary runtime tensors and require scoped E2E |
 | SP + DLO | SP group can supply the DLO collective group | Packed boundaries and collective order require E2E |
 
 Single-stage examples:
@@ -413,10 +416,13 @@ Start every combination as `not tested`.
 
 | Combination | Default production posture |
 |---|---|
-| Online FP8 + DLO AllGather mmap | Reject; incompatible loading paths |
+| Direct checkpoint mmap + TP>1/HSDP/online quant | Preflight falls back to the ordinary loader; do not claim direct-mmap savings |
+| Online FP8 + DLO AllGather | Reject; online quantization is incompatible with this collective path |
 | Online FP8 + DLO no-AllGather | Candidate only after model/card/topology E2E |
-| TP>1 or HSDP + DLO AllGather mmap | Reject |
-| TP/HSDP + DLO no-AllGather | Candidate with limited generic coverage |
+| TP>1 + DLO AllGather | Ordinary TP-aware loader only; bounded DP2xTP2 smoke exists, but each new model/card/topology still needs E2E |
+| TP>1 + DLO no-AllGather | Ordinary TP-aware loader only; candidate with limited generic coverage |
+| HSDP + DLO AllGather | Reject; it would double-shard HSDP-managed parameters |
+| HSDP + DLO no-AllGather | Configuration-compatible candidate with limited E2E coverage |
 | Cache-DiT + online FP8 | Separate trajectory, hit-rate, HBM, latency test |
 | Cache-DiT + DLO | Verify hooks, streamed blocks, memory peaks, abort cleanup |
 | Cache-DiT + step execution | Do not advertise until lifecycle/batching support is explicit |
