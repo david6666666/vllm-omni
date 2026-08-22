@@ -25,27 +25,13 @@ SM110 and consumer Blackwell GPUs are outside the Phase 1 support
 contract. They can be added later without changing the canonical
 checkpoint layout.
 
-## Convert a MiniMax-H3 checkpoint
+## Checkpoint format
 
-The converter imports the published Nunchaku SVDQuant tensor layout,
-restores non-SVDQuant tensors from the official base pipeline, and
-writes a complete vLLM-Omni FL2VA folder:
-
-```bash
-python -m vllm_omni.quantization.tools.convert_nunchaku_to_svdquant \\
-  --nunchaku-checkpoint ./svdq-fp4_r32-minimax-h3-fl2va.safetensors \\
-  --base-pipeline MiniMaxAI/MiniMax-H3 \\
-  --output-dir ./MiniMax-H3-SVDQuant-NVFP4-r32
-```
-
-Inputs can be local paths or Hugging Face repository identifiers. By
-default, unchanged base-pipeline files are hard-linked to avoid another
-large local copy. Pass `--copy` to create a physically independent
-folder.
-
-The generated transformer configuration contains
-`quant_method: svdquant`, so inference does not need a separate
-`--quantization` argument.
+vLLM-Omni loads a complete, offline-quantized FL2VA checkpoint; it does
+not convert Nunchaku artifacts or calibrate the model. The published
+checkpoint must use the canonical row-major NVFP4 layout and embed
+`quant_method: svdquant` in `FL2VA/transformer/config.json`. No separate
+inference quantization flag is required.
 
 ## Run inference
 
@@ -54,7 +40,7 @@ from vllm_omni import Omni
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
 omni = Omni(
-    model="./MiniMax-H3-SVDQuant-NVFP4-r32/FL2VA",
+    model="/path/to/MiniMax-H3-SVDQuant-NVFP4-r32/FL2VA",
     trust_remote_code=True,
 )
 outputs = omni.generate(
