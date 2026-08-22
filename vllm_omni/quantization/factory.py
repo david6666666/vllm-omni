@@ -126,7 +126,7 @@ def _build_mxfp4_dualscale(**kw: Any) -> QuantizationConfig:
 
 
 def _build_svdquant(**kw: Any) -> QuantizationConfig:
-    """Lazy import for serialized SVDQuant NVFP4 diffusion checkpoints."""
+    """Build the serialized SVDQuant diffusion checkpoint loader."""
     from .svdquant_config import DiffusionSVDQuantConfig
 
     return DiffusionSVDQuantConfig.from_config(kw)

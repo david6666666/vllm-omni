@@ -46,7 +46,7 @@ def _register_parameter(
 
 
 def test_supports_only_validated_datacenter_blackwell() -> None:
-    assert svdquant_flashinfer.supports(SimpleNamespace(major=10, minor=0))
+    assert not svdquant_flashinfer.supports(SimpleNamespace(major=10, minor=0))
     assert svdquant_flashinfer.supports(SimpleNamespace(major=10, minor=3))
     assert not svdquant_flashinfer.supports(SimpleNamespace(major=11, minor=0))
     assert not svdquant_flashinfer.supports(SimpleNamespace(major=12, minor=0))

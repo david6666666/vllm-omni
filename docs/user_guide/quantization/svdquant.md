@@ -13,17 +13,15 @@ operations. No unreleased FlashInfer SVDQuant API is required.
 
 ## Support
 
-| Model      | Scope             | Format                          | Hardware        |
-| ---------- | ----------------- | ------------------------------- | --------------- |
-| MiniMax-H3 | FL2VA transformer | NVFP4 W4A4 + rank-32 correction | SM100 and SM103 |
+| Model      | Scope             | Format                          | Hardware                |
+| ---------- | ----------------- | ------------------------------- | ----------------------- |
+| MiniMax-H3 | FL2VA transformer | NVFP4 W4A4 + rank-32 correction | SM103 (B300, validated) |
 
 The MiniMax-H3 recipe quantizes 208 attention and MLP linears. AdaLN,
 the auxiliary text encoder, and the VAEs remain in their source dtype.
 Ref2VA conversion is not supported.
 
-SM110 and consumer Blackwell GPUs are outside the Phase 1 support
-contract. They can be added later without changing the canonical
-checkpoint layout.
+Other Blackwell capabilities are not marked supported until they are validated.
 
 ## Checkpoint format
 

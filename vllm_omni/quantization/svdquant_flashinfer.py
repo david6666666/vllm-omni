@@ -20,7 +20,7 @@ from vllm.platforms.interface import DeviceCapability
 
 logger = init_logger(__name__)
 
-_SUPPORTED_CAPABILITIES = {(10, 0), (10, 3)}
+_SUPPORTED_CAPABILITIES = {(10, 3)}
 
 
 def supports(capability: DeviceCapability | None) -> bool:
@@ -34,7 +34,7 @@ def assert_supported() -> None:
     if not supports(capability):
         device = current_platform.device_name
         sm = capability.to_int() if capability is not None else "unknown"
-        raise RuntimeError(f"Phase 1 SVDQuant NVFP4 supports SM100 and SM103 only; got {device!r} (SM{sm})")
+        raise RuntimeError(f"Phase 1 SVDQuant NVFP4 is validated on SM103 only; got {device!r} (SM{sm})")
 
 
 @functools.cache

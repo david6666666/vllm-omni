@@ -70,7 +70,7 @@ class DiffusionSVDQuantConfig(QuantizationConfig):
 
     @classmethod
     def get_min_capability(cls) -> int:
-        return 100
+        return 103
 
     @classmethod
     def get_config_filenames(cls) -> list[str]:
