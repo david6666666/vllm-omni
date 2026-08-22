@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from vllm_omni.quantization import svdquant_flashinfer
+from vllm_omni.quantization import svdquant_config as svdquant
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu, pytest.mark.diffusion]
 
@@ -46,18 +46,20 @@ def _register_parameter(
 
 
 def test_supports_only_validated_datacenter_blackwell() -> None:
-    assert not svdquant_flashinfer.supports(SimpleNamespace(major=10, minor=0))
-    assert svdquant_flashinfer.supports(SimpleNamespace(major=10, minor=3))
-    assert not svdquant_flashinfer.supports(SimpleNamespace(major=11, minor=0))
-    assert not svdquant_flashinfer.supports(SimpleNamespace(major=12, minor=0))
-    assert not svdquant_flashinfer.supports(None)
+    assert not svdquant._supports_capability(SimpleNamespace(major=10, minor=0))
+    assert svdquant._supports_capability(SimpleNamespace(major=10, minor=3))
+    assert not svdquant._supports_capability(SimpleNamespace(major=11, minor=0))
+    assert not svdquant._supports_capability(SimpleNamespace(major=12, minor=0))
+    assert not svdquant._supports_capability(None)
 
 
 def test_prepare_weights_uses_existing_nvfp4_layout_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     kernel = _FakeNvfp4Kernel()
-    monkeypatch.setattr(svdquant_flashinfer, "_nvfp4_kernel", lambda: kernel)
+    monkeypatch.setattr(svdquant, "_assert_supported", lambda: None)
+    monkeypatch.setattr(svdquant, "_nvfp4_kernel", lambda: kernel)
+    method = svdquant.DiffusionSVDQuantLinearMethod(svdquant.DiffusionSVDQuantConfig())
     layer = torch.nn.Module()
     qweight = torch.arange(16, dtype=torch.int8).reshape(4, 4)
     wscales = torch.arange(8, dtype=torch.float32).to(torch.float8_e4m3fn).reshape(2, 4)
@@ -70,7 +72,7 @@ def test_prepare_weights_uses_existing_nvfp4_layout_contract(
         torch.tensor([1.0, 2.0, 3.0, 4.0], dtype=torch.bfloat16),
     )
 
-    svdquant_flashinfer.prepare_weights(layer)
+    method.process_weights_after_loading(layer)
 
     assert kernel.processed
     assert not hasattr(layer, "qweight")
@@ -87,7 +89,9 @@ def test_prepare_weights_drops_identity_output_scale(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     kernel = _FakeNvfp4Kernel()
-    monkeypatch.setattr(svdquant_flashinfer, "_nvfp4_kernel", lambda: kernel)
+    monkeypatch.setattr(svdquant, "_assert_supported", lambda: None)
+    monkeypatch.setattr(svdquant, "_nvfp4_kernel", lambda: kernel)
+    method = svdquant.DiffusionSVDQuantLinearMethod(svdquant.DiffusionSVDQuantConfig())
     layer = torch.nn.Module()
     _register_parameter(layer, "qweight", torch.zeros(4, 4, dtype=torch.int8))
     _register_parameter(
@@ -98,7 +102,7 @@ def test_prepare_weights_drops_identity_output_scale(
     _register_parameter(layer, "wtscale", torch.ones(1, dtype=torch.bfloat16))
     _register_parameter(layer, "wcscales", torch.ones(4, dtype=torch.bfloat16))
 
-    svdquant_flashinfer.prepare_weights(layer)
+    method.process_weights_after_loading(layer)
 
     assert layer.output_channel_scale is None
 
@@ -111,7 +115,9 @@ def test_compatibility_path_applies_qkv_scale_and_rank_correction(
         dtype=torch.bfloat16,
     )
     kernel = _FakeNvfp4Kernel(base_weight)
-    monkeypatch.setattr(svdquant_flashinfer, "_nvfp4_kernel", lambda: kernel)
+    monkeypatch.setattr(svdquant, "_assert_supported", lambda: None)
+    monkeypatch.setattr(svdquant, "_nvfp4_kernel", lambda: kernel)
+    method = svdquant.DiffusionSVDQuantLinearMethod(svdquant.DiffusionSVDQuantConfig())
 
     layer = torch.nn.Module()
     layer.smooth_factor = torch.tensor([2.0, 4.0], dtype=torch.bfloat16)
@@ -122,7 +128,7 @@ def test_compatibility_path_applies_qkv_scale_and_rank_correction(
     x = torch.tensor([[2.0, 4.0], [4.0, 8.0]], dtype=torch.bfloat16)
     bias = torch.tensor([1.0, 2.0, 3.0], dtype=torch.bfloat16)
 
-    actual = svdquant_flashinfer.apply(layer, x, bias)
+    actual = method.apply(layer, x, bias)
 
     smoothed = x / layer.smooth_factor
     expected = torch.mm(smoothed, base_weight)
@@ -133,10 +139,14 @@ def test_compatibility_path_applies_qkv_scale_and_rank_correction(
     torch.testing.assert_close(kernel.last_input, smoothed)
 
 
-def test_compatibility_path_rejects_fp16_activations() -> None:
+def test_compatibility_path_rejects_fp16_activations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(svdquant, "_assert_supported", lambda: None)
+    method = svdquant.DiffusionSVDQuantLinearMethod(svdquant.DiffusionSVDQuantConfig())
     layer = torch.nn.Module()
     with pytest.raises(ValueError, match="requires BF16 activations"):
-        svdquant_flashinfer.apply(
+        method.apply(
             layer,
             torch.zeros(1, 16, dtype=torch.float16),
         )

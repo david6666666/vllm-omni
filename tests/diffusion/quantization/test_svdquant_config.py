@@ -10,7 +10,7 @@ from vllm.model_executor.layers.linear import (
     UnquantizedLinearMethod,
 )
 
-from vllm_omni.quantization import svdquant_flashinfer
+from vllm_omni.quantization import svdquant_config
 from vllm_omni.quantization.factory import (
     SUPPORTED_QUANTIZATION_METHODS,
     build_quant_config,
@@ -85,7 +85,7 @@ def test_skipped_and_non_linear_modules_remain_unquantized() -> None:
 def test_linear_method_creates_canonical_partitioned_weights(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(svdquant_flashinfer, "assert_supported", lambda: None)
+    monkeypatch.setattr(svdquant_config, "_assert_supported", lambda: None)
     method = DiffusionSVDQuantLinearMethod(DiffusionSVDQuantConfig(rank=32))
     layer = torch.nn.Module()
 
@@ -120,7 +120,7 @@ def test_linear_method_creates_canonical_partitioned_weights(
 def test_active_linear_uses_svdquant_method(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(svdquant_flashinfer, "assert_supported", lambda: None)
+    monkeypatch.setattr(svdquant_config, "_assert_supported", lambda: None)
     config = DiffusionSVDQuantConfig()
     linear = Mock(spec=LinearBase)
 

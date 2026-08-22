@@ -23,9 +23,8 @@ if TYPE_CHECKING:
     )
 
 
-# Pre-quantized checkpoints (modelopt FP8/FP4/MXFP8/mixed) only quantize the
-# Thinker LM.  Vision and audio encoder weights remain in BF16 with no
-# corresponding scale tensors in the checkpoint.
+# These pre-quantized formats require serialized scale or correction tensors
+# that the vision and audio encoder checkpoints do not provide.
 PRE_QUANTIZED_METHODS: frozenset[str] = frozenset(
     {"modelopt", "modelopt_fp4", "modelopt_mxfp8", "modelopt_mixed", "svdquant"}
 )

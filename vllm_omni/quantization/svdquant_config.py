@@ -3,18 +3,21 @@
 """Serialized SVDQuant NVFP4 support for diffusion transformers.
 
 The checkpoint stores NVFP4 weights plus a rank-R correction for each
-quantized linear. Phase 1 intentionally uses vLLM's existing NVFP4 linear
-kernel and ordinary BF16 matrix multiplication for the correction. Native
-SVDQuant fusion is a separate optimization and is not required to load or run
-the checkpoint.
+quantized linear. The four-bit GEMM uses vLLM's existing NVFP4 kernel
+registry, while the rank correction uses ordinary BF16 matrix multiplication.
+Native SVDQuant fusion is a separate optimization and is not required to load
+or run the checkpoint.
 """
 
 from __future__ import annotations
 
+import functools
 from typing import TYPE_CHECKING, Any
 
 import torch
 from torch.nn import Parameter
+from vllm.logger import init_logger
+from vllm.model_executor.kernels.linear import init_nvfp4_linear_kernel
 from vllm.model_executor.layers.linear import (
     LinearBase,
     LinearMethodBase,
@@ -28,9 +31,41 @@ from vllm.model_executor.layers.quantization.utils.quant_utils import (
     is_layer_skipped,
 )
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
+from vllm.platforms import current_platform
+from vllm.platforms.interface import DeviceCapability
 
 if TYPE_CHECKING:
     from vllm.model_executor.layers.quantization import QuantizationMethods
+
+logger = init_logger(__name__)
+
+_SUPPORTED_CAPABILITIES = {(10, 3)}
+
+
+def _supports_capability(capability: DeviceCapability | None) -> bool:
+    return (
+        capability is not None
+        and (
+            capability.major,
+            capability.minor,
+        )
+        in _SUPPORTED_CAPABILITIES
+    )
+
+
+def _assert_supported() -> None:
+    if not current_platform.is_cuda():
+        raise RuntimeError("SVDQuant NVFP4 requires a CUDA device")
+    capability = current_platform.get_device_capability()
+    if not _supports_capability(capability):
+        device = current_platform.device_name
+        sm = capability.to_int() if capability is not None else "unknown"
+        raise RuntimeError(f"SVDQuant NVFP4 is validated on SM103 only; got {device!r} (SM{sm})")
+
+
+@functools.cache
+def _nvfp4_kernel():
+    return init_nvfp4_linear_kernel()
 
 
 class DiffusionSVDQuantConfig(QuantizationConfig):
@@ -103,14 +138,11 @@ class DiffusionSVDQuantConfig(QuantizationConfig):
 
 
 class DiffusionSVDQuantLinearMethod(LinearMethodBase):
-    """Load the canonical checkpoint layout and call the Phase 1 backend."""
+    """Load and execute a serialized SVDQuant linear layer."""
 
     def __init__(self, quant_config: DiffusionSVDQuantConfig) -> None:
-        from . import svdquant_flashinfer
-
-        svdquant_flashinfer.assert_supported()
+        _assert_supported()
         self.quant_config = quant_config
-        self._backend = svdquant_flashinfer
 
     def create_weights(
         self,
@@ -234,7 +266,59 @@ class DiffusionSVDQuantLinearMethod(LinearMethodBase):
         layer.out_features_per_partition = output_size_per_partition
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
-        self._backend.prepare_weights(layer)
+        """Adapt the canonical row-major checkpoint to vLLM's NVFP4 ABI."""
+        qweight = layer.qweight
+        wscales = layer.wscales
+        del layer.qweight
+        del layer.wscales
+        layer.register_parameter(
+            "weight",
+            Parameter(
+                qweight.detach().view(torch.uint8),
+                requires_grad=False,
+            ),
+        )
+        layer.register_parameter(
+            "weight_scale",
+            Parameter(
+                wscales.detach().transpose(0, 1).contiguous(),
+                requires_grad=False,
+            ),
+        )
+
+        layer.register_parameter(
+            "input_global_scale_inv",
+            Parameter(
+                torch.ones(
+                    1,
+                    dtype=torch.float32,
+                    device=layer.weight.device,
+                ),
+                requires_grad=False,
+            ),
+        )
+
+        wtscale = layer.wtscale.detach().to(dtype=torch.float32)
+        del layer.wtscale
+        layer.register_parameter(
+            "alpha",
+            Parameter(wtscale, requires_grad=False),
+        )
+
+        channel_scale = layer.wcscales.detach()
+        del layer.wcscales
+        if torch.all(channel_scale == 1).item():
+            layer.output_channel_scale = None
+        else:
+            layer.register_parameter(
+                "output_channel_scale",
+                Parameter(channel_scale, requires_grad=False),
+            )
+
+        _nvfp4_kernel().process_weights_after_loading(layer)
+        logger.info_once(
+            "SVDQuant NVFP4 is using vLLM's compatibility path; the rank correction is not fused into the GEMM."
+        )
 
     def apply(
         self,
@@ -242,7 +326,40 @@ class DiffusionSVDQuantLinearMethod(LinearMethodBase):
         x: torch.Tensor,
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        return self._backend.apply(layer, x, bias)
+        """Compute the base NVFP4 GEMM plus the BF16 rank correction."""
+        if x.dtype != torch.bfloat16:
+            raise ValueError(f"SVDQuant NVFP4 requires BF16 activations; got {x.dtype}")
+
+        original_shape = x.shape
+        x_2d = x.reshape(-1, original_shape[-1]).contiguous()
+
+        # The residual branch consumes the original activation. Only the
+        # four-bit base GEMM consumes the smoothed activation.
+        smoothed = x_2d / layer.smooth_factor
+        out = _nvfp4_kernel().apply_weights(
+            layer=layer,
+            x=smoothed,
+            bias=None,
+        )
+
+        channel_scale = getattr(layer, "output_channel_scale", None)
+        if channel_scale is not None:
+            # Fused QKV can store independent Q/K/V outer scales. Apply them
+            # explicitly until a vector-alpha GEMM epilogue is available.
+            out.mul_(channel_scale)
+
+        correction_input = torch.mm(x_2d, layer.proj_down)
+        out = torch.addmm(
+            out,
+            correction_input,
+            layer.proj_up.transpose(0, 1),
+        )
+        if bias is not None:
+            out.add_(bias)
+        return out.reshape(
+            *original_shape[:-1],
+            layer.out_features_per_partition,
+        )
 
 
 def _set_attrs(param: torch.nn.Parameter, **attrs: Any) -> None:
