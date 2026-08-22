@@ -55,7 +55,7 @@ def test_config_rejects_unsupported_phase1_options(
         DiffusionSVDQuantConfig(**kwargs)
 
 
-def test_factory_builds_svdquant_and_ignores_legacy_phase2_fields() -> None:
+def test_factory_builds_svdquant_with_extra_checkpoint_fields() -> None:
     config = build_quant_config(
         {
             "quant_method": "svdquant",

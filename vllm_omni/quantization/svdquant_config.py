@@ -89,7 +89,6 @@ class DiffusionSVDQuantConfig(QuantizationConfig):
             raise ValueError("Phase 1 SVDQuant does not support unsigned activations")
         self.rank = rank
         self.precision = precision
-        self.act_unsigned = act_unsigned
         self.modules_to_not_convert = modules_to_not_convert or []
 
     def __repr__(self) -> str:
@@ -260,10 +259,8 @@ class DiffusionSVDQuantLinearMethod(LinearMethodBase):
         layer.register_parameter("wcscales", wcscales)
         layer.register_parameter("wtscale", wtscale)
 
-        layer.in_features = input_size
-        layer.out_features = output_size
+        del input_size, output_size
         layer.output_size_per_partition = output_size_per_partition
-        layer.out_features_per_partition = output_size_per_partition
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         """Adapt the canonical row-major checkpoint to vLLM's NVFP4 ABI."""
@@ -358,7 +355,7 @@ class DiffusionSVDQuantLinearMethod(LinearMethodBase):
             out.add_(bias)
         return out.reshape(
             *original_shape[:-1],
-            layer.out_features_per_partition,
+            layer.output_size_per_partition,
         )
 
 

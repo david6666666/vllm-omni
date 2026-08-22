@@ -124,7 +124,7 @@ def test_compatibility_path_applies_qkv_scale_and_rank_correction(
     layer.proj_down = torch.tensor([[1.0], [2.0]], dtype=torch.bfloat16)
     layer.proj_up = torch.tensor([[1.0], [2.0], [3.0]], dtype=torch.bfloat16)
     layer.output_channel_scale = torch.tensor([1.0, 2.0, 4.0], dtype=torch.bfloat16)
-    layer.out_features_per_partition = 3
+    layer.output_size_per_partition = 3
     x = torch.tensor([[2.0, 4.0], [4.0, 8.0]], dtype=torch.bfloat16)
     bias = torch.tensor([1.0, 2.0, 3.0], dtype=torch.bfloat16)
 
