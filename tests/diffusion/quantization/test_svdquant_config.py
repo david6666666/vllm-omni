@@ -117,6 +117,23 @@ def test_linear_method_creates_canonical_partitioned_weights(
     assert layer.wcscales.output_dim == 0
 
 
+def test_linear_method_rejects_misaligned_input_partition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(svdquant_config, "_assert_supported", lambda: None)
+    method = DiffusionSVDQuantLinearMethod(DiffusionSVDQuantConfig())
+
+    with pytest.raises(ValueError, match="divisible by the block size 16"):
+        method.create_weights(
+            torch.nn.Module(),
+            input_size_per_partition=24,
+            output_partition_sizes=[32],
+            input_size=24,
+            output_size=32,
+            params_dtype=torch.bfloat16,
+        )
+
+
 def test_active_linear_uses_svdquant_method(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

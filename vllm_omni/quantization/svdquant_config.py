@@ -17,7 +17,17 @@ from typing import TYPE_CHECKING, Any
 import torch
 from torch.nn import Parameter
 from vllm.logger import init_logger
-from vllm.model_executor.kernels.linear import init_nvfp4_linear_kernel
+from vllm.model_executor.kernels.linear import (
+    CutlassNvFp4LinearKernel,
+    FbgemmNvFp4LinearKernel,
+    FlashInferB12xNvFp4LinearKernel,
+    FlashInferCudnnNvFp4LinearKernel,
+    FlashInferCuteDslNvFp4LinearKernel,
+    FlashInferCutlassNvFp4LinearKernel,
+    FlashInferTrtllmNvFp4LinearKernel,
+    NvFp4LinearKernel,
+    init_nvfp4_linear_kernel,
+)
 from vllm.model_executor.layers.linear import (
     LinearBase,
     LinearMethodBase,
@@ -31,6 +41,7 @@ from vllm.model_executor.layers.quantization.utils.quant_utils import (
     is_layer_skipped,
 )
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
+from vllm.model_executor.utils import set_weight_attrs
 from vllm.platforms import current_platform
 from vllm.platforms.interface import DeviceCapability
 
@@ -40,6 +51,15 @@ if TYPE_CHECKING:
 logger = init_logger(__name__)
 
 _SUPPORTED_CAPABILITIES = {(10, 3)}
+_COMPATIBLE_NVFP4_KERNELS = (
+    CutlassNvFp4LinearKernel,
+    FbgemmNvFp4LinearKernel,
+    FlashInferB12xNvFp4LinearKernel,
+    FlashInferCudnnNvFp4LinearKernel,
+    FlashInferCuteDslNvFp4LinearKernel,
+    FlashInferCutlassNvFp4LinearKernel,
+    FlashInferTrtllmNvFp4LinearKernel,
+)
 
 
 def _supports_capability(capability: DeviceCapability | None) -> bool:
@@ -64,8 +84,15 @@ def _assert_supported() -> None:
 
 
 @functools.cache
-def _nvfp4_kernel():
-    return init_nvfp4_linear_kernel()
+def _nvfp4_kernel() -> NvFp4LinearKernel:
+    kernel = init_nvfp4_linear_kernel()
+    if not isinstance(kernel, _COMPATIBLE_NVFP4_KERNELS):
+        raise RuntimeError(
+            "The selected vLLM NVFP4 backend is incompatible with the "
+            f"SVDQuant checkpoint layout: {type(kernel).__name__}. Use one of "
+            "the FlashInfer, CUTLASS, or FBGEMM NVFP4 backends."
+        )
+    return kernel
 
 
 class DiffusionSVDQuantConfig(QuantizationConfig):
@@ -158,6 +185,11 @@ class DiffusionSVDQuantLinearMethod(LinearMethodBase):
             "weight_loader",
             default_weight_loader,
         )
+        if input_size_per_partition % 16 != 0:
+            raise ValueError(
+                "SVDQuant NVFP4 requires each input partition to be divisible "
+                f"by the block size 16; got {input_size_per_partition}"
+            )
         output_size_per_partition = sum(output_partition_sizes)
         rank = self.quant_config.rank
 
@@ -169,11 +201,13 @@ class DiffusionSVDQuantLinearMethod(LinearMethodBase):
             ),
             requires_grad=False,
         )
-        _set_attrs(
+        set_weight_attrs(
             qweight,
-            input_dim=1,
-            output_dim=0,
-            weight_loader=weight_loader,
+            {
+                "input_dim": 1,
+                "output_dim": 0,
+                "weight_loader": weight_loader,
+            },
         )
 
         wscales = Parameter(
@@ -184,11 +218,13 @@ class DiffusionSVDQuantLinearMethod(LinearMethodBase):
             ),
             requires_grad=False,
         )
-        _set_attrs(
+        set_weight_attrs(
             wscales,
-            input_dim=0,
-            output_dim=1,
-            weight_loader=weight_loader,
+            {
+                "input_dim": 0,
+                "output_dim": 1,
+                "weight_loader": weight_loader,
+            },
         )
 
         proj_down = Parameter(
@@ -199,10 +235,12 @@ class DiffusionSVDQuantLinearMethod(LinearMethodBase):
             ),
             requires_grad=False,
         )
-        _set_attrs(
+        set_weight_attrs(
             proj_down,
-            input_dim=0,
-            weight_loader=weight_loader,
+            {
+                "input_dim": 0,
+                "weight_loader": weight_loader,
+            },
         )
 
         proj_up = Parameter(
@@ -213,10 +251,12 @@ class DiffusionSVDQuantLinearMethod(LinearMethodBase):
             ),
             requires_grad=False,
         )
-        _set_attrs(
+        set_weight_attrs(
             proj_up,
-            output_dim=0,
-            weight_loader=weight_loader,
+            {
+                "output_dim": 0,
+                "weight_loader": weight_loader,
+            },
         )
 
         smooth_factor = Parameter(
@@ -226,10 +266,12 @@ class DiffusionSVDQuantLinearMethod(LinearMethodBase):
             ),
             requires_grad=False,
         )
-        _set_attrs(
+        set_weight_attrs(
             smooth_factor,
-            input_dim=0,
-            weight_loader=weight_loader,
+            {
+                "input_dim": 0,
+                "weight_loader": weight_loader,
+            },
         )
 
         wcscales = Parameter(
@@ -239,17 +281,19 @@ class DiffusionSVDQuantLinearMethod(LinearMethodBase):
             ),
             requires_grad=False,
         )
-        _set_attrs(
+        set_weight_attrs(
             wcscales,
-            output_dim=0,
-            weight_loader=weight_loader,
+            {
+                "output_dim": 0,
+                "weight_loader": weight_loader,
+            },
         )
 
         wtscale = Parameter(
             torch.ones(1, dtype=torch.bfloat16),
             requires_grad=False,
         )
-        _set_attrs(wtscale, weight_loader=default_weight_loader)
+        set_weight_attrs(wtscale, {"weight_loader": default_weight_loader})
 
         layer.register_parameter("qweight", qweight)
         layer.register_parameter("wscales", wscales)
@@ -357,11 +401,6 @@ class DiffusionSVDQuantLinearMethod(LinearMethodBase):
             *original_shape[:-1],
             layer.output_size_per_partition,
         )
-
-
-def _set_attrs(param: torch.nn.Parameter, **attrs: Any) -> None:
-    for key, value in attrs.items():
-        setattr(param, key, value)
 
 
 __all__ = [

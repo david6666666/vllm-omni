@@ -53,6 +53,22 @@ def test_supports_only_validated_datacenter_blackwell() -> None:
     assert not svdquant._supports_capability(None)
 
 
+def test_rejects_nvfp4_backend_with_incompatible_layer_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    svdquant._nvfp4_kernel.cache_clear()
+    monkeypatch.setattr(
+        svdquant,
+        "init_nvfp4_linear_kernel",
+        lambda: _FakeNvfp4Kernel(),
+    )
+
+    with pytest.raises(RuntimeError, match="incompatible with the SVDQuant checkpoint"):
+        svdquant._nvfp4_kernel()
+
+    svdquant._nvfp4_kernel.cache_clear()
+
+
 def test_prepare_weights_uses_existing_nvfp4_layout_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
