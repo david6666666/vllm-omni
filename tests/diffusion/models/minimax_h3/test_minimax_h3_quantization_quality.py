@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import os
+import subprocess
+import time
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +26,8 @@ _MINIMAX_H3_AUDIO_SAMPLE_RATE = 32000
 _MIN_AUDIO_SPECTRAL_COSINE = 0.80
 _MIN_AUDIO_RMS_RATIO = 0.50
 _MAX_AUDIO_RMS_RATIO = 2.00
+_SVDQUANT_MODEL_ENV = "MINIMAX_H3_SVDQUANT_MODEL"
+_SVDQUANT_MEASURED_RUNS = 3
 
 _QUALITY_CONFIG = QualityTestConfig(
     id="fp8_minimax_h3_fl2va",
@@ -244,6 +249,138 @@ def test_minimax_h3_quantization_quality(config: QualityTestConfig):
     print(f"{'=' * 60}\n")
 
     assert np.isfinite(psnr_score) or np.isinf(psnr_score), f"PSNR is invalid for {config.id}: {psnr_score}"
+    assert np.isfinite(mae_score), f"MAE is not finite for {config.id}: {mae_score}"
+
+
+def _git_head_sha() -> str:
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=Path(__file__).resolve().parents[4],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
+def _profile_joint_output(omni, config: QualityTestConfig):
+    """Run one warmup and retain the first of three measured outputs."""
+    _generate_joint_output(omni, config)
+
+    measured_output = None
+    latencies: list[float] = []
+    peak_mem = 0.0
+    for _ in range(_SVDQUANT_MEASURED_RUNS):
+        torch.accelerator.synchronize()
+        start = time.perf_counter()
+        output = _generate_joint_output(omni, config)
+        torch.accelerator.synchronize()
+        latencies.append(time.perf_counter() - start)
+        peak_mem = max(peak_mem, output[3])
+        if measured_output is None:
+            measured_output = output
+
+    assert measured_output is not None
+    video, audio, sample_rate, _ = measured_output
+    return video, audio, sample_rate, latencies, peak_mem
+
+
+@pytest.mark.full_model
+@pytest.mark.diffusion
+@pytest.mark.cuda
+def test_minimax_h3_svdquant_quality():
+    """Profile frozen-head BF16 vs offline SVDQuant on an SM103 GPU."""
+    from vllm_omni.entrypoints.omni import Omni
+
+    quantized_model = os.environ.get(_SVDQUANT_MODEL_ENV)
+    if not quantized_model:
+        pytest.skip(f"Set {_SVDQUANT_MODEL_ENV} to an offline SVDQuant FL2VA checkpoint")
+    if torch.cuda.get_device_capability() != (10, 3):
+        pytest.skip("MiniMax-H3 SVDQuant validation requires an SM103 GPU")
+
+    config = QualityTestConfig(
+        id="svdquant_minimax_h3_fl2va",
+        baseline_model=_resolve_fl2va_model_ref(),
+        quantized_model=quantized_model,
+        task="t2v",
+        prompt=_QUALITY_CONFIG.prompt,
+        max_lpips=_QUALITY_CONFIG.max_lpips,
+        height=_QUALITY_CONFIG.height,
+        width=_QUALITY_CONFIG.width,
+        num_frames=_QUALITY_CONFIG.num_frames,
+        num_inference_steps=50,
+        seed=_QUALITY_CONFIG.seed,
+    )
+    config.validate()
+    common_kwargs = {
+        "dtype": "bfloat16",
+        "enforce_eager": True,
+        "tensor_parallel_size": 1,
+        "text_encoder_tp_size": 1,
+        "vae_use_tiling": True,
+    }
+
+    omni_bl = Omni(model=config.baseline_ref(), **common_kwargs)
+    baseline_out, baseline_audio, baseline_sample_rate, bl_latencies, bl_mem = _profile_joint_output(
+        omni_bl, config
+    )
+    omni_bl.shutdown()
+    del omni_bl
+    _free_gpu_memory()
+    _maybe_save_output(_OUTPUT_DIR, config, "baseline", baseline_out)
+
+    omni_qt = Omni(model=config.quantized_ref(), **common_kwargs)
+    quant_out, quant_audio, quant_sample_rate, qt_latencies, qt_mem = _profile_joint_output(omni_qt, config)
+    omni_qt.shutdown()
+    del omni_qt
+    _free_gpu_memory()
+    _maybe_save_output(_OUTPUT_DIR, config, "quantized", quant_out)
+
+    lpips_score = _compute_lpips(baseline_out, quant_out, config.task)
+    psnr_score, mae_score = _compute_psnr_and_mae(baseline_out, quant_out, config.task)
+    if baseline_sample_rate != _MINIMAX_H3_AUDIO_SAMPLE_RATE or quant_sample_rate != baseline_sample_rate:
+        raise AssertionError(
+            f"Unexpected H3 audio sample rate: baseline={baseline_sample_rate}, "
+            f"quantized={quant_sample_rate}"
+        )
+    audio_spectral_cosine, audio_rms_ratio = _audio_quality_metrics(baseline_audio, quant_audio)
+
+    bl_latency_mean = float(np.mean(bl_latencies))
+    bl_latency_std = float(np.std(bl_latencies))
+    qt_latency_mean = float(np.mean(qt_latencies))
+    qt_latency_std = float(np.std(qt_latencies))
+    mem_reduction = (bl_mem - qt_mem) / bl_mem * 100 if bl_mem > 0 else 0.0
+
+    print("\nMiniMax-H3 BF16 vs SVDQuant validation")
+    print(f"Head: {_git_head_sha()}")
+    print(f"Seed: {config.seed}; warmup: 1; measured runs: {_SVDQUANT_MEASURED_RUNS}")
+    print("| Metric | Value |")
+    print("| --- | ---: |")
+    print(f"| Video LPIPS | {lpips_score:.4f} |")
+    print(f"| Video PSNR | {psnr_score:.4f} dB |")
+    print(f"| Video MAE | {mae_score:.6f} |")
+    print(f"| Audio spectral cosine | {audio_spectral_cosine:.4f} |")
+    print(f"| Audio RMS ratio | {audio_rms_ratio:.4f}x |")
+    print("\n| Model | Latency, mean ± std | Peak VRAM |")
+    print("| --- | ---: | ---: |")
+    print(f"| BF16 | {bl_latency_mean:.3f} ± {bl_latency_std:.3f} s | {bl_mem:.2f} GiB |")
+    print(f"| SVDQuant | {qt_latency_mean:.3f} ± {qt_latency_std:.3f} s | {qt_mem:.2f} GiB |")
+    print(f"Peak VRAM reduction: {mem_reduction:.1f}%")
+
+    assert lpips_score <= config.max_lpips, (
+        f"LPIPS {lpips_score:.4f} exceeds threshold {config.max_lpips} for {config.id}"
+    )
+    assert audio_spectral_cosine >= _MIN_AUDIO_SPECTRAL_COSINE, (
+        f"Audio spectral cosine {audio_spectral_cosine:.4f} is below threshold "
+        f"{_MIN_AUDIO_SPECTRAL_COSINE} for {config.id}"
+    )
+    assert _MIN_AUDIO_RMS_RATIO <= audio_rms_ratio <= _MAX_AUDIO_RMS_RATIO, (
+        f"Audio RMS ratio {audio_rms_ratio:.4f} is outside "
+        f"[{_MIN_AUDIO_RMS_RATIO}, {_MAX_AUDIO_RMS_RATIO}] for {config.id}"
+    )
+    assert np.isfinite(psnr_score) or np.isinf(psnr_score), (
+        f"PSNR is invalid for {config.id}: {psnr_score}"
+    )
     assert np.isfinite(mae_score), f"MAE is not finite for {config.id}: {mae_score}"
 
 
