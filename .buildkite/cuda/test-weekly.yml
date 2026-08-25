@@ -198,5 +198,5 @@ steps:
           - vllm_omni/diffusion/models/minimax_h3/
           - vllm_omni/diffusion/offloader/
         commands:
-          - pytest -s -v tests/dfx/stability/scripts/test_stability_minimax_h3.py -m "slow and diffusion"
+          - pytest -s -v tests/dfx/stability/scripts/test_stability_minimax_h3.py -m "slow and diffusion and H100"
         mirror_hardwares: h100_4
