@@ -6,9 +6,11 @@
 from __future__ import annotations
 
 import concurrent.futures
+import io
 import json
 import os
 
+import av
 import pytest
 import requests
 
@@ -51,6 +53,15 @@ SERVER_ARGS = [
     "--vae-use-tiling",
     "--enable-distributed-layerwise-offload",
 ]
+
+
+def _assert_audio_stream_present(video: bytes) -> None:
+    """Assert that the generated MP4 contains decodable audio samples."""
+    with av.open(io.BytesIO(video)) as container:
+        audio_streams = [stream for stream in container.streams if stream.type == "audio"]
+        assert audio_streams, "MiniMax-H3 MP4 has no audio stream"
+        audio_frame = next(container.decode(audio=0), None)
+        assert audio_frame is not None and audio_frame.samples > 0, "MiniMax-H3 MP4 audio stream is empty"
 
 
 def _run_t2va_request(client: OpenAIClientHandler, seed: int) -> bytes:
@@ -114,3 +125,4 @@ def test_minimax_h3_dlo_dp2_t2va(omni_server: OmniServer, openai_client: OpenAIC
 
     for video in videos:
         assert_video_valid(video, width=WIDTH, height=HEIGHT, fps=FPS)
+        _assert_audio_stream_present(video)
