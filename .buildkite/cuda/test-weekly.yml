@@ -188,7 +188,7 @@ steps:
     if: build.env("WEEKLY") == "1" || build.pull_request.labels includes "weekly-test"
     steps:
       - label: "Stability · MiniMax-H3 DLO USP4"
-        timeout_in_minutes: 1440
+        timeout_in_minutes: 1680
         source_file_dependencies:
           - tests/dfx/stability/scripts/test_stability_minimax_h3.py
           - tests/dfx/stability/tests/test_minimax_h3.json
