@@ -239,9 +239,7 @@ steps:
             # parent's resource tracker out of sync after teardown; Buildkite
             # #14151 then hung in the next Ref2VA collective.  Keep each
             # lifecycle in a fresh pytest process while retaining one job.
-            test_file=tests/e2e/online_serving/test_minimax_h3_l3_variants.py
-            test_args=(-s -v "$test_file" -m 'advanced_model and cuda and diffusion' --run-level 'advanced_model')
-            timeout 35m pytest "${test_args[@]}" -k 'test_minimax_h3_dlo_dp2_fl2va'
-            timeout 35m pytest "${test_args[@]}" -k 'test_minimax_h3_dlo_dp2_ref2va'
-            timeout 35m pytest "${test_args[@]}" -k 'test_minimax_h3_dlo_turbo_lora_fl2va'
+            timeout 35m pytest -s -v tests/e2e/online_serving/test_minimax_h3_l3_variants.py -m 'advanced_model and cuda and diffusion' --run-level 'advanced_model' -k 'test_minimax_h3_dlo_dp2_fl2va'
+            timeout 35m pytest -s -v tests/e2e/online_serving/test_minimax_h3_l3_variants.py -m 'advanced_model and cuda and diffusion' --run-level 'advanced_model' -k 'test_minimax_h3_dlo_dp2_ref2va'
+            timeout 35m pytest -s -v tests/e2e/online_serving/test_minimax_h3_l3_variants.py -m 'advanced_model and cuda and diffusion' --run-level 'advanced_model' -k 'test_minimax_h3_dlo_turbo_lora_fl2va'
         mirror_hardwares: h100_2
