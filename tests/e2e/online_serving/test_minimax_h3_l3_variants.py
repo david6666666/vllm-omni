@@ -196,13 +196,9 @@ def test_minimax_h3_dlo_dp2_fl2va(omni_server: OmniServer, openai_client: OpenAI
 )
 def test_minimax_h3_dlo_dp2_ref2va(omni_server: OmniServer, openai_client: OpenAIClientHandler) -> None:
     """Official video-reference Ref2VA request over one complete DLO DP2 wave."""
-    # Ref2VA video-reference preprocessing has a different per-request
-    # schedule from FL2VA. Keeping this official request as a single-item wave
-    # avoids an H100 DLO DP collective wait while the FL2VA case above covers
-    # the concurrent DP2 path.
-    video = _run_ref2va(openai_client, seed=2101)
-    assert_video_valid(video, width=WIDTH, height=HEIGHT, fps=FPS)
-    _assert_audio_stream_present(video)
+    for video in _run_dlo_wave(openai_client, _run_ref2va):
+        assert_video_valid(video, width=WIDTH, height=HEIGHT, fps=FPS)
+        _assert_audio_stream_present(video)
 
 
 LORA_SERVER_ARGS = [
