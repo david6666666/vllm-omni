@@ -1,11 +1,37 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 import pytest
 import torch
 import torch.nn as nn
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu, pytest.mark.diffusion]
+
+
+def test_pure_dp_request_preparation_uses_independent_replica(monkeypatch):
+    from vllm_omni.diffusion.models.minimax_h3 import pipeline_minimax_h3 as h3
+
+    world_group = object()
+    monkeypatch.setattr(h3.dist, "is_initialized", lambda: True)
+    monkeypatch.setattr(h3, "get_world_group", lambda: type("Group", (), {"device_group": world_group})())
+    monkeypatch.setattr(h3.dist, "get_world_size", lambda group: 2)
+    monkeypatch.setattr(h3.dist, "get_rank", lambda group: 1)
+    monkeypatch.setattr(h3, "get_data_parallel_world_size", lambda: 2)
+
+    assert h3._dit_rank_world() == (None, 0, 1)
+
+
+def test_model_parallel_request_preparation_retains_world_group(monkeypatch):
+    from vllm_omni.diffusion.models.minimax_h3 import pipeline_minimax_h3 as h3
+
+    world_group = object()
+    monkeypatch.setattr(h3.dist, "is_initialized", lambda: True)
+    monkeypatch.setattr(h3, "get_world_group", lambda: type("Group", (), {"device_group": world_group})())
+    monkeypatch.setattr(h3.dist, "get_world_size", lambda group: 2)
+    monkeypatch.setattr(h3.dist, "get_rank", lambda group: 1)
+    monkeypatch.setattr(h3, "get_data_parallel_world_size", lambda: 1)
+
+    assert h3._dit_rank_world() == (world_group, 1, 2)
 
 
 def test_grouped_qkv_checkpoint_reorder():
