@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import torch
@@ -14,15 +15,30 @@ from vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2_i2v import (
     get_wan22_i2v_post_process_func,
     get_wan22_i2v_pre_process_func,
 )
+from vllm_omni.diffusion.registry import get_diffusion_post_process_func
 from vllm_omni.diffusion.worker.request_batch import DiffusionRequestBatch
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu, pytest.mark.diffusion]
 
 
+def test_wan22_i2v_diffusers_backend_skips_native_postprocess() -> None:
+    postprocess = get_diffusion_post_process_func(
+        SimpleNamespace(
+            model_class_name="WanImageToVideoPipeline",
+            diffusion_load_format="diffusers",
+        )
+    )
+
+    assert postprocess is None
+
+
 def test_wan22_i2v_postprocess_honors_request_output_type() -> None:
     video = torch.zeros(1, 4, 1, 2, 2)
 
-    output = get_wan22_i2v_post_process_func(SimpleNamespace())(
+    postprocess = get_wan22_i2v_post_process_func(SimpleNamespace(diffusion_load_format="default"))
+    assert postprocess is not None
+
+    output = postprocess(
         video,
         sampling_params=SimpleNamespace(output_type="latent"),
     )
@@ -45,7 +61,7 @@ def _make_i2v_pipeline(*, expand_timesteps: bool) -> Wan22I2VPipeline:
 
 
 def _make_i2v_sampling(**overrides):
-    values = {
+    values: dict[str, Any] = {
         "height": 16,
         "width": 16,
         "num_frames": 5,

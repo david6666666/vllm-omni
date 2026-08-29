@@ -56,6 +56,11 @@ DEBUG_PERF = False
 def get_wan22_i2v_post_process_func(
     od_config: OmniDiffusionConfig,
 ):
+    # The Diffusers adapter returns already-postprocessed frame lists, while
+    # this factory handles tensor output from the native Wan I2V pipeline.
+    if od_config.diffusion_load_format == "diffusers":
+        return None
+
     from diffusers.video_processor import VideoProcessor
 
     video_processor = VideoProcessor(vae_scale_factor=8)
