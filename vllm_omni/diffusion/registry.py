@@ -725,6 +725,10 @@ def _load_process_func(od_config: OmniDiffusionConfig, func_name: str):
 
 
 def get_diffusion_post_process_func(od_config: OmniDiffusionConfig):
+    # Keep the checkpoint's native class name for modality/capability metadata,
+    # but do not run its tensor postprocessor on Diffusers' decoded outputs.
+    if getattr(od_config, "diffusion_load_format", "default") == "diffusers":
+        return None
     if od_config.model_class_name not in _DIFFUSION_POST_PROCESS_FUNCS:
         return None
     func_name = _DIFFUSION_POST_PROCESS_FUNCS[od_config.model_class_name]
@@ -739,6 +743,9 @@ def get_diffusion_ir_op_priority_func(od_config: OmniDiffusionConfig):
 
 
 def get_diffusion_pre_process_func(od_config: OmniDiffusionConfig):
+    # The adapter translates requests to Diffusers call arguments itself.
+    if getattr(od_config, "diffusion_load_format", "default") == "diffusers":
+        return None
     if od_config.model_class_name not in _DIFFUSION_PRE_PROCESS_FUNCS:
         return None  # Return None if no pre-processing function is registered (for backward compatibility)
     func_name = _DIFFUSION_PRE_PROCESS_FUNCS[od_config.model_class_name]

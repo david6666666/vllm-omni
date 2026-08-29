@@ -156,6 +156,10 @@ def _resolve_custom_pipeline_cls(custom_pipeline_args: dict[str, Any] | None) ->
 
 
 def supports_request_batch(od_config: OmniDiffusionConfig) -> bool:
+    if getattr(od_config, "diffusion_load_format", "default") == "diffusers":
+        model_cls = DiffusionModelRegistry._try_load_model_cls("DiffusersAdapterPipeline")
+        return bool(getattr(model_cls, "supports_request_batch", False))
+
     model_cls = _resolve_custom_pipeline_cls(getattr(od_config, "custom_pipeline_args", None))
     if model_cls is None:
         model_cls = DiffusionModelRegistry._try_load_model_cls(getattr(od_config, "model_class_name", None))

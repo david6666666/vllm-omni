@@ -1317,10 +1317,6 @@ class OmniDiffusionConfig:
 
         from vllm_omni.diffusion.utils.hf_utils import get_diffusion_model_index
 
-        # Default model_class_name for diffusers adapter
-        if self.model_class_name is None and self.diffusion_load_format == "diffusers":
-            self.model_class_name = "DiffusersAdapterPipeline"
-
         assert self.model is not None
         try:
             config_dict = get_diffusion_model_index(
@@ -1330,6 +1326,8 @@ class OmniDiffusionConfig:
             if config_dict is not None:
                 if self.model_class_name is None:
                     self.model_class_name = config_dict.get("_class_name", None)
+                    if self.model_class_name is None and self.diffusion_load_format == "diffusers":
+                        self.model_class_name = "DiffusersAdapterPipeline"
                 self.update_multimodal_support()
 
                 # Skip transformer config loading for diffusers adapter
@@ -1370,6 +1368,8 @@ class OmniDiffusionConfig:
             # Skip transformer config loading for diffusers adapter
             # (non-DiT models don't have a separate transformer folder/config)
             if self.diffusion_load_format == "diffusers":
+                if self.model_class_name is None:
+                    self.model_class_name = "DiffusersAdapterPipeline"
                 self.set_tf_model_config(TransformerConfig())
                 logger.warning(
                     "Could not find a valid pipeline index per Diffusers format. "
