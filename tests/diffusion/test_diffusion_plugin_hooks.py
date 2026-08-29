@@ -125,6 +125,7 @@ class TestRegisterDiffusionModel:
 def test_diffusers_backend_skips_native_process_hooks(model_class_name, get_process_func):
     od_config = SimpleNamespace(
         model_class_name=model_class_name,
+        custom_pipeline_args=None,
         diffusion_load_format="diffusers",
     )
 
@@ -132,6 +133,28 @@ def test_diffusers_backend_skips_native_process_hooks(model_class_name, get_proc
         assert get_process_func(od_config) is None
 
     load_process_func.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("model_class_name", "get_process_func"),
+    [
+        ("QwenImagePipeline", get_diffusion_post_process_func),
+        ("WanImageToVideoPipeline", get_diffusion_post_process_func),
+        ("WanImageToVideoPipeline", get_diffusion_pre_process_func),
+    ],
+)
+def test_custom_pipeline_preserves_native_process_hooks(model_class_name, get_process_func):
+    process_func = Mock()
+    od_config = SimpleNamespace(
+        model_class_name=model_class_name,
+        custom_pipeline_args={"pipeline_class": "custom.Pipeline"},
+        diffusion_load_format="diffusers",
+    )
+
+    with patch("vllm_omni.diffusion.registry._load_process_func", return_value=process_func) as load_process_func:
+        assert get_process_func(od_config) is process_func
+
+    load_process_func.assert_called_once()
 
 
 class TestWorkerUsesHook:

@@ -685,6 +685,19 @@ def resolve_model_class_name(
     return None
 
 
+def uses_diffusers_adapter(od_config: object) -> bool:
+    """Return whether execution uses the Diffusers adapter backend.
+
+    A custom pipeline takes precedence over ``diffusion_load_format`` in the
+    worker, so adapter-specific behavior must only apply when no custom
+    pipeline override is configured.
+    """
+    return (
+        getattr(od_config, "custom_pipeline_args", None) is None
+        and getattr(od_config, "diffusion_load_format", "default") == "diffusers"
+    )
+
+
 @dataclass
 class OmniDiffusionConfig:
     # Model and path configuration (for convenience)
