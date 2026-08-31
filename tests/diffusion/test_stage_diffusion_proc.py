@@ -28,7 +28,7 @@ BASE_INFER_STEPS = 10
 DELAY_BASE = 0.01
 
 
-def test_run_diffusion_proc_loads_plugins_before_proc_construction(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_diffusion_proc_sets_lifecycle_before_loading_plugins(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[str] = []
 
     class StopProcessError(Exception):
@@ -40,8 +40,8 @@ def test_run_diffusion_proc_loads_plugins_before_proc_construction(monkeypatch: 
             raise StopProcessError
 
     monkeypatch.setattr(omni_plugins, "load_omni_general_plugins", lambda: events.append("plugins"))
-    monkeypatch.setattr(stage_diffusion_proc, "set_death_signal", lambda _: None)
-    monkeypatch.setattr(stage_diffusion_proc.signal, "signal", lambda *_: None)
+    monkeypatch.setattr(stage_diffusion_proc, "set_death_signal", lambda _: events.append("death_signal"))
+    monkeypatch.setattr(stage_diffusion_proc.signal, "signal", lambda *_: events.append("signal_handler"))
 
     with pytest.raises(StopProcessError):
         TestStageDiffusionProc.run_diffusion_proc(
@@ -52,7 +52,7 @@ def test_run_diffusion_proc_loads_plugins_before_proc_construction(monkeypatch: 
             headless=False,
         )
 
-    assert events == ["plugins", "proc"]
+    assert events == ["death_signal", "signal_handler", "signal_handler", "plugins", "proc"]
 
 
 class MockDiffusionEngine:
