@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 import torch.nn as nn
@@ -8,28 +10,21 @@ import torch.nn as nn
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu, pytest.mark.diffusion]
 
 
-def test_pure_dp_request_preparation_uses_independent_replica(monkeypatch):
+def test_dit_rank_world_keeps_world_group_for_pure_dp(monkeypatch):
+    """Request preparation must use the DiT WORLD group, even for pure DP.
+
+    A pure-DP worker still participates in the model's WORLD collectives.  The
+    PR #6556 workaround treated that group as a local singleton, which made
+    rank-specific request preparation diverge from the rest of the pipeline
+    and could strand a peer in a later collective.
+    """
     from vllm_omni.diffusion.models.minimax_h3 import pipeline_minimax_h3 as h3
 
     world_group = object()
     monkeypatch.setattr(h3.dist, "is_initialized", lambda: True)
-    monkeypatch.setattr(h3, "get_world_group", lambda: type("Group", (), {"device_group": world_group})())
-    monkeypatch.setattr(h3.dist, "get_world_size", lambda group: 2)
-    monkeypatch.setattr(h3.dist, "get_rank", lambda group: 1)
-    monkeypatch.setattr(h3, "get_data_parallel_world_size", lambda: 2)
-
-    assert h3._dit_rank_world() == (None, 0, 1)
-
-
-def test_model_parallel_request_preparation_retains_world_group(monkeypatch):
-    from vllm_omni.diffusion.models.minimax_h3 import pipeline_minimax_h3 as h3
-
-    world_group = object()
-    monkeypatch.setattr(h3.dist, "is_initialized", lambda: True)
-    monkeypatch.setattr(h3, "get_world_group", lambda: type("Group", (), {"device_group": world_group})())
-    monkeypatch.setattr(h3.dist, "get_world_size", lambda group: 2)
-    monkeypatch.setattr(h3.dist, "get_rank", lambda group: 1)
-    monkeypatch.setattr(h3, "get_data_parallel_world_size", lambda: 1)
+    monkeypatch.setattr(h3, "get_world_group", lambda: SimpleNamespace(device_group=world_group))
+    monkeypatch.setattr(h3.dist, "get_rank", lambda group: 1 if group is world_group else -1)
+    monkeypatch.setattr(h3.dist, "get_world_size", lambda group: 2 if group is world_group else -1)
 
     assert h3._dit_rank_world() == (world_group, 1, 2)
 
