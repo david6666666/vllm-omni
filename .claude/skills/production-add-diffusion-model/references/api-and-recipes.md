@@ -242,6 +242,20 @@ documented media source; do not silently benchmark t2v and label it i2v. Keep
 prompt, assets, seed, dimensions, frames, steps, guidance, warmup, concurrency,
 and arrival process identical across A/B runs.
 
+Keep three benchmark lanes distinct:
+
+1. lossless runtime A/B with the released schedule/precision/attention policy;
+2. accelerated-path A/B that changes one adapter, quantization, cache, or
+   sparsity policy and adds same-seed quality evidence;
+3. production-topology studies that vary placement or parallelism and report a
+   latency/throughput/memory frontier rather than a kernel speedup.
+
+For a fixed single-request A/B, retain every measured run and report median or
+mean with range after an explicit warmup; do not infer p95/p99 from a few
+repetitions. Tail latency requires a declared arrival process, request count,
+concurrency, and enough successful samples. Reconcile client E2E with queue,
+encoder, denoise, video/audio decode, D2H/IPC, codec, and residual timings.
+
 The diffusion serving harness currently covers image/video task families, not
 `/v1/audio/generate`. For text-to-audio, use the target model's task-specific
 audio benchmark if one exists; otherwise add a serving harness that records
@@ -260,10 +274,11 @@ Create a separate row and runnable section for each vendor/card/topology:
 | Source | vLLM-Omni commit, official/checkpoint revision and hashes |
 | Deployment | dtype, attention backend per role, TP/SP/CFG/HSDP/DP, cache, quant, offload |
 | Commands | Complete deploy YAML/serve command, every task curl, benchmark command |
-| Method | Warmup exclusion, repeats, concurrency, RPS distribution, duration |
+| Method | Warmup exclusion, repetitions or request count, concurrency, arrival distribution, duration, statistic definitions |
 | Results | Success rate, p50/p95/p99, RPS/throughput per device, stage latency |
 | Memory | Load/materialize, resident, encode, denoise, decode, transient per-rank HBM and host PSS |
 | Quality | Metric/tolerance, artifact links/hashes, temporal/audio checks |
+| Output | Raw/offline dtype, range, layout and ownership; online codec, payload bytes, transport route and client boundary |
 | Limits | `validated`/`limited`/`unsupported`/`not tested`, fallback/rejection behavior |
 
 Use current paths such as `recipes/<vendor>/`, `recipes/README.md`, supported

@@ -27,12 +27,17 @@ Capture:
 - GPU trace: kernel duration/count, launch gaps, allocations, H2D, collectives;
 - CPU trace: preprocessing, per-layer sync, Python dispatch, temporary files;
 - memory: per-rank HBM peaks and process-tree host PSS;
-- serving: queue time, p50/p95/p99, throughput, errors, request mix.
+- output: device preparation, D2H/IPC, payload bytes, codec wall/process CPU,
+  event-loop wait, client materialization, and signed residual;
+- serving: queue time, throughput, errors, request mix, and distribution samples.
 
-Run one explicit warmup policy and at least three measured repetitions. Keep
-raw runs. Implement one optimization at a time, re-run parity, and report both
-local kernel and end-to-end deltas. A kernel win that moves no E2E metric is
-not a production speed claim.
+For a fixed-work single-request A/B, run one explicit warmup policy and at
+least three measured repetitions, keep every raw run, and report median or mean
+with range. Do not derive p95/p99 from three samples. For tail latency, declare
+the arrival model and collect enough successful requests for the percentile and
+confidence claimed. Implement one optimization at a time, re-run parity, and
+report both local kernel and end-to-end deltas. A kernel win that moves no E2E
+metric is not a production speed claim.
 
 Use the pipeline profiler already exposed by the target revision when
 available, and use PyTorch/CUDA/ROCm/NPU/XPU profiling tools appropriate to the
@@ -385,6 +390,15 @@ Declare `_sp_plan` split/gather boundaries around meaningful module outputs,
 not arbitrary Python statements. Keep packed metadata sharded/gathered in the
 same ownership model as tokens.
 
+When the target revision offers accelerated Ulysses transport such as
+`--ulysses-a2a-permute`, qualify it separately from regular Ulysses. Prove the
+strict scatter-heads/gather-sequence layout selected the fast path, record
+one-time JIT/readiness cost, prewarm the maximum workspace shape before CUDA
+graph capture, keep the grow-only workspace on one stream, and exercise cleanup
+before process-group destruction. Compare collective and E2E deltas after the
+dense backend and topology are frozen; keep unsupported layouts on an explicit
+regular-Ulysses fallback.
+
 Cross-attention sometimes uses replicated text K/V while only video/audio Q is
 sequence-sharded. In that specific case, `skip_sequence_parallel=True` can
 avoid incorrect or wasteful Q/K/V redistribution:
@@ -447,7 +461,8 @@ For each accepted optimization, require:
 - same fixed workload and correctness artifacts before/after;
 - actual fast-path execution proven by logs/trace/counters;
 - local metric plus E2E latency/throughput and memory;
-- at least three raw measured repetitions after explicit warmup;
+- at least three raw fixed-work repetitions after explicit warmup, or a
+  declared arrival-load sample set large enough for every tail percentile;
 - named hardware, backend, topology, dtype, and task scope;
 - fallback/rejection tests for unsupported shapes/platforms;
 - no regression in abort/error cleanup or long-run memory trend.

@@ -16,8 +16,9 @@ work is incomplete, read that skill first and finish the Day-0 vertical slice.
 MiniMax-H3 [PR #5691](https://github.com/vllm-project/vllm-omni/pull/5691)
 is the merged Day-0 case study. Its open optimization
 [issue #5700](https://github.com/vllm-project/vllm-omni/issues/5700) is an
-as-of-2026-08-17 roadmap, not a list of already supported features. Treat every
-roadmap item as `not tested` until the target revision has scoped evidence.
+actively maintained roadmap and evidence map, not a list of already supported
+features. Read its current revision and cited PRs, then treat every row as
+`not tested` until the target revision has scoped evidence.
 
 Read these references before the corresponding gate:
 
@@ -33,7 +34,7 @@ Create a matrix whose row key is at least:
 ```text
 task x API mode x execution mode/capacity x shape/schedule x attention backend x
 packed layout x cache policy x quantization x offload mode x topology x
-hardware x dtype
+hardware x dtype x output representation/transport
 ```
 
 Use exactly these states:
@@ -294,13 +295,24 @@ a fail-closed optimization: current preflight requires TP1, no HSDP, no online
 quantization, complete bindings, and represented transforms. Otherwise the
 ordinary loader remains authoritative.
 
+If the target revision supports Host Weight Runtime (HWR), treat it as a
+separate, exact-identity startup/cache path rather than generic offload or
+zero-copy execution. Qualify `preferred` population/fallback and `required`
+consume-only failure independently; verify immutable manifests, final-layout
+restore, lease cleanup, corruption/quarantine, and node-local sharing. Current
+model contracts may be BF16 no-AllGather-only, so reject AllGather, online
+quantization, HSDP, LoRA/adapted weights, and unrecognized load formats unless
+the exact target revision explicitly adds them.
+
 On small-HBM cards, record load/materialization peak, resident peak, encode,
 each denoise wave, decode, transient per-rank HBM, host PSS, H2D, and collective
 time. Test DLO AllGather and `--dlo-no-use-allgather` as different deployments.
 Direct checkpoint mmap preflight is limited to TP1 without HSDP or online
 quantization; TP>1 falls back to the ordinary TP-aware loader and can still feed
-DLO AllGather or no-AllGather after scoped E2E. HSDP and online quantization
-remain incompatible with DLO AllGather and must use no-AllGather candidates.
+DLO AllGather or no-AllGather after scoped E2E. HSDP remains incompatible with
+DLO AllGather. A target revision may allow finalized per-tensor online FP8
+through the ordinary loader and AllGather; keep every other online quantizer
+fail-closed, and require model/card/topology E2E before promotion.
 Use deploy YAML for DP under `--omni`; vLLM DP CLI flags are rejected.
 
 ### Gate 5: Add request-scoped acceleration safely
@@ -319,8 +331,15 @@ for the lifecycle skeleton and compatibility matrix.
 
 ### Gate 6: Optimize only from profiles
 
+Freeze one canonical workload manifest before profiling. Keep lossless runtime
+A/Bs, accelerated paths with numerical/quality trade-offs, and production
+topology studies in separate result lanes. Reconcile the client boundary as
+queue + encode + denoise + video/audio decode + output transport/codec +
+residual; do not hide a material residual in another stage.
+
 Profile stage time, GPU kernels, CPU/GPU synchronization, allocations, H2D,
-and collectives before choosing work. Apply and A/B one change at a time:
+output payload/copies, and collectives before choosing work. Apply and A/B one
+change at a time:
 
 1. Remove synchronization and redundant denoise-loop work: hoist static prompt
    conditioning/token refinement, RoPE tables, masks/metadata, bounded AdaLN
@@ -333,7 +352,9 @@ and collectives before choosing work. Apply and A/B one change at a time:
    sparsity, quality, fallback, and end-to-end speedup are all proven.
 5. Profile USP all-to-all count/bytes, packing, contiguous copies, overlap, and
    scaling efficiency. Audit replicated cross-attention before using
-   `skip_sequence_parallel`.
+   `skip_sequence_parallel`. Qualify regular and accelerated Ulysses transport
+   independently; activation logs, JIT/readiness time, workspace growth,
+   stream ownership, maximum-shape warmup, and numerical drift are gates.
 6. Evaluate text-encoder or VAE disaggregation only if stage share, transfer
    volume, reuse/concurrency, and independent scaling justify it. Tiling,
    offload, or patch parallelism is not disaggregation.
@@ -355,17 +376,26 @@ Keep all mutable scheduler, RNG, latent, mask, cache, and step state request
 scoped. First validate `--step-execution --max-num-seqs 1` and step-boundary
 abort; only then test heterogeneous multi-request waves. Step continuous
 batching is experimental and is not automatically compatible with Cache-DiT.
+Before recommending it, predeclare a useful case and success threshold, then
+A/B it against request mode under the same arrival process. Structural support
+or a generic bridge is not latency, throughput, or cancellation evidence for a
+model.
 
 Test queued and in-flight abort, client disconnect, timeout, OOM, worker error,
 and restart. Require one terminal result, idempotent cleanup, no post-decode
 after abort, no cache/temp/VRAM/request-ID leak, and a successful next request.
 Inject late worker results/exceptions after cancellation and prove the result
-pump stays alive instead of raising `InvalidStateError`. For large batched video
-outputs, validate shared-memory/handle ownership, per-request slicing, cleanup,
-and remote encoding/transport separately from model latency.
+pump stays alive instead of raising `InvalidStateError`. For large batched or
+long-window video outputs, freeze dtype, range, layout, contiguity, ownership,
+payload size, serializer/codec limits, and offline-versus-HTTP semantics.
+Validate device-side output preparation, D2H/IPC or shared handles, remote
+encoding, event-loop responsiveness, and client materialization as separate
+stages, including abort and consumer failure cleanup.
 Run below-, near-, and above-saturation mixed-RPS soaks and report success/error
-rate, p50/p95/p99, throughput, queue time, memory slope, temp growth, and worker
-health. See [serving and CI validation](references/production-validation.md).
+rate, throughput, queue time, memory slope, temp growth, and worker health.
+Report p50/p95/p99 only from a declared arrival model with enough measured
+requests for the claimed percentile. See
+[serving and CI validation](references/production-validation.md).
 
 ### Gate 8: Publish recipes and four independent CI tracks
 
@@ -382,7 +412,8 @@ Maintain separate CI gates:
 1. Function: strict load, API/offline positive and negative contracts.
 2. Accuracy: fixed reference revision/assets/seed/schedule and scoped tolerance.
 3. Performance: fixed best deployment plus memory-constrained/DLO row, raw JSON,
-   explicit warmup, repeats, and owned regression thresholds.
+   explicit warmup, enough samples for each claimed statistic, and owned
+   regression thresholds.
 4. Reliability: long mixed-RPS soak, abort/disconnect/fault cleanup, memory and
    temporary-resource trend.
 
@@ -401,6 +432,8 @@ A model is production-ready only when:
 - CUDA/ROCm/NPU/XPU recipes describe evidence rather than inferred support;
 - Function, Accuracy, Performance, and Reliability CI have owners, artifacts,
   and actionable failure output;
+- accelerated paths identify every precision/quality trade-off, and the raw
+  offline plus online encoded output contracts are versioned and tested;
 - all unverified task/backend/cache/quant/offload/topology/hardware combinations
   remain `not tested` and are not presented as supported.
 

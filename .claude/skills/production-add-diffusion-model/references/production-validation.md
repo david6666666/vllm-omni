@@ -25,6 +25,12 @@ Do not expose four stub methods as an opt-out. The current protocol is
 structural; if a native pipeline is not step-capable, do not define the four
 step methods. If it is capable, implement and test all four.
 
+Treat structural support, a generic request-batch bridge, and model benefit as
+three separate claims. Before recommending step execution, name a hypothesis
+that request mode cannot satisfy, define a success threshold, and run a matched
+request-mode control. If throughput or latency regresses, retain step execution
+as functional/limited and keep request mode as the production recommendation.
+
 Choose compatibility keys from every value that changes tensor shapes,
 semantics, hooks, or scheduler behavior: task, output shape/count, frames,
 steps/schedule, guidance/CFG, dtype/backend, LoRA/adapter, cache quality policy,
@@ -278,6 +284,19 @@ memory or artifact-handle path above and below its threshold, including
 non-contiguous views, multiple outputs, consumer failure, timeout, abort, and
 worker exit. Verify every shared segment/file is released exactly once.
 
+Freeze the media contract at each hop: dtype, value range, shape/layout,
+contiguity, request ownership, encoding/color model, payload bytes, and pending
+consumers. Device-side float-to-uint8 preparation, D2H/IPC, planar/interleaved
+conversion, CPU encode/mux, and delivery off the asyncio event loop are
+different optimizations. Validate their route selection and fallbacks
+independently. Byte-identical HTTP MP4 output does not prove that a raw offline
+tensor kept its dtype or range.
+
+For long-window output, validate segment ordering and audio/video continuity,
+then exercise payloads around serializer, shared-memory, HTTP, and codec size
+limits. Chunking must reassemble exactly, reject malformed/missing chunks, and
+release partial state after abort, timeout, or peer failure.
+
 Measure remote MP4 encoding, serialization/copies, network transfer, and client
 materialization separately from denoise/decode. An inference-kernel speedup does
 not establish serving throughput if output transport dominates or leaks.
@@ -323,7 +342,8 @@ from a reserved CLI choice unless collection is implemented and verified.
 Report:
 
 - offered and achieved RPS, success/error/abort rates;
-- p50/p95/p99 and queue/service/stage times;
+- p50/p95/p99 and queue/service/stage times, with the successful sample count
+  and arrival process used for each percentile;
 - throughput per device and batch/wave utilization;
 - per-rank HBM and process-tree PSS trend/slope;
 - cache size/hit rate, temp-file/disk growth, open FDs/handles;
@@ -384,9 +404,12 @@ reuse it when compatible instead of creating an ad hoc comparator.
 Pin workload and best deployment. Include a resident recommended row and a
 small-HBM/DLO row when both are production targets. Declare:
 
-- one explicit warmup exclusion and at least three measured repetitions;
+- one explicit warmup exclusion and at least three measured fixed-work
+  repetitions;
 - raw result JSON and environment identity;
-- p50/p95/p99, throughput/RPS, stage time, HBM/PSS;
+- median/mean plus range for small fixed-work A/Bs; p50/p95/p99 only for an
+  arrival-load run with enough samples, plus throughput/RPS, stage time,
+  HBM/PSS;
 - regression metric, threshold, baseline owner, and update procedure;
 - correctness/accuracy check linked to the same configuration.
 
@@ -424,6 +447,8 @@ The PR description must include or link:
 - exact environment, deploy/serve, every task curl, benchmark and soak commands;
 - fixed accuracy inputs and artifacts;
 - raw before/after performance runs and memory traces;
+- output-contract manifests and stage accounting from device preparation
+  through the complete client artifact;
 - abort/disconnect/fault results and cleanup evidence;
 - Function/Accuracy/Performance/Reliability CI files and ownership;
 - limitations/TODOs that remain `not tested` rather than implied support.

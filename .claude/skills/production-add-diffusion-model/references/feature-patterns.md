@@ -14,11 +14,11 @@
 Create rows at the granularity below. Add evidence links and a reason for every
 non-validated state.
 
-| Task/shape | Execution mode/capacity | Backend/layout | Quant | Cache policy | Offload | Topology | Hardware/dtype | State | Evidence |
-|---|---|---|---|---|---|---|---|---|---|
-| `<task>/<shape>/<schedule>` | serial request / 1 | SDPA, padded | BF16 | none | resident | 1 device | `<card>` BF16 | `not tested` | — |
-| `<task>/<shape>/<schedule>` | step / N | `<fast>`, packed | BF16 | none | resident | `<TP/SP>` | `<card>` BF16 | `not tested` | — |
-| `<task>/<shape>/<schedule>` | step / N | `<fast>`, packed | FP8 | high | DLO no-AG | `<TP/SP>` | `<card>` | `not tested` | — |
+| Task/shape | Execution mode/capacity | Backend/layout | Quant | Cache policy | Offload | Topology | Hardware/dtype | Output contract/transport | State | Evidence |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `<task>/<shape>/<schedule>` | serial request / 1 | SDPA, padded | BF16 | none | resident | 1 device | `<card>` BF16 | raw float / local | `not tested` | — |
+| `<task>/<shape>/<schedule>` | step / N | `<fast>`, packed | BF16 | none | resident | `<TP/SP>` | `<card>` BF16 | encoded / subprocess | `not tested` | — |
+| `<task>/<shape>/<schedule>` | step / N | `<fast>`, packed | FP8 | high | DLO no-AG | `<TP/SP>` | `<card>` | device uint8 / SHM | `not tested` | — |
 
 Initialize every row as `not tested`; the table is a work queue, not evidence.
 Promote the dense BF16 row to the oracle only after its scoped parity passes.
@@ -123,7 +123,8 @@ For each task/hardware row, capture:
 - no unexpected BF16 fallback and no meta/uninitialized parameters;
 - same-seed component, trajectory, and final-artifact comparison with BF16;
 - HBM at load, resident, encode, denoise, decode, and peak;
-- cold load time, warm latency, p50/p95/p99, and throughput;
+- cold load time; fixed-work warm-latency raw runs; and serving p50/p95/p99 plus
+  throughput only from a declared arrival load with enough samples;
 - named ignored layers and why their BF16 retention is required.
 
 DiT FP8 evidence does not cover the text encoder or VAE. CUDA evidence does not
@@ -229,13 +230,24 @@ Direct checkpoint mmap currently requires TP1 without HSDP or online
 quantization. TP>1 falls back to the ordinary TP-aware loader and may feed DLO
 AllGather or no-AllGather; the current design records a bounded DP2xTP2
 AllGather smoke, but that path does not receive direct-mmap host-page sharing.
-Online-FP8+DLO must use the ordinary loader plus no-AllGather because online
-quantization remains incompatible with DLO AllGather. If a target revision adds
-a normalized runtime cache, qualify cold build, warm reuse, manifest/content
-integrity, concurrent writers, corruption recovery, node-local PSS, and
-transfer latency. A host-memory saving that materially regresses H2D/E2E
-latency is a separate memory-first deployment, not an automatic replacement
-for the recommended path.
+Per-tensor online FP8 must use the ordinary loader. Current revisions can admit
+its finalized weight/scale layout to DLO AllGather, including transposed runtime
+weights, while unsupported online quantizers still fail closed. Direct mmap
+remains unavailable, so capture the temporary full-model host materialization
+before rank sharding.
+
+Host Weight Runtime is a distinct opt-in path. Current final-layout consumers
+use no-AllGather DLO and exact model-declared BF16 representations. In
+`preferred` mode, consume an exact local hit or canonically load and publish for
+a future startup; in `required` mode, consume only and fail on a miss or unusable
+artifact. HWR must not interact with DLO AllGather, online quantization, HSDP,
+LoRA/adapted weights, or an unrecognized load format unless the target revision
+adds an exact producer/restore contract. It is immutable node-local CPU backing,
+not zero-copy GPU execution; the DLO transport still owns staging or direct H2D.
+Qualify identity inputs, cold population, warm reuse, atomic concurrent
+publication, source digests, corruption/quarantine, lease cleanup, capacity,
+node-local PSS, H2D, and E2E latency. A host-memory saving that materially
+regresses transfer or request latency is a separate memory-first deployment.
 
 ### DLO deployment modes
 
@@ -243,7 +255,7 @@ Treat these paths separately:
 
 | Path | Weight/runtime behavior | Required boundaries |
 |---|---|---|
-| DLO AllGather | Rank-sharded pinned host tensors; reconstruct layer through collective | TP>1 uses ordinary TP-aware loader output; HSDP and online quant are rejected; concurrent ranks must participate consistently |
+| DLO AllGather | Rank-sharded pinned host tensors; reconstruct layer through collective | TP>1 uses ordinary TP-aware loader output; HSDP and unsupported online quantizers are rejected; finalized per-tensor online FP8 is eligible only when recognized by the target revision; concurrent ranks must participate consistently |
 | DLO no-AllGather | Loader-approved checkpoint mmap or ordinary runtime tensors; each rank streams a complete block | Direct mmap is TP1/non-HSDP/non-online-quant only; TP/HSDP/online quant use ordinary runtime tensors and require scoped E2E |
 | SP + DLO | SP group can supply the DLO collective group | Packed boundaries and collective order require E2E |
 
@@ -417,7 +429,7 @@ Start every combination as `not tested`.
 | Combination | Default production posture |
 |---|---|
 | Direct checkpoint mmap + TP>1/HSDP/online quant | Preflight falls back to the ordinary loader; do not claim direct-mmap savings |
-| Online FP8 + DLO AllGather | Reject; online quantization is incompatible with this collective path |
+| Per-tensor online FP8 + DLO AllGather | Generic compatibility exists for finalized weights/scales; each model/card/topology remains a candidate until E2E, and other online quantizers fail closed |
 | Online FP8 + DLO no-AllGather | Candidate only after model/card/topology E2E |
 | TP>1 + DLO AllGather | Ordinary TP-aware loader only; bounded DP2xTP2 smoke exists, but each new model/card/topology still needs E2E |
 | TP>1 + DLO no-AllGather | Ordinary TP-aware loader only; candidate with limited generic coverage |
@@ -428,6 +440,8 @@ Start every combination as `not tested`.
 | Cache-DiT + step execution | Do not advertise until lifecycle/batching support is explicit |
 | Sparse attention + Ring | Verify backend execution; reject silently ignored sparse settings |
 | Packed attention + any topology | Unequal-sample boundary parity is mandatory |
+| Device-side uint8 preparation + offline caller | Version the dtype/range/layout change; HTTP MP4 parity does not preserve the raw tensor contract |
+| Device-side preparation + remote codec | Validate route selection, strided/contiguous layouts, payload bytes, ordering, fallback, and encoded-media parity |
 
 A startup-only test never upgrades a combination. Require request output,
 parity/quality, actual fast-path evidence, resource cleanup, and a benchmark on
