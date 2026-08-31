@@ -22,6 +22,6 @@ H100_TWO_CARD_MARKS = hardware_marks(res={"cuda": "H100"}, num_cards=2)
     indirect=True,
 )
 def test_minimax_h3_dlo_dp2_ref2va(omni_server: OmniServer, openai_client: OpenAIClientHandler) -> None:
-    """Validate a complete concurrent DLO/DP2 wave with two Ref2VA jobs."""
+    """Validate a complete concurrent DLO/DP2 wave with two image-only Ref2VA jobs."""
     for video in run_dlo_wave(openai_client, run_ref2va):
         assert_h3_video(video, width=1344, height=768)

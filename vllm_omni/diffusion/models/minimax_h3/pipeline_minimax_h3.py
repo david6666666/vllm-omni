@@ -30,7 +30,6 @@ from vllm_omni.diffusion.cache.cachedit import (
 )
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.parallel_state import (
-    get_data_parallel_world_size,
     get_world_group,
     init_world_group,
 )
@@ -545,15 +544,7 @@ def _dit_rank_world() -> tuple[Any, int, int]:
     if not dist.is_initialized():
         return None, 0, 1
     group = get_world_group().device_group
-    world_size = dist.get_world_size(group)
-    # Pure data-parallel workers own independent requests. Request-specific
-    # text/reference/VAE preparation must therefore stay inside each replica;
-    # synchronizing it over WORLD couples unrelated requests and can deadlock
-    # before DLO reaches its weight AllGather. Each pure-DP replica contains a
-    # single model rank, so treat it as a local group here.
-    if get_data_parallel_world_size() == world_size:
-        return None, 0, 1
-    return group, dist.get_rank(group), world_size
+    return group, dist.get_rank(group), dist.get_world_size(group)
 
 
 def _broadcast_rank0_exception(exc: Exception | None) -> None:
@@ -2294,7 +2285,7 @@ class MiniMaxH3Pipeline(
                     dtype=torch.long,
                     device=self.device,
                 )
-                group, rank, world_size = _dit_rank_world()
+                _, rank, world_size = _dit_rank_world()
                 if rank == 0:
                     has_audio_tensor = torch.tensor(
                         [int(item["input_has_audio"]) for item in prepared_videos or []],
@@ -2305,7 +2296,7 @@ class MiniMaxH3Pipeline(
                     dist.broadcast(
                         has_audio_tensor,
                         src=0,
-                        group=group,
+                        group=get_world_group().device_group,
                     )
                 has_audio = [bool(value) for value in has_audio_tensor.tolist()]
 
