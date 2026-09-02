@@ -129,7 +129,9 @@ For each task/hardware row, capture:
 
 DiT FP8 evidence does not cover the text encoder or VAE. CUDA evidence does not
 cover ROCm/NPU/XPU. A pre-quantized checkpoint is a different loading path from
-online FP8 and needs its own state.
+online FP8 and needs its own state. If it is also pruned, rotated, distilled, or
+adapter-modified, report that model delta explicitly; BF16-versus-artifact
+quality and speed are deployment comparisons, not pure quantization ablations.
 
 ## Strict fused-weight loading
 
@@ -178,6 +180,13 @@ if incomplete:
 Also compare retained model parameters with the returned loaded set. Explicit
 checkpoint ignores need a reason and test; an unknown or missing weight is not
 an ignore policy.
+
+Load-time adapter fusion creates a dedicated model, not a request-switchable
+LoRA. Pin the base and adapter revisions, validate every low-rank and full-rank
+delta target, freeze the adapter-declared schedule/task, and fuse before
+sharding only when the loader contract proves identical rank-local weights.
+Reject offload or host-weight paths that bypass that fusion rather than serving
+the unfused base model silently.
 
 ## Distributed layerwise offload
 
@@ -313,7 +322,11 @@ revision; do not assume a model accepts another pipeline's deploy config.
 7. TP, SP, cache, compile, online FP8 one axis at a time.
 8. Loader-plan selection/fallback reason, cold/warm storage lifecycle, and
    corruption/stale-entry recovery when mmap/cache backing is advertised.
-9. Per-rank HBM, host PSS for the full process tree, H2D and collective trace.
+9. Replica-local request preparation plus DLO-group-only weight collectives in
+   DP; exercise concurrent replicas to catch accidental WORLD rendezvous.
+10. Sweep resident block counts; publish raw latency/HBM pairs, dominated
+    points, and the non-dominated Pareto frontier.
+11. Per-rank HBM, host PSS for the full process tree, H2D and collective trace.
 
 On a small-HBM card, measure transient encode/VAE peaks as well as resident DiT
 weights. If a non-DiT component still exceeds HBM, combine only independently
@@ -439,6 +452,7 @@ Start every combination as `not tested`.
 | Cache-DiT + DLO | Verify hooks, streamed blocks, memory peaks, abort cleanup |
 | Cache-DiT + step execution | Do not advertise until lifecycle/batching support is explicit |
 | Sparse attention + Ring | Verify backend execution; reject silently ignored sparse settings |
+| Load-time fused adapter + offload/HWR | Reject unless the selected loader path applies and validates the same fusion before sharding/storage |
 | Packed attention + any topology | Unequal-sample boundary parity is mandatory |
 | Device-side uint8 preparation + offline caller | Version the dtype/range/layout change; HTTP MP4 parity does not preserve the raw tensor contract |
 | Device-side preparation + remote codec | Validate route selection, strided/contiguous layouts, payload bytes, ordering, fallback, and encoded-media parity |

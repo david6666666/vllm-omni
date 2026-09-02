@@ -297,6 +297,13 @@ then exercise payloads around serializer, shared-memory, HTTP, and codec size
 limits. Chunking must reassemble exactly, reject malformed/missing chunks, and
 release partial state after abort, timeout, or peer failure.
 
+Qualify chunk production, transport, and public streaming as separate layers.
+A VAE callback must define owned representation, frame offsets, final marker,
+rank ownership, source/config gate, and collective-safe failure, but it does not
+prove SHM/ZMQ delivery, bounded backpressure, cancellation, codec reuse, or
+client streaming. Measure time to first owned chunk, first encoded fragment,
+steady cadence, mux finalization, and complete client artifact independently.
+
 Measure remote MP4 encoding, serialization/copies, network transfer, and client
 materialization separately from denoise/decode. An inference-kernel speedup does
 not establish serving throughput if output transport dominates or leaks.

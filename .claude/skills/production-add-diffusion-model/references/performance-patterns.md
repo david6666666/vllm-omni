@@ -145,7 +145,7 @@ low-precision dense attention. Enable it only after dense BF16 parity.
 For every candidate task/shape/topology:
 
 1. State the sparsity policy, selected backend/kernel, block/head dimensions,
-   supported hardware, and fallback.
+   supported hardware, external kernel/package revision, and fallback.
 2. Prove the sparse kernel executed and report realized sparsity; an enabled
    flag is insufficient.
 3. Compare same-seed per-block outputs, denoise trajectory, and final artifact
@@ -153,7 +153,7 @@ For every candidate task/shape/topology:
 4. Add modality-specific metrics: temporal consistency and audio/video sync for
    video, spectral/audio quality for audio, and prompt/image metrics as relevant.
 5. Report attention time and full E2E time. Include preprocessing/index-build
-   overhead.
+   overhead, peak memory, and the exact dense control.
 6. Validate each task and shape. Do not extrapolate a T2V result to I2V/Ref2V,
    or NPU sparse support to CUDA/ROCm/XPU.
 
@@ -298,6 +298,12 @@ After profiling, inspect:
 - VAE normalization/activation/convolution boundaries;
 - MoE routing and fused experts for models that actually use MoE.
 
+For fused residual-plus-norm or modulation chains, preserve the unfused
+materialization boundary. If the residual was stored in BF16 before RMSNorm,
+round to BF16 and promote again inside the fused kernel; using the unrounded
+FP32 temporary changes the denoising trajectory even when the stored residual
+looks correct.
+
 Keep DLO materialize/release hooks, process-group collectives, request cache
 transitions, and cleanup outside compiled/fused regions unless lifecycle safety
 is explicitly tested. Compile only stable regions and retain eager fallback.
@@ -398,6 +404,10 @@ graph capture, keep the grow-only workspace on one stream, and exercise cleanup
 before process-group destruction. Compare collective and E2E deltas after the
 dense backend and topology are frozen; keep unsupported layouts on an explicit
 regular-Ulysses fallback.
+
+For GQA, validate `Q_heads % KV_heads == 0`, pad KV heads first, and derive Q
+padding from the original ratio. Exercise both contiguous and row-strided QKV
+layouts; a fast copy path must preserve bitwise values and packed boundaries.
 
 Cross-attention sometimes uses replicated text K/V while only video/audio Q is
 sequence-sharded. In that specific case, `skip_sequence_parallel=True` can

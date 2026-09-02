@@ -17,7 +17,8 @@ MiniMax-H3 [PR #5691](https://github.com/vllm-project/vllm-omni/pull/5691)
 is the merged Day-0 case study. Its open optimization
 [issue #5700](https://github.com/vllm-project/vllm-omni/issues/5700) is an
 actively maintained roadmap and evidence map, not a list of already supported
-features. Read its current revision and cited PRs, then treat every row as
+features. It can lag merged implementation: read its current revision, cited
+PRs, target source, and maintained recipes, then leave every unverified row
 `not tested` until the target revision has scoped evidence.
 
 Read these references before the corresponding gate:
@@ -252,7 +253,10 @@ proven, using the current `safe_quant_config` pattern where applicable.
 
 Validate resident DiT FP8 first: prove which modules are quantized, HBM saved,
 BF16-vs-FP8 trajectory/artifact quality, latency, and throughput. Text encoder,
-VAE, other hardware, TP/cache/DLO combinations are separate rows. Read
+VAE, other hardware, TP/cache/DLO combinations are separate rows.
+Pre-quantized, pruned, rotated, or adapter-modified checkpoints are separate
+model/loading lanes; compare them with the released BF16 model without calling
+the result a pure quantization ablation. Read
 [`../quantization/SKILL.md`](../quantization/SKILL.md) if present and prefer the
 target revision's implementation/docs when sibling guidance differs.
 
@@ -307,6 +311,11 @@ the exact target revision explicitly adds them.
 On small-HBM cards, record load/materialization peak, resident peak, encode,
 each denoise wave, decode, transient per-rank HBM, host PSS, H2D, and collective
 time. Test DLO AllGather and `--dlo-no-use-allgather` as different deployments.
+Sweep the supported resident-block policies and publish the non-dominated
+latency-HBM frontier; a single minimum-memory or fastest point is not the DLO
+trade-off. Keep request-specific preparation replica-local. Only weight
+materialization may enter the declared DLO collective group; never use WORLD
+for per-request work in a DP deployment.
 Direct checkpoint mmap preflight is limited to TP1 without HSDP or online
 quantization; TP>1 falls back to the ordinary TP-aware loader and can still feed
 DLO AllGather or no-AllGather after scoped E2E. HSDP remains incompatible with
@@ -347,7 +356,8 @@ change at a time:
    unused masks/allocations.
 2. Select the fastest correct BF16 attention backend for each role and shape.
 3. Prefer explicit fused QKV, gate-up + `SiluAndMul`, RMSNorm/RoPE, AdaLN, and
-   layout/residual operators with guarded native fallbacks.
+   layout/residual operators with guarded native fallbacks. Preserve every
+   materialized dtype/rounding boundary consumed by the unfused graph.
 4. Enable sparse attention only when platform, shape, topology, realized
    sparsity, quality, fallback, and end-to-end speedup are all proven.
 5. Profile USP all-to-all count/bytes, packing, contiguous copies, overlap, and
@@ -355,6 +365,8 @@ change at a time:
    `skip_sequence_parallel`. Qualify regular and accelerated Ulysses transport
    independently; activation logs, JIT/readiness time, workspace growth,
    stream ownership, maximum-shape warmup, and numerical drift are gates.
+   Preserve the checkpoint's Q:KV head ratio when padding GQA for Ulysses, and
+   validate strided QKV staging rather than assuming packed contiguity.
 6. Evaluate text-encoder or VAE disaggregation only if stage share, transfer
    volume, reuse/concurrency, and independent scaling justify it. Tiling,
    offload, or patch parallelism is not disaggregation.
@@ -391,6 +403,11 @@ payload size, serializer/codec limits, and offline-versus-HTTP semantics.
 Validate device-side output preparation, D2H/IPC or shared handles, remote
 encoding, event-loop responsiveness, and client materialization as separate
 stages, including abort and consumer failure cleanup.
+A model/VAE callback that publishes ordered chunks is only a producer contract;
+it is not transport, backpressure, cancellation, public streaming, or
+time-to-first-frame evidence. Distinguish complete-response faster-than-playback
+(`client E2E / output duration <= 1`) from streaming and report first-chunk,
+steady cadence, finalization, and complete-artifact latency separately.
 Run below-, near-, and above-saturation mixed-RPS soaks and report success/error
 rate, throughput, queue time, memory slope, temp growth, and worker health.
 Report p50/p95/p99 only from a declared arrival model with enough measured

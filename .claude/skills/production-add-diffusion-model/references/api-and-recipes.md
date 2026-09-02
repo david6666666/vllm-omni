@@ -256,6 +256,13 @@ repetitions. Tail latency requires a declared arrival process, request count,
 concurrency, and enough successful samples. Reconcile client E2E with queue,
 encoder, denoise, video/audio decode, D2H/IPC, codec, and residual timings.
 
+For generated media, define `real-time` rather than relying on the label. A
+complete-response claim uses `client E2E / validated output duration <= 1` and
+does not imply streaming or low time-to-first-frame. Report first chunk/fragment
+and cadence separately when a public streaming route exists. Never add gains
+across benchmark lanes with different schedules, prompts, seeds, artifacts, or
+topologies.
+
 The diffusion serving harness currently covers image/video task families, not
 `/v1/audio/generate`. For text-to-audio, use the target model's task-specific
 audio benchmark if one exists; otherwise add a serving harness that records
