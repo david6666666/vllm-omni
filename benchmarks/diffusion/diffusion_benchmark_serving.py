@@ -1,6 +1,6 @@
 # adapted from fastvideo
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 """
 Benchmark online serving for diffusion models (Image/Video Generation).
@@ -93,6 +93,7 @@ import tempfile
 import time
 import uuid
 from abc import ABC, abstractmethod
+from collections import Counter
 from collections.abc import AsyncGenerator
 from dataclasses import replace
 from typing import Any
@@ -1116,6 +1117,7 @@ def calculate_metrics(
         "duration": total_duration,
         "completed_requests": num_success,
         "failed_requests": len(error_outputs),
+        "errors": dict(Counter(o.error or "Unknown error" for o in error_outputs)),
         "throughput_qps": num_success / total_duration if total_duration > 0 else 0,
         "latency_mean": np.mean(latencies) if latencies else 0,
         "latency_median": np.median(latencies) if latencies else 0,
@@ -1261,6 +1263,9 @@ def _default_endpoint_for_task(task: str) -> str:
 
 
 async def benchmark(args):
+    if not 0 < args.video_poll_timeout < float("inf"):
+        raise ValueError("--video-poll-timeout must be a finite positive number of seconds.")
+
     # Construct base_url if not provided
     if args.base_url is None:
         args.base_url = f"http://{args.host}:{args.port}"
@@ -1312,6 +1317,8 @@ async def benchmark(args):
     print("Loading requests...")
     requests_list = dataset.get_requests()
     print(f"Prepared {len(requests_list)} requests from {args.dataset} dataset.")
+    for req in requests_list:
+        req.video_poll_timeout = args.video_poll_timeout
 
     if args.return_stage_metrics and args.endpoint in _STAGE_METRICS_ENDPOINTS:
         for req in requests_list:
@@ -1376,6 +1383,8 @@ async def benchmark(args):
     metrics["model"] = args.model
     metrics["dataset"] = args.dataset
     metrics["task"] = args.task
+    if args.endpoint == "/v1/videos":
+        metrics["video_poll_timeout"] = args.video_poll_timeout
     if args.endpoint == "/v1/images/edits":
         metrics["bot_task"] = args.bot_task
 
@@ -1398,6 +1407,12 @@ async def benchmark(args):
         )
     )
     print("{:<40} {}/{:<15}".format("Successful requests:", metrics["completed_requests"], len(requests_list)))
+
+    print("{:<40} {:<15}".format("Failed requests:", metrics["failed_requests"]))
+    if metrics["errors"]:
+        print("Request errors:")
+        for error, count in metrics["errors"].items():
+            print(f"  {count} request(s): {error}")
 
     # Section 3: Performance Metrics
     print(f"{'-' * 50}")
@@ -1479,6 +1494,13 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Path to local dataset file (optional).",
+    )
+    parser.add_argument(
+        "--video-poll-timeout",
+        type=float,
+        default=600.0,
+        help="Maximum seconds to poll an async video job, including server queueing and generation. "
+        "Increase this for long videos or high concurrency. Timed-out jobs are deleted and cancelled.",
     )
     parser.add_argument("--num-prompts", type=int, default=10, help="Number of prompts to benchmark.")
     parser.add_argument(

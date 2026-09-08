@@ -17,18 +17,18 @@ The main entrypoint is:
 vllm serve Qwen/Qwen-Image --omni --port 8099
 ```
 
-2. Run a minimal benchmark:
+1. Run a minimal benchmark:
 
 ```bash
 python3 benchmarks/diffusion/diffusion_benchmark_serving.py \
-	--base-url http://localhost:8099 \
-	--model Qwen/Qwen-Image \
-	--task t2i \
-	--dataset vbench \
-	--num-prompts 5
+ --base-url http://localhost:8099 \
+ --model Qwen/Qwen-Image \
+ --task t2i \
+ --dataset vbench \
+ --num-prompts 5
 ```
 
-**Notes**
+Notes:
 
 - By default, image tasks talk to `http://<host>:<port>/v1/chat/completions`; video tasks talk to `/v1/videos`.
 - If you run the server on another host or port, pass `--base-url` accordingly.
@@ -52,14 +52,14 @@ Example (`t2v`):
 
 ```bash
 python3 benchmarks/diffusion/diffusion_benchmark_serving.py \
-	--base-url http://localhost:8099 \
-	--model Wan-AI/Wan2.2-T2V-A14B-Diffusers \
-	--task t2v \
-	--dataset vbench \
-	--num-prompts 50 \
-	--width 640 --height 480 \
-	--num-frames 81 --fps 16 \
-	--num-inference-steps 40
+ --base-url http://localhost:8099 \
+ --model Wan-AI/Wan2.2-T2V-A14B-Diffusers \
+ --task t2v \
+ --dataset vbench \
+ --num-prompts 50 \
+ --width 640 --height 480 \
+ --num-frames 81 --fps 16 \
+ --num-inference-steps 40
 ```
 
 Note: `vbench` can also be used for other tasks such as `t2i` / `i2v` (and `i2i`). For `t2i`, the loader reuses VBench t2v text prompts; for `i2v` / `i2i`, it loads the VBench i2v dataset (with image paths).
@@ -119,6 +119,24 @@ Precedence rules for `trace` (i.e., what actually gets sent):
 - `width/height`: if either `--width` or `--height` is explicitly set, it overrides per-request values from the trace; otherwise per-request values are used when present.
 - `num_frames`: per-request `num_frames` takes precedence; otherwise fall back to `--num-frames`.
 - `num_inference_steps`: per-request `num_inference_steps` takes precedence; otherwise fall back to `--num-inference-steps`.
+
+### Video job timeouts
+
+`--video-poll-timeout` sets the polling budget for each `/v1/videos` job
+(default: `600` seconds). It starts after job creation and includes server
+queueing and generation, but excludes waiting for the client concurrency
+semaphore. Long videos or high concurrency may need a larger budget, for
+example `--video-poll-timeout 1800`.
+
+When the budget expires, the benchmark records a failure and deletes the job,
+which cancels queued or running generation on the server. This can produce
+server-side aborted-request logs. The progress bar counts both successful and
+failed requests; `Successful requests` counts only successes. The console and
+JSON report include failure reasons. Raising the timeout allows more waiting;
+it does not retry requests or fix server-side generation errors.
+
+`VLLM_OMNI_VIDEO_SYNC_TIMEOUT` controls the separate `/v1/videos/sync` endpoint
+and does not change this benchmark's async video polling budget.
 
 ### SLO, warmup, and max concurrency
 

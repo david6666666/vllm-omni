@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+
 import asyncio
 import base64
 import json
@@ -43,6 +46,7 @@ class RequestFuncInput:
     video_paths: list[str] | None = None
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     default_bot_task: str | None = DEFAULT_EDITS_BOT_TASK
+    video_poll_timeout: float = 600.0
 
 
 @dataclass
@@ -351,44 +355,44 @@ async def async_request_v1_videos(
         form.add_field(k, str(v))
 
     image_file = None
-    if input.image_paths and input.video_paths:
-        output.error = "Only one of image_paths or video_paths can be provided"
-        output.success = False
-        return output
-
-    if input.image_paths and len(input.image_paths) > 0:
-        image_path = input.image_paths[0]
-        image_file = open(image_path, "rb")
-        form.add_field(
-            "input_reference",
-            image_file,
-            filename=os.path.basename(image_path),
-            content_type=_guess_mime_type(image_path),
-        )
-    elif input.video_paths and len(input.video_paths) > 0:
-        video_path = input.video_paths[0]
-        if _is_minimax_h3_mixed_reference(input.model):
-            with open(video_path, "rb") as reference_file:
-                video_b64 = base64.b64encode(reference_file.read()).decode("ascii")
-            form.add_field(
-                "video_reference",
-                json.dumps([{"video_url": f"data:video/mp4;base64,{video_b64}"}]),
-            )
-        else:
-            image_file = open(video_path, "rb")
-            form.add_field(
-                "input_reference",
-                image_file,
-                filename=os.path.basename(video_path),
-                content_type=_guess_mime_type(video_path),
-            )
-
     job_id = None
     job_status = None
     poll_json = {}
     resp_json = {}
 
     try:
+        if input.image_paths and input.video_paths:
+            output.error = "Only one of image_paths or video_paths can be provided"
+            output.success = False
+            return output
+
+        if input.image_paths and len(input.image_paths) > 0:
+            image_path = input.image_paths[0]
+            image_file = open(image_path, "rb")
+            form.add_field(
+                "input_reference",
+                image_file,
+                filename=os.path.basename(image_path),
+                content_type=_guess_mime_type(image_path),
+            )
+        elif input.video_paths and len(input.video_paths) > 0:
+            video_path = input.video_paths[0]
+            if _is_minimax_h3_mixed_reference(input.model):
+                with open(video_path, "rb") as reference_file:
+                    video_b64 = base64.b64encode(reference_file.read()).decode("ascii")
+                form.add_field(
+                    "video_reference",
+                    json.dumps([{"video_url": f"data:video/mp4;base64,{video_b64}"}]),
+                )
+            else:
+                image_file = open(video_path, "rb")
+                form.add_field(
+                    "input_reference",
+                    image_file,
+                    filename=os.path.basename(video_path),
+                    content_type=_guess_mime_type(video_path),
+                )
+
         # invoke a post request (POST /v1/videos)
         async with session.post(input.api_url, data=form) as response:
             if response.status == 200:
@@ -406,7 +410,7 @@ async def async_request_v1_videos(
 
         # invoke a poll request (GET /v1/videos/{video_id})
         poll_interval = 2.0  # Unit(s)
-        timeout_seconds = 600.0
+        timeout_seconds = input.video_poll_timeout
         deadline = time.perf_counter() + timeout_seconds
         job_url = f"{input.api_url}/{job_id}"
 
@@ -422,8 +426,11 @@ async def async_request_v1_videos(
                 poll_json = await poll_response.json()
                 job_status = poll_json.get("status")
 
-                if time.perf_counter() >= deadline:
-                    output.error = f"Timed out waiting for video job {job_id} to complete."
+                if job_status not in {"completed", "failed"} and time.perf_counter() >= deadline:
+                    output.error = (
+                        f"Timed out waiting for video job {job_id} after {timeout_seconds:g}s "
+                        f"(status={job_status}). Increase --video-poll-timeout to allow for queueing and generation."
+                    )
                     output.success = False
                     return output
 
@@ -452,7 +459,7 @@ async def async_request_v1_videos(
             elif "peak_memory_mb" in resp_json:
                 output.peak_memory_mb = resp_json["peak_memory_mb"]
     except Exception as e:
-        output.error = str(e)
+        output.error = f"{type(e).__name__}: {e}"
         output.success = False
     finally:
         if image_file is not None:
@@ -465,13 +472,13 @@ async def async_request_v1_videos(
             except Exception as e:
                 print(f"Failed to clean up video job {job_id}: {e}")
 
-    output.latency = time.perf_counter() - output.start_time
+        output.latency = time.perf_counter() - output.start_time
 
-    if output.success and input.slo_ms is not None:
-        output.slo_achieved = (output.latency * 1000.0) <= float(input.slo_ms)
+        if output.success and input.slo_ms is not None:
+            output.slo_achieved = (output.latency * 1000.0) <= float(input.slo_ms)
 
-    if pbar:
-        pbar.update(1)
+        if pbar:
+            pbar.update(1)
     return output
 
 
