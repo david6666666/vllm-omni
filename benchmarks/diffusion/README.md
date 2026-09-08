@@ -123,7 +123,7 @@ Precedence rules for `trace` (i.e., what actually gets sent):
 ### Video job timeouts
 
 `--video-poll-timeout` sets the polling budget for each `/v1/videos` job
-(default: `600` seconds). It starts after job creation and includes server
+(default: `1200` seconds). It starts after job creation and includes server
 queueing and generation, but excludes waiting for the client concurrency
 semaphore. Long videos or high concurrency may need a larger budget, for
 example `--video-poll-timeout 1800`.

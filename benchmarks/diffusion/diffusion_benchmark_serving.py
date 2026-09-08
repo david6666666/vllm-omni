@@ -1498,7 +1498,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--video-poll-timeout",
         type=float,
-        default=600.0,
+        default=1200.0,
         help="Maximum seconds to poll an async video job, including server queueing and generation. "
         "Increase this for long videos or high concurrency. Timed-out jobs are deleted and cancelled.",
     )
