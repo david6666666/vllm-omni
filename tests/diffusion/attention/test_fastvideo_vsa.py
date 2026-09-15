@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 import torch
 
+from vllm_omni.diffusion.attention.backends import fastvideo_vsa as fastvideo_vsa_module
 from vllm_omni.diffusion.attention.backends.abstract import (
     AttentionMetadata,
     PackedPaddingMetadata,
@@ -218,12 +219,14 @@ def test_fastvideo_vsa_allows_topk_equal_to_num_blocks():
     assert too_many._fallback_reason(query, query, query, metadata) == "topk 3 > num_blocks 2"
 
 
-def _h3_metadata(prefix_segments, video_shape, *, gate=None, packed_padding=None):
+def _h3_metadata(prefix_segments, video_shape, *, gate=None, packed_padding=None, sparsity=None):
     extra: dict[str, Any] = {
         "vsa_h3_prefix_segments": prefix_segments,
     }
     if gate is not None:
         extra["gate_compress"] = gate
+    if sparsity is not None:
+        extra["vsa_h3_sparsity"] = sparsity
     return AttentionMetadata(
         packed_padding=packed_padding,
         video_layout=VideoTokenLayout(
@@ -403,3 +406,189 @@ def test_h3_block_map_makes_prefix_queries_dense_and_prefix_keys_exempt():
     assert block_map[:, :, :2].all()
     assert block_map[..., :2].all()
     assert (block_map[:, :, 2:, 2:].sum(dim=-1) == 1).all()
+
+
+@pytest.mark.parametrize(
+    ("video_shape", "expected_video_blocks"),
+    [
+        ((1, 1, 1), 1),  # short boundary: one partial video tile
+        ((8, 4, 4), 2),
+        ((40, 4, 4), 10),
+    ],
+)
+def test_h3_pinned_sparsity_computes_topk_over_video_tiles_and_preserves_prefix(
+    monkeypatch,
+    video_shape,
+    expected_video_blocks,
+):
+    calls: dict[str, Any] = {}
+    _fake_block_sparse_kernel(monkeypatch, calls)
+    prefix_segments = (5,)
+    seq_len = sum(prefix_segments) + math.prod(video_shape)
+    gate = torch.zeros((1, seq_len, 2, 8), dtype=torch.bfloat16)
+    metadata = _h3_metadata(prefix_segments, video_shape, gate=gate, sparsity=0.8)
+    impl = _h3_impl(topk=64)
+    query = torch.randn(1, seq_len, 2, 8, dtype=torch.bfloat16)
+
+    output = impl.forward_cuda(query, query, query, metadata)
+
+    assert output.shape == query.shape
+    block_map = calls["block_map"]
+    prefix_blocks = 1
+    assert block_map.shape[-1] == prefix_blocks + expected_video_blocks
+    expected_topk = max(1, min(math.ceil((1 - 0.8) * expected_video_blocks), expected_video_blocks))
+    assert block_map[:, :, :prefix_blocks, :].all(), "prefix queries stay dense"
+    assert block_map[..., :prefix_blocks].all(), "prefix keys are exempt from selection"
+    assert (block_map[:, :, prefix_blocks:, prefix_blocks:].sum(dim=-1) == expected_topk).all(), (
+        "sparsity applies only to target video tiles"
+    )
+
+
+def test_h3_pinned_zero_sparsity_keeps_the_dense_video_route(monkeypatch):
+    calls: dict[str, Any] = {}
+    _fake_block_sparse_kernel(monkeypatch, calls)
+    prefix_segments, video_shape = (5,), (8, 4, 4)
+    seq_len = sum(prefix_segments) + math.prod(video_shape)
+    gate = torch.zeros((1, seq_len, 2, 8), dtype=torch.bfloat16)
+    query = torch.randn(1, seq_len, 2, 8, dtype=torch.bfloat16)
+
+    _h3_impl(topk=64).forward_cuda(
+        query,
+        query,
+        query,
+        _h3_metadata(prefix_segments, video_shape, gate=gate, sparsity=0.0),
+    )
+
+    assert calls["block_map"].all()
+
+
+def test_h3_pinned_metadata_requires_geometry_and_gate(monkeypatch):
+    impl = _h3_impl(topk=64)
+    query = torch.randn(1, 6, 2, 8, dtype=torch.bfloat16)
+    with pytest.raises(ValueError, match="requires VSA-H3 geometry"):
+        impl.forward_cuda(query, query, query, AttentionMetadata(extra={"vsa_h3_sparsity": 0.8}))
+
+    metadata = _h3_metadata((5,), (1, 1, 1), sparsity=0.8)
+    with pytest.raises(ValueError, match="requires VSA-H3 geometry"):
+        impl.forward_cuda(query, query, query, metadata)
+
+
+def test_h3_pinned_metadata_does_not_fallback_on_invalid_gate_or_kernel(monkeypatch):
+    prefix_segments, video_shape = (5,), (1, 1, 1)
+    seq_len = sum(prefix_segments) + math.prod(video_shape)
+    query = torch.randn(1, seq_len, 2, 8, dtype=torch.bfloat16)
+    impl = _h3_impl(topk=64)
+    metadata = _h3_metadata(
+        prefix_segments,
+        video_shape,
+        gate=torch.zeros((1, seq_len - 1, 2, 8), dtype=torch.bfloat16),
+        sparsity=0.8,
+    )
+    monkeypatch.setattr(impl, "_fallback", lambda *args, **kwargs: pytest.fail("pinned VSA must not fallback"))
+    with pytest.raises(ValueError, match="gate_compress shape"):
+        impl.forward_cuda(query, query, query, metadata)
+
+    valid_metadata = _h3_metadata(
+        prefix_segments,
+        video_shape,
+        gate=torch.zeros((1, seq_len, 2, 8), dtype=torch.bfloat16),
+        sparsity=0.8,
+    )
+
+    def fail_kernel(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("synthetic H3 kernel failure")
+
+    monkeypatch.setattr(fastvideo_vsa_module, "_fastvideo_h3_vsa_bhsd_op", fail_kernel)
+    with pytest.raises(RuntimeError, match="synthetic H3 kernel failure"):
+        impl.forward_cuda(query, query, query, valid_metadata)
+
+
+def test_h3_pinned_metadata_rejects_packed_length_mismatch():
+    prefix_segments, video_shape = (5,), (1, 1, 1)
+    seq_len = sum(prefix_segments) + math.prod(video_shape)
+    padding = PackedPaddingMetadata(
+        q_length=seq_len,
+        kv_length=seq_len - 1,
+        cu_seqlens_q=torch.tensor([0, seq_len], dtype=torch.int32),
+        cu_seqlens_k=torch.tensor([0, seq_len - 1], dtype=torch.int32),
+    )
+    metadata = _h3_metadata(
+        prefix_segments,
+        video_shape,
+        gate=torch.zeros((1, seq_len, 2, 8), dtype=torch.bfloat16),
+        packed_padding=padding,
+        sparsity=0.8,
+    )
+    query = torch.randn(1, seq_len, 2, 8, dtype=torch.bfloat16)
+    with pytest.raises(ValueError, match="packed Q/KV lengths must match"):
+        _h3_impl(topk=64).forward_cuda(query, query, query, metadata)
+
+
+@pytest.mark.parametrize("sparsity", [-0.1, 1.0, float("nan")])
+def test_h3_pinned_metadata_rejects_invalid_sparsity(sparsity, monkeypatch):
+    prefix_segments, video_shape = (5,), (1, 1, 1)
+    seq_len = sum(prefix_segments) + math.prod(video_shape)
+    metadata = _h3_metadata(
+        prefix_segments,
+        video_shape,
+        gate=torch.zeros((1, seq_len, 2, 8), dtype=torch.bfloat16),
+        sparsity=sparsity,
+    )
+    query = torch.randn(1, seq_len, 2, 8, dtype=torch.bfloat16)
+    with pytest.raises(ValueError, match=r"sparsity must be in \[0, 1\)"):
+        _h3_impl(topk=64).forward_cuda(query, query, query, metadata)
+
+
+@pytest.mark.parametrize("sparsity", [0.8, None])
+def test_h3_attention_metadata_propagates_v2_sparsity_and_keeps_legacy_absent(sparsity):
+    from vllm_omni.diffusion.models.minimax_h3.minimax_h3_transformer import MiniMaxH3Attention
+
+    captured: dict[str, Any] = {}
+
+    class FakeBackend:
+        supports_prefix_kv_slicing = False
+
+        @staticmethod
+        def supports_packed_mask_free():
+            return False
+
+    class FakeAttention:
+        attn_backend = FakeBackend()
+        use_ring = False
+        skip_sequence_parallel = False
+
+        def __call__(self, query, key, value, metadata):
+            del key, value
+            captured["metadata"] = metadata
+            return query
+
+    attention = object.__new__(MiniMaxH3Attention)
+    torch.nn.Module.__init__(attention)
+    attention.attention = FakeAttention()
+    attention.vsa_sparsity = sparsity
+    q = torch.zeros(4, 2, 8, dtype=torch.bfloat16)
+    layout = VideoTokenLayout(
+        used_len=4,
+        video_spans=(VideoTokenSpan(start=2, latent_grid=(1, 1, 2), role="target"),),
+    )
+    MiniMaxH3Attention._run_packed_attention(
+        attention,
+        q,
+        q,
+        q,
+        cu_seqlens=torch.tensor([0, 4], dtype=torch.int32),
+        max_seqlen=4,
+        packed_total=4,
+        video_layout=layout,
+        vsa_prefix_segments=(2,),
+        gate_compress=torch.ones_like(q),
+    )
+
+    extra = captured["metadata"].extra
+    if sparsity is None:
+        assert "vsa_h3_sparsity" not in extra
+    else:
+        assert extra["vsa_h3_sparsity"] == 0.8
+    assert extra["vsa_h3_prefix_segments"] == (2,)
+    assert extra["gate_compress"].shape == (1, 4, 2, 8)

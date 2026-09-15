@@ -552,7 +552,15 @@ class FastVideoVSAImpl(AttentionImpl):
         q_pool = _pool_h3_tiles(q_tiled[:, : logical_blocks * 64], sizes)
         k_pool = _pool_h3_tiles(k_tiled[:, : logical_blocks * 64], sizes)
         scores = torch.matmul(q_pool, k_pool.transpose(-2, -1)) * self.softmax_scale
-        block_map = _build_h3_block_map(scores, prefix_blocks, video_blocks, self.topk)
+        sparsity = attn_metadata.extra.get("vsa_h3_sparsity")
+        topk = self.topk
+        if sparsity is not None:
+            if not math.isfinite(sparsity) or not 0 <= sparsity < 1:
+                raise ValueError(f"VSA-H3 sparsity must be in [0, 1), got {sparsity}")
+            # FastVideo defines sparsity over target video tiles only. The
+            # prefix remains dense regardless of video length or aspect ratio.
+            topk = max(1, min(math.ceil((1 - sparsity) * video_blocks), video_blocks))
+        block_map = _build_h3_block_map(scores, prefix_blocks, video_blocks, topk)
         kernel_sizes = sizes
         if pair_pad:
             block_map = torch.nn.functional.pad(block_map, (0, 1, 0, 1), value=False)
@@ -566,7 +574,7 @@ class FastVideoVSAImpl(AttentionImpl):
             video_shape,
             prefix_blocks,
             video_blocks,
-            min(self.topk, video_blocks),
+            min(topk, video_blocks),
             kernel_blocks,
         )
         output = _fastvideo_h3_vsa_bhsd_op(
@@ -599,11 +607,16 @@ class FastVideoVSAImpl(AttentionImpl):
         attn_metadata: AttentionMetadata | None = None,
     ) -> torch.Tensor:
         original_query, original_key, original_value = query, key, value
+        pinned_h3 = attn_metadata is not None and attn_metadata.extra.get("vsa_h3_sparsity") is not None
+        if pinned_h3 and (_get_h3_layout(attn_metadata) is None or _get_gate_compress(attn_metadata) is None):
+            raise ValueError("the FastH3 full checkpoint requires VSA-H3 geometry and its learned compression gate")
         original_seq_len = query.shape[1]
         valid_seq_len = original_seq_len
         if attn_metadata is not None and attn_metadata.packed_padding is not None:
             valid_seq_len = attn_metadata.packed_padding.q_length
             if attn_metadata.packed_padding.kv_length != valid_seq_len:
+                if pinned_h3:
+                    raise ValueError("VSA-H3 packed Q/KV lengths must match")
                 return self._fallback(
                     original_query, original_key, original_value, attn_metadata, "packed Q/KV lengths must match"
                 )
@@ -625,7 +638,7 @@ class FastVideoVSAImpl(AttentionImpl):
                 # recover the request.
                 if isinstance(exc, torch.AcceleratorError):
                     raise
-                if not self.fallback_on_error:
+                if pinned_h3 or not self.fallback_on_error:
                     raise
                 return self._fallback(
                     original_query, original_key, original_value, attn_metadata, f"VSA-H3 kernel failed: {exc}"

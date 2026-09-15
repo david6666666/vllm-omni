@@ -394,6 +394,9 @@ def _sdpa_varlen_attention(
 
 
 class MiniMaxH3Attention(nn.Module):
+    # Full sparse checkpoints pin a ratio; legacy adapters use backend top-k.
+    vsa_sparsity: float | None = None
+
     def __init__(
         self,
         arch: MiniMaxH3DiTArchConfig,
@@ -585,6 +588,7 @@ class MiniMaxH3Attention(nn.Module):
                 # (see MINIMAX_H3_LASER_INPUT_SCALE). Ignored by every other
                 # backend/path.
                 "laser_input_scale": MINIMAX_H3_LASER_INPUT_SCALE,
+                **({"vsa_h3_sparsity": self.vsa_sparsity} if self.vsa_sparsity is not None else {}),
                 # Present only for a VSA artifact; the VSA backend reads it as
                 # the learned compression gate and every other backend ignores it.
                 **({"gate_compress": gate_compress.unsqueeze(0)} if gate_compress is not None else {}),
@@ -1208,7 +1212,7 @@ class MiniMaxH3DiTModel(nn.Module):
         )
         self._mark_missing_params_required()
 
-    def enable_vsa_gates(self) -> None:
+    def enable_vsa_gates(self, *, sparsity: float | None = None) -> None:
         """Give every DiT block's attention a VSA compression gate.
 
         A FastH3 VSA artifact assigns these projections rather than adding to
@@ -1220,6 +1224,9 @@ class MiniMaxH3DiTModel(nn.Module):
             return
         for block in self.blocks:
             block.attn.enable_vsa_gate()
+            block.attn.vsa_sparsity = sparsity
+            if sparsity is not None:
+                block.attn.to_gate_compress.weight.missing_param_init = "error"
         self.vsa_gates_enabled = True
 
     def _mark_missing_params_required(self) -> None:

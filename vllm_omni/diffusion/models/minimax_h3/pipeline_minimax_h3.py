@@ -126,6 +126,7 @@ from .denoise_loop import (
 )
 from .encoder import MiniMaxH3Qwen3VLEncoder
 from .fasth3 import FastH3WeightFusion, resolve_fasth3_fusion
+from .fasth3_checkpoint import FastH3CheckpointSpec
 from .lora import TurboSpec, load_minimax_h3_turbo_lora
 from .minimax_h3_transformer import (
     MiniMaxH3Attention,
@@ -734,6 +735,7 @@ class MiniMaxH3Pipeline(
     _base_schedule_by_partition: ClassVar[Mapping[str, DMD2SigmaSchedule | None]] = {}
     # Set from --lora-path during construction; absent means no FastH3 adapter.
     _fasth3: FastH3WeightFusion | None = None
+    _fasth3_checkpoint: FastH3CheckpointSpec | None = None
 
     def _load_diffusion_lora_adapter(
         self,
@@ -952,6 +954,9 @@ class MiniMaxH3Pipeline(
         model_path = model_root / ("Ref2VA" if self.partition == "ref2va" else "FL2VA")
         model_index = json.loads((model_path / "model_index.json").read_text(encoding="utf-8"))
         release = model_index.get("_minimax_h3") or {}
+        self._fasth3_checkpoint = FastH3CheckpointSpec.from_metadata(release)
+        if self._fasth3_checkpoint is not None:
+            self._fasth3_checkpoint.check_serving_contract(partition=self.partition, od_config=od_config)
         partition = str(release.get("partition", "")).lower()
         expected_partition = "ref2va" if self.partition == "ref2va" else "fl2va"
         if partition != expected_partition:
@@ -1013,6 +1018,11 @@ class MiniMaxH3Pipeline(
             od_config,
             quant_config=transformer_quant_config,
         )
+        if self._fasth3_checkpoint is not None:
+            self.transformer.enable_vsa_gates(sparsity=self._fasth3_checkpoint.vsa_sparsity)
+            logger.info(
+                "FastH3 V2 full checkpoint: 8 transformer forwards, video/audio shifts 10/3, VSA sparsity=0.8 tile=64"
+            )
         if ref2va_model_path is not None:
             self.transformers_ref = MiniMaxH3DiTModel(
                 od_config,
@@ -1178,6 +1188,12 @@ class MiniMaxH3Pipeline(
             # load_weights only warns on a parameter the model does not have, so
             # close the adapter against what the DiT actually consumed.
             self._fasth3.validate_fully_applied(transformer_loaded)
+        if self._fasth3_checkpoint is not None:
+            required_gates = {
+                f"blocks.{i}.attn.to_gate_compress.weight" for i in range(self.transformer.arch.num_layers)
+            }
+            if missing_gates := required_gates - transformer_loaded:
+                raise ValueError(f"FastH3 V2 checkpoint is missing compression gates: {sorted(missing_gates)}")
         return loaded_with_prefix
 
     @property
@@ -2404,6 +2420,8 @@ class MiniMaxH3Pipeline(
             self._validate_turbo_sampling(sampling, turbo_spec)
         if has_native_lora:
             self._validate_native_sampling(sampling, task=task)
+        if self._fasth3_checkpoint is not None:
+            self._fasth3_checkpoint.check_request(sampling)
         if self._fasth3 is not None:
             self._fasth3.check_request(
                 sampling,
