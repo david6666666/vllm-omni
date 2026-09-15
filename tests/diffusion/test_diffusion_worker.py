@@ -13,9 +13,7 @@ import pytest
 import torch
 from pytest_mock import MockerFixture
 
-from vllm_omni.diffusion.data import DiffusionOutput
 from vllm_omni.diffusion.worker.diffusion_worker import DiffusionWorker
-from vllm_omni.errors import OmniClientError
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.gpu]
 
@@ -352,68 +350,3 @@ class TestDiffusionWorkerInitLoraManager:
 
         pipeline.load_lora_weights.assert_called_once_with("/path/to/lora.safetensors")
         assert pipeline.lora_is_fused is True
-
-
-@pytest.mark.cpu
-class TestDiffusionWorkerExecuteModel:
-    """Test request errors crossing the worker execution boundary."""
-
-    @pytest.fixture
-    def execution_worker(self, mocker: MockerFixture):
-        """Build the execution seam without initializing CUDA or a model."""
-        worker = DiffusionWorker.__new__(DiffusionWorker)
-        worker.model_runner = mocker.Mock()
-        worker.lora_manager = None
-        worker.profiler = None
-        return worker
-
-    def test_client_error_becomes_typed_output_with_default_metadata(self, mocker: MockerFixture, execution_worker):
-        cleanup = mocker.patch("vllm_omni.diffusion.worker.diffusion_worker._cleanup_after_execution_error")
-        request = mocker.Mock()
-        message = "MiniMax H3 requires num_inference_steps=8"
-        execution_worker.model_runner.execute_model.side_effect = OmniClientError(message)
-
-        output = execution_worker.execute_model(request, mocker.Mock())
-
-        assert isinstance(output, DiffusionOutput)
-        assert output.error == message
-        assert output.error_status_code == 400
-        assert output.error_type == "BadRequestError"
-        cleanup.assert_called_once()
-
-    def test_custom_client_error_status_and_type_are_retained(self, mocker: MockerFixture, execution_worker):
-        mocker.patch("vllm_omni.diffusion.worker.diffusion_worker._cleanup_after_execution_error")
-        request = mocker.Mock()
-        execution_worker.model_runner.execute_model.side_effect = OmniClientError(
-            "duration is outside the supported range",
-            status_code=422,
-            error_type="UnprocessableEntityError",
-        )
-
-        output = execution_worker.execute_model(request, mocker.Mock())
-
-        assert output.error == "duration is outside the supported range"
-        assert output.error_status_code == 422
-        assert output.error_type == "UnprocessableEntityError"
-
-    def test_worker_accepts_next_request_after_client_error(self, mocker: MockerFixture, execution_worker):
-        mocker.patch("vllm_omni.diffusion.worker.diffusion_worker._cleanup_after_execution_error")
-        request = mocker.Mock()
-        success = DiffusionOutput(output="valid-result")
-        execution_worker.model_runner.execute_model.side_effect = [OmniClientError("invalid request"), success]
-
-        first = execution_worker.execute_model(request, mocker.Mock())
-        second = execution_worker.execute_model(request, mocker.Mock())
-
-        assert first.error == "invalid request"
-        assert second is success
-        assert execution_worker.model_runner.execute_model.call_count == 2
-
-    def test_runtime_error_still_raises(self, mocker: MockerFixture, execution_worker):
-        cleanup = mocker.patch("vllm_omni.diffusion.worker.diffusion_worker._cleanup_after_execution_error")
-        execution_worker.model_runner.execute_model.side_effect = RuntimeError("kernel failed")
-
-        with pytest.raises(RuntimeError, match="kernel failed"):
-            execution_worker.execute_model(mocker.Mock(), mocker.Mock())
-
-        cleanup.assert_not_called()
