@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
+from typing import cast
 
 import pytest
 import torch
@@ -18,17 +18,20 @@ from tools.prepare_fasth3_checkpoint import (
     native_weight_target,
     prepare_checkpoint,
 )
+from vllm_omni.diffusion.data import AttentionConfig, AttentionSpec, DiffusionParallelConfig, OmniDiffusionConfig
 from vllm_omni.diffusion.models.minimax_h3.fasth3_checkpoint import (
     FASTH3_V2_BASE_SCHEDULE,
     FastH3CheckpointSpec,
 )
 from vllm_omni.diffusion.sched.sigma_schedule import DMD2SigmaSchedule
 from vllm_omni.errors import OmniClientError
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams
+from vllm_omni.lora.request import LoRARequest
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
 
 
-def _v2_release() -> dict:
+def _v2_release() -> dict[str, object]:
     return {
         "schema_version": 1,
         "partition": "fl2va",
@@ -43,33 +46,40 @@ def _v2_release() -> dict:
     }
 
 
-def _sampling(**overrides) -> SimpleNamespace:
-    fields = {
-        "num_inference_steps": 8,
-        "guidance_scale": 1.0,
-        "extra_args": {},
-        "lora_request": None,
-    }
-    fields.update(overrides)
-    return SimpleNamespace(**fields)
+def _sampling(
+    *,
+    num_inference_steps: int | str | None = 8,
+    guidance_scale: float | None = 1.0,
+    extra_args: dict[str, object] | None = None,
+    lora_request: LoRARequest | None = None,
+) -> OmniDiffusionSamplingParams:
+    return OmniDiffusionSamplingParams(
+        # The string form is intentionally accepted here to exercise request
+        # validation of malformed client input.
+        num_inference_steps=num_inference_steps,  # type: ignore[arg-type]
+        guidance_scale=guidance_scale,
+        extra_args=extra_args or {},
+        lora_request=lora_request,
+    )
 
 
 def _od_config(
     *,
     backend: str = "FASTVIDEO_VSA",
     topk: int | None = None,
-    per_role: dict | None = None,
+    per_role: dict[str, AttentionSpec] | None = None,
     lora_path: str | None = None,
     ring_degree: int = 1,
     allgather_degree: int = 1,
-) -> SimpleNamespace:
-    default = SimpleNamespace(backend=backend, fastvideo_vsa_topk=topk)
-    attention_config = SimpleNamespace(default=default, per_role=per_role or {})
-    return SimpleNamespace(
-        diffusion_attention_backend=None,
+) -> OmniDiffusionConfig:
+    attention_config = AttentionConfig(
+        default=AttentionSpec(backend=backend, fastvideo_vsa_topk=topk),
+        per_role=per_role or {},
+    )
+    return OmniDiffusionConfig(
         diffusion_attention_config=attention_config,
         lora_path=lora_path,
-        parallel_config=SimpleNamespace(ring_degree=ring_degree, allgather_degree=allgather_degree),
+        parallel_config=DiffusionParallelConfig(ring_degree=ring_degree, allgather_degree=allgather_degree),
     )
 
 
@@ -157,7 +167,7 @@ def test_v2_metadata_rejects_schedule_shift_and_task_drift(field, value, match):
 )
 def test_v2_metadata_rejects_identity_and_vsa_policy_drift(field, value, match):
     release = _v2_release()
-    release["fasth3"][field] = value
+    cast(dict[str, object], release["fasth3"])[field] = value
     with pytest.raises(ValueError, match=match):
         FastH3CheckpointSpec.from_metadata(release)
 
@@ -176,7 +186,7 @@ def test_legacy_release_without_a_fasth3_marker_is_not_claimed():
 def test_v2_serving_contract_accepts_backend_selected_for_h3_self_role():
     config = _od_config(
         backend="TORCH_SDPA",
-        per_role={"self": SimpleNamespace(backend="FASTVIDEO_VSA", fastvideo_vsa_topk=None)},
+        per_role={"self": AttentionSpec(backend="FASTVIDEO_VSA")},
     )
     FastH3CheckpointSpec.from_metadata(_v2_release()).check_serving_contract(partition="fl2va", od_config=config)
 
@@ -201,7 +211,7 @@ def test_v2_serving_contract_rejects_incompatible_runtime(kwargs, partition, mat
 def test_v2_serving_contract_reads_a_per_role_fixed_topk_override():
     spec = FastH3CheckpointSpec.from_metadata(_v2_release())
     config = _od_config(
-        per_role={"self": SimpleNamespace(backend="FASTVIDEO_VSA", fastvideo_vsa_topk=1)},
+        per_role={"self": AttentionSpec(backend="FASTVIDEO_VSA", fastvideo_vsa_topk=1)},
     )
     with pytest.raises(ValueError, match="fixed fastvideo_vsa_topk"):
         spec.check_serving_contract(partition="fl2va", od_config=config)
@@ -223,7 +233,10 @@ def test_v2_request_contract_accepts_omitted_steps_and_default_shifts():
         ({"extra_args": {"audio_flow_shift": 4}}, "audio_flow_shift=3"),
         ({"extra_args": {"flow_shift": "bad"}}, "flow_shift=10"),
         ({"guidance_scale": 2.0}, "guidance_scale=1"),
-        ({"lora_request": SimpleNamespace(lora_int_id=1)}, "per-request LoRA"),
+        (
+            {"lora_request": LoRARequest(lora_name="test", lora_int_id=1, lora_path="/tmp/test.safetensors")},
+            "per-request LoRA",
+        ),
     ],
 )
 def test_v2_request_contract_rejects_sampling_drift(kwargs, match):
