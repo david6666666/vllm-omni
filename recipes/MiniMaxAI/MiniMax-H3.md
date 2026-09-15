@@ -1109,32 +1109,25 @@ against 85.8 s without.
 ### FastH3 8-Step V2 full checkpoint
 
 [FastH3 8-Step V2](https://huggingface.co/FastVideo/FastVideo-FastH3-8-Step-V2)
-ships a full transformer, including learned VSA compression gates. Prepare it
-once in the native H3 layout; the frozen text encoder, tokenizer, processor and
-VAEs are reused from the official native H3 base checkpoint. Keep that base
-directory available because the prepared checkpoint links to its components.
-
-Download the transformer and configuration files using a Hugging Face account
-with access to the release. Pin `--revision` when reproducing a result:
+ships a full Diffusers-format transformer, including learned VSA compression
+gates. Serve the Hugging Face model ID or a downloaded snapshot directly:
 
 ```bash
-export FASTH3_V2_SOURCE=/path/to/FastH3-8-Step-V2
-export H3_BASE=/path/to/MiniMax-H3
-export FASTH3_V2_MODEL=/path/to/FastH3-8-Step-V2-Omni
-hf download FastVideo/FastVideo-FastH3-8-Step-V2 \
-  --include 'transformer/*' '*.json' \
-  --local-dir "${FASTH3_V2_SOURCE}"
-python tools/prepare_fasth3_checkpoint.py \
-  --source "${FASTH3_V2_SOURCE}" --base "${H3_BASE}" \
-  --output "${FASTH3_V2_MODEL}"
+export FASTH3_V2_MODEL=FastVideo/FastVideo-FastH3-8-Step-V2
 ```
 
-The converter validates the release contract and transformer coverage, merges
-Q/K/V in native checkpoint order, converts the MLP layout and preserves the
-compression gates. It writes bounded-size shards and refuses to overwrite an
-existing output. Budget approximately 70 GB for the downloaded transformer and
-another 70 GB for its converted weights, in addition to the existing H3 base.
-Download and conversion are preparation costs, separate from server startup.
+Use a Hugging Face account with access to the release, and pin `--revision`
+when reproducing a result. The existing component loader reads its safetensors
+shards; the H3 weight loader maps names and loads Q/K/V and MLP projections into
+native parameters in memory. No conversion command or second transformer
+checkpoint is needed.
+
+The transformer and text components come from the V2 release. To retain Omni's
+native tiled and parallel VAE execution, the loader fetches only the video/audio
+VAEs from the `MiniMaxAI/MiniMax-H3` revision pinned in V2's `provenance.json`.
+Those components use the normal Hugging Face cache. No separate base-model
+argument or full base-transformer download is required. Download time is a
+preparation cost, separate from warmup and request latency.
 
 Install the optional `fastvideo-kernel` build required by the
 `FASTVIDEO_VSA` backend, including its H3 block-map entry point. A four-GPU

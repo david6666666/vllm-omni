@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+"""MiniMax H3 checkpoint resolution for the AR text-encoder stage."""
+
 from pathlib import Path
 
+from vllm_omni.diffusion.utils.hf_utils import get_diffusion_model_index
 from vllm_omni.model_executor.model_loader.weight_utils import (
     download_weights_from_hf_specific,
 )
@@ -14,6 +18,11 @@ MINIMAX_H3_ENCODER_DOWNLOAD_PATTERNS = {
     for partition, subdir in {"fl2va": "FL2VA", "ref2va": "Ref2VA"}.items()
 }
 MINIMAX_H3_ENCODER_DOWNLOAD_PATTERNS["combined"] = MINIMAX_H3_ENCODER_DOWNLOAD_PATTERNS["fl2va"]
+
+
+def is_minimax_h3_modular(model: str, revision: str | None = None) -> bool:
+    index = get_diffusion_model_index(model, revision=revision) or {}
+    return index.get("_class_name") == "MiniMaxH3ModularPipeline"
 
 
 def resolve_minimax_h3_partition(
@@ -42,10 +51,13 @@ def resolve_minimax_h3_encoder_model_root(
 ) -> str:
     path = Path(model)
     partition = resolve_minimax_h3_partition(model, task_type, auto_partition="fl2va")
+    modular = is_minimax_h3_modular(model, revision)
 
     if path.is_dir():
         if path.name == "text_encoder" and (path / "config.json").is_file():
             return str(path)
+        if modular:
+            return str(path / "text_encoder")
         if path.name in {"FL2VA", "Ref2VA"}:
             path = path.parent
         subdir = "Ref2VA" if partition == "ref2va" else "FL2VA"
@@ -53,11 +65,13 @@ def resolve_minimax_h3_encoder_model_root(
     snapshot = download_weights_from_hf_specific(
         model_name_or_path=model,
         cache_dir=None,
-        allow_patterns=MINIMAX_H3_ENCODER_DOWNLOAD_PATTERNS[partition],
+        allow_patterns=["text_encoder/**"] if modular else MINIMAX_H3_ENCODER_DOWNLOAD_PATTERNS[partition],
         revision=revision,
         require_all=True,
     )
 
+    if modular:
+        return str(Path(snapshot) / "text_encoder")
     subdir = "Ref2VA" if partition == "ref2va" else "FL2VA"
     return str(Path(snapshot) / subdir / "text_encoder")
 
