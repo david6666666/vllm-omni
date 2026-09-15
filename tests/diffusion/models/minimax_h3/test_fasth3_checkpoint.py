@@ -4,45 +4,52 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from typing import cast
+from collections.abc import Callable, Iterable
 
 import pytest
 import torch
-from safetensors import safe_open
-from safetensors.torch import save_file
+import torch.nn as nn
 
-from tools.prepare_fasth3_checkpoint import (
-    FASTH3_V2_MODEL_ID,
-    iter_native_weights,
-    native_weight_target,
-    prepare_checkpoint,
-)
 from vllm_omni.diffusion.data import AttentionConfig, AttentionSpec, DiffusionParallelConfig, OmniDiffusionConfig
 from vllm_omni.diffusion.models.minimax_h3.fasth3_checkpoint import (
+    FASTH3_BASE_MODEL,
     FASTH3_V2_BASE_SCHEDULE,
+    FASTH3_V2_MODEL_ID,
     FastH3CheckpointSpec,
+)
+from vllm_omni.diffusion.models.minimax_h3.minimax_h3_transformer import (
+    MiniMaxH3DiTArchConfig,
+    MiniMaxH3DiTModel,
+)
+from vllm_omni.diffusion.models.minimax_h3.pipeline_minimax_h3 import (
+    resolve_minimax_h3_diffusion_model_path,
 )
 from vllm_omni.diffusion.sched.sigma_schedule import DMD2SigmaSchedule
 from vllm_omni.errors import OmniClientError
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 from vllm_omni.lora.request import LoRARequest
+from vllm_omni.model_executor.models.minimax_h3.checkpoint import (
+    is_minimax_h3_modular,
+    resolve_minimax_h3_model_root,
+)
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
 
 
-def _v2_release() -> dict[str, object]:
+def _fastvideo_metadata() -> dict[str, object]:
+    """Return the release-owned metadata read from fastvideo_inference.json."""
     return {
-        "schema_version": 1,
-        "partition": "fl2va",
-        "tasks": ["t2va"],
-        "sigma_shift_scales": {"video": 10.0, "audio": 3.0},
-        "base_schedule": list(FASTH3_V2_BASE_SCHEDULE.base_schedule),
-        "fasth3": {
-            "model_id": FASTH3_V2_MODEL_ID,
-            "vsa_sparsity": 0.8,
-            "vsa_tile_size": 64,
-        },
+        "model_id": FASTH3_V2_MODEL_ID,
+        "schema_version": "fasth3-inference-contract-v1",
+        "dmd_denoising_steps": [999, 874, 749, 624, 500, 375, 250, 125],
+        "transformer_forwards": 8,
+        "video_scheduler_shift": 10.0,
+        "audio_scheduler_shift": 3.0,
+        "guidance_scale": 1.0,
+        "attention_backend": "VIDEO_SPARSE_ATTN_H3",
+        "vsa_sparsity": 0.8,
+        "vsa_tile_size": 64,
+        "task": "t2av",
     }
 
 
@@ -54,8 +61,7 @@ def _sampling(
     lora_request: LoRARequest | None = None,
 ) -> OmniDiffusionSamplingParams:
     return OmniDiffusionSamplingParams(
-        # The string form is intentionally accepted here to exercise request
-        # validation of malformed client input.
+        # Keep the string form to exercise malformed client input validation.
         num_inference_steps=num_inference_steps,  # type: ignore[arg-type]
         guidance_scale=guidance_scale,
         extra_args=extra_args or {},
@@ -97,9 +103,6 @@ def test_v2_release_has_nine_sigma_nodes_and_eight_intervals():
     )
     assert len(FASTH3_V2_BASE_SCHEDULE.base_schedule) == 9
     assert FASTH3_V2_BASE_SCHEDULE.num_inference_steps == 8
-
-    # These are the release positions after each modality's rectified-flow
-    # shift, rather than a schedule derived from a requested step count.
     assert FASTH3_V2_BASE_SCHEDULE.shifted_sigmas(10.0) == pytest.approx(
         [
             0.9998999099189271,
@@ -130,57 +133,60 @@ def test_v2_release_has_nine_sigma_nodes_and_eight_intervals():
     )
 
 
-def test_v2_metadata_is_self_consistent():
-    spec = FastH3CheckpointSpec.from_metadata(_v2_release())
-    assert spec is not None
+def test_fastvideo_metadata_builds_release_sampling_metadata():
+    spec = FastH3CheckpointSpec.from_metadata(_fastvideo_metadata())
+
     assert spec.vsa_sparsity == 0.8
-
-
-@pytest.mark.parametrize(
-    ("field", "value", "match"),
-    [
-        (
-            "base_schedule",
-            [0.998, 0.874, 0.749, 0.624, 0.5, 0.375, 0.25, 0.125, 0.0],
-            "exact eight-step",
-        ),
-        ("sigma_shift_scales", {"video": 12.0, "audio": 3.0}, "shifts 10/3"),
-        ("sigma_shift_scales", {"video": 10.0, "audio": 4.0}, "shifts 10/3"),
-        ("partition", "ref2va", "FL2VA partition"),
-        ("tasks", ["fl2va"], "T2VA"),
-    ],
-)
-def test_v2_metadata_rejects_schedule_shift_and_task_drift(field, value, match):
-    release = _v2_release()
-    release[field] = value
-    with pytest.raises(ValueError, match=match):
-        FastH3CheckpointSpec.from_metadata(release)
-
-
-@pytest.mark.parametrize(
-    ("field", "value", "match"),
-    [
-        ("model_id", "FastVideo/FastH3-other", "identity"),
-        ("vsa_sparsity", 0.9, "sparsity=0.8"),
-        ("vsa_tile_size", 32, "tile_size=64"),
-    ],
-)
-def test_v2_metadata_rejects_identity_and_vsa_policy_drift(field, value, match):
-    release = _v2_release()
-    cast(dict[str, object], release["fasth3"])[field] = value
-    with pytest.raises(ValueError, match=match):
-        FastH3CheckpointSpec.from_metadata(release)
-
-
-def test_legacy_release_without_a_fasth3_marker_is_not_claimed():
-    old_release = {
-        "schema_version": 1,
+    assert spec.release_metadata() == {
         "partition": "fl2va",
-        "tasks": ["t2va", "fl2va"],
-        "sigma_shift_scales": {"video": 12.0, "audio": 3.0},
-        "base_schedule": None,
+        "tasks": ["t2va"],
+        "sigma_shift_scales": {"video": 10.0, "audio": 3.0},
+        "base_schedule": list(FASTH3_V2_BASE_SCHEDULE.base_schedule),
     }
-    assert FastH3CheckpointSpec.from_metadata(old_release) is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("model_id", "FastVideo/FastH3-other"),
+        ("schema_version", "fasth3-inference-contract-v0"),
+        ("dmd_denoising_steps", [999, 749, 500, 250]),
+        ("transformer_forwards", 4),
+        ("video_scheduler_shift", 12.0),
+        ("audio_scheduler_shift", 4.0),
+        ("guidance_scale", 2.0),
+        ("attention_backend", "FLASH_ATTN"),
+        ("vsa_sparsity", 0.9),
+        ("vsa_tile_size", 32),
+        ("task", "t2va"),
+    ],
+)
+def test_fastvideo_metadata_rejects_contract_drift(field, value):
+    metadata = _fastvideo_metadata()
+    metadata[field] = value
+
+    with pytest.raises(ValueError, match=field):
+        FastH3CheckpointSpec.from_metadata(metadata)
+
+
+def test_fastvideo_metadata_rejects_missing_contract_field():
+    metadata = _fastvideo_metadata()
+    metadata.pop("task")
+
+    with pytest.raises(ValueError, match="task"):
+        FastH3CheckpointSpec.from_metadata(metadata)
+
+
+def test_legacy_h3_metadata_is_not_treated_as_fastvideo_release():
+    with pytest.raises(ValueError, match="model_id"):
+        FastH3CheckpointSpec.from_metadata(
+            {
+                "schema_version": 1,
+                "partition": "fl2va",
+                "tasks": ["t2va", "fl2va"],
+                "sigma_shift_scales": {"video": 12.0, "audio": 3.0},
+            }
+        )
 
 
 def test_v2_serving_contract_accepts_backend_selected_for_h3_self_role():
@@ -188,7 +194,9 @@ def test_v2_serving_contract_accepts_backend_selected_for_h3_self_role():
         backend="TORCH_SDPA",
         per_role={"self": AttentionSpec(backend="FASTVIDEO_VSA")},
     )
-    FastH3CheckpointSpec.from_metadata(_v2_release()).check_serving_contract(partition="fl2va", od_config=config)
+    FastH3CheckpointSpec.from_metadata(_fastvideo_metadata()).check_serving_contract(
+        partition="fl2va", od_config=config
+    )
 
 
 @pytest.mark.parametrize(
@@ -203,13 +211,13 @@ def test_v2_serving_contract_accepts_backend_selected_for_h3_self_role():
     ],
 )
 def test_v2_serving_contract_rejects_incompatible_runtime(kwargs, partition, match):
-    spec = FastH3CheckpointSpec.from_metadata(_v2_release())
+    spec = FastH3CheckpointSpec.from_metadata(_fastvideo_metadata())
     with pytest.raises(ValueError, match=match):
         spec.check_serving_contract(partition=partition, od_config=_od_config(**kwargs))
 
 
 def test_v2_serving_contract_reads_a_per_role_fixed_topk_override():
-    spec = FastH3CheckpointSpec.from_metadata(_v2_release())
+    spec = FastH3CheckpointSpec.from_metadata(_fastvideo_metadata())
     config = _od_config(
         per_role={"self": AttentionSpec(backend="FASTVIDEO_VSA", fastvideo_vsa_topk=1)},
     )
@@ -218,7 +226,7 @@ def test_v2_serving_contract_reads_a_per_role_fixed_topk_override():
 
 
 def test_v2_request_contract_accepts_omitted_steps_and_default_shifts():
-    spec = FastH3CheckpointSpec.from_metadata(_v2_release())
+    spec = FastH3CheckpointSpec.from_metadata(_fastvideo_metadata())
     spec.check_request(_sampling(num_inference_steps=None))
     spec.check_request(_sampling(extra_args={"flow_shift": 10, "audio_flow_shift": 3}, guidance_scale=1))
 
@@ -240,344 +248,393 @@ def test_v2_request_contract_accepts_omitted_steps_and_default_shifts():
     ],
 )
 def test_v2_request_contract_rejects_sampling_drift(kwargs, match):
-    spec = FastH3CheckpointSpec.from_metadata(_v2_release())
+    spec = FastH3CheckpointSpec.from_metadata(_fastvideo_metadata())
     with pytest.raises(OmniClientError, match=match):
         spec.check_request(_sampling(**kwargs))
 
 
-def test_native_weight_target_covers_full_norms_and_vsa_gate():
-    expected = {
-        "token_refiner.final_norm.weight": ("token_refiner.final_norm.weight", "plain"),
-        "transformer_blocks.2.attn.norm_q.bias": ("blocks.2.attn.q_norm.bias", "plain"),
-        "transformer_blocks.2.attn.norm_k.weight": ("blocks.2.attn.k_norm.weight", "plain"),
-        "transformer_blocks.2.norm1.weight": ("blocks.2.norm1.weight", "plain"),
-        "transformer_blocks.2.norm2.bias": ("blocks.2.norm2.bias", "plain"),
-        "transformer_blocks.2.attn.to_gate_compress.weight": (
-            "blocks.2.attn.to_gate_compress.weight",
-            "plain",
-        ),
-        "norm_out.norm.weight": ("final_layer.norm.weight", "plain"),
-        "norm_out.linear.bias": ("final_layer.adaln_proj.linear.bias", "plain"),
+def test_resolve_native_vaes_uses_pinned_revision_and_only_vae_patterns(tmp_path, monkeypatch):
+    model_root = tmp_path / "FastH3"
+    model_root.mkdir()
+    revision = "base-revision-123"
+    (model_root / "provenance.json").write_text(
+        json.dumps({"base_model": f"hf://{FASTH3_BASE_MODEL}@{revision}"}),
+        encoding="utf-8",
+    )
+    snapshot = tmp_path / "hf-snapshot"
+    calls: dict[str, object] = {}
+
+    def fake_download(**kwargs: object) -> str:
+        calls.update(kwargs)
+        snapshot.mkdir()
+        return str(snapshot)
+
+    monkeypatch.setattr(
+        "vllm_omni.diffusion.models.minimax_h3.fasth3_checkpoint.download_weights_from_hf_specific",
+        fake_download,
+    )
+
+    result = FastH3CheckpointSpec.from_metadata(_fastvideo_metadata()).resolve_native_vaes(model_root)
+
+    assert result == snapshot / "FL2VA"
+    assert calls == {
+        "model_name_or_path": FASTH3_BASE_MODEL,
+        "cache_dir": None,
+        "allow_patterns": ["FL2VA/video_vae/**", "FL2VA/audio_vae/**"],
+        "revision": revision,
+        "require_all": True,
     }
-    for source_name, target in expected.items():
-        assert native_weight_target(source_name) == target
+    assert sorted(path.name for path in model_root.iterdir()) == ["provenance.json"]
+    assert not (model_root / "model_index.json").exists()
+    assert not (model_root / "conversion.json").exists()
 
 
-def test_iter_native_weights_groups_non_symmetric_qkv_by_head():
-    q = torch.tensor(
-        [[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]],
-        dtype=torch.float32,
-    )
-    k = torch.tensor(
-        [[101, 102, 103], [104, 105, 106], [107, 108, 109], [110, 111, 112]],
-        dtype=torch.float32,
-    )
-    v = torch.tensor(
-        [[201, 202, 203], [204, 205, 206], [207, 208, 209], [210, 211, 212]],
-        dtype=torch.float32,
-    )
-    source = {
-        "transformer_blocks.0.attn.to_q.weight": q,
-        "transformer_blocks.0.attn.to_k.weight": k,
-        "transformer_blocks.0.attn.to_v.weight": v,
-    }
-    expected_shapes = {"blocks.0.attn.qkv_proj.weight": (12, 3), "rope.inv_freq": (2,)}
-    output = dict(
-        iter_native_weights(
-            {name: tuple(tensor.shape) for name, tensor in source.items()},
-            source.__getitem__,
-            expected_shapes,
-            head_dim=2,
-            rope_inv_freq=torch.tensor([1.0, 0.01]),
-        )
-    )
-    expected_qkv = torch.stack(
-        [q[0], q[1], k[0], k[1], v[0], v[1], q[2], q[3], k[2], k[3], v[2], v[3]],
-    )
-    torch.testing.assert_close(output["blocks.0.attn.qkv_proj.weight"], expected_qkv)
+@pytest.mark.parametrize(
+    "base_model",
+    [
+        "MiniMaxAI/MiniMax-H3@main",
+        "hf://MiniMaxAI/MiniMax-H3@",
+        "hf://Other/MiniMax-H3@revision",
+        "",
+        None,
+    ],
+)
+def test_resolve_native_vaes_rejects_unpinned_provenance(tmp_path, base_model):
+    model_root = tmp_path / "FastH3"
+    model_root.mkdir()
+    (model_root / "provenance.json").write_text(json.dumps({"base_model": base_model}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="provenance"):
+        FastH3CheckpointSpec.from_metadata(_fastvideo_metadata()).resolve_native_vaes(model_root)
 
 
-def test_iter_native_weights_swaps_non_symmetric_mlp_halves():
-    mlp = torch.arange(24, dtype=torch.float32).reshape(6, 4)
-    source = {"transformer_blocks.0.ff.net.0.proj.weight": mlp}
-    output = dict(
-        iter_native_weights(
-            {next(iter(source)): tuple(mlp.shape)},
-            source.__getitem__,
-            {"blocks.0.mlp.fc1.weight": tuple(mlp.shape), "rope.inv_freq": (2,)},
-            head_dim=2,
-            rope_inv_freq=torch.ones(2),
-        )
-    )
-    torch.testing.assert_close(output["blocks.0.mlp.fc1.weight"], torch.cat((mlp[3:], mlp[:3])))
-
-
-def test_iter_native_weights_rejects_incomplete_qkv_coverage():
-    source = {
-        "transformer_blocks.0.attn.to_k.weight": torch.zeros(4, 3),
-        "transformer_blocks.0.attn.to_v.weight": torch.zeros(4, 3),
-    }
-    with pytest.raises(ValueError, match="incomplete QKV"):
-        list(
-            iter_native_weights(
-                {name: tuple(tensor.shape) for name, tensor in source.items()},
-                source.__getitem__,
-                {"blocks.0.attn.qkv_proj.weight": (12, 3), "rope.inv_freq": (2,)},
-                head_dim=2,
-                rope_inv_freq=torch.ones(2),
-            )
-        )
-
-
-@pytest.mark.parametrize("expected_shape", [(9, 3), (12, 4)])
-def test_iter_native_weights_rejects_transformed_shape_mismatch(expected_shape):
-    source = {
-        "transformer_blocks.0.attn.to_q.weight": torch.zeros(4, 3),
-        "transformer_blocks.0.attn.to_k.weight": torch.zeros(4, 3),
-        "transformer_blocks.0.attn.to_v.weight": torch.zeros(4, 3),
-    }
-    expected = {"blocks.0.attn.qkv_proj.weight": expected_shape, "rope.inv_freq": (2,)}
-    with pytest.raises(ValueError, match="shape"):
-        list(
-            iter_native_weights(
-                {name: tuple(tensor.shape) for name, tensor in source.items()},
-                source.__getitem__,
-                expected,
-                head_dim=2,
-                rope_inv_freq=torch.ones(2),
-            )
-        )
-
-
-def test_iter_native_weights_rejects_rope_shape_mismatch():
-    source = {
-        "transformer_blocks.0.attn.to_q.weight": torch.zeros(4, 3),
-        "transformer_blocks.0.attn.to_k.weight": torch.zeros(4, 3),
-        "transformer_blocks.0.attn.to_v.weight": torch.zeros(4, 3),
-    }
-    with pytest.raises(ValueError, match="RoPE shape"):
-        list(
-            iter_native_weights(
-                {name: tuple(tensor.shape) for name, tensor in source.items()},
-                source.__getitem__,
-                {"blocks.0.attn.qkv_proj.weight": (12, 3), "rope.inv_freq": (2,)},
-                head_dim=2,
-                rope_inv_freq=torch.ones(3),
-            )
-        )
-
-
-def _write_indexed_safetensors(folder: Path, index_name: str, tensors: dict[str, torch.Tensor]) -> None:
-    folder.mkdir(parents=True, exist_ok=True)
-    shard_name = "model-00001.safetensors"
-    save_file(tensors, str(folder / shard_name), metadata={"format": "pt"})
-    (folder / index_name).write_text(
-        json.dumps(
-            {
-                "metadata": {"total_size": sum(t.numel() * t.element_size() for t in tensors.values())},
-                "weight_map": {name: shard_name for name in tensors},
-            }
-        ),
+def test_modular_local_model_root_uses_text_encoder_without_partition_files(tmp_path):
+    root = tmp_path / "FastH3"
+    (root / "text_encoder").mkdir(parents=True)
+    (root / "text_encoder" / "config.json").write_text("{}", encoding="utf-8")
+    (root / "modular_model_index.json").write_text(
+        json.dumps({"_class_name": "MiniMaxH3ModularPipeline"}),
         encoding="utf-8",
     )
 
+    assert is_minimax_h3_modular(str(root)) is True
+    assert resolve_minimax_h3_model_root(str(root), None, "fl2va") == str(root / "text_encoder")
+    assert not (root / "FL2VA").exists()
 
-def _make_converter_fixture(tmp_path: Path) -> tuple[Path, Path, dict[str, torch.Tensor], dict[str, torch.Tensor]]:
-    source = tmp_path / "source"
-    base = tmp_path / "base"
-    base_partition = base / "FL2VA"
 
-    source_config = {
-        "num_layers": 1,
-        "num_attention_heads": 2,
-        "attention_head_dim": 2,
-        "hidden_size": 4,
-        "ffn_dim": 3,
-        "rope_freq_dim": 2,
-        "rope_theta": 10000.0,
+def test_modular_hub_model_root_downloads_only_text_encoder(monkeypatch, tmp_path):
+    from vllm_omni.model_executor.models.minimax_h3 import checkpoint as checkpoint_module
+
+    snapshot = tmp_path / "modular-snapshot"
+    calls: dict[str, object] = {}
+
+    def fake_index(model: str, *, revision: str | None = None) -> dict[str, str]:
+        assert model == "FastVideo/FastVideo-FastH3-8-Step-V2"
+        assert revision == "release-revision"
+        return {"_class_name": "MiniMaxH3ModularPipeline"}
+
+    def fake_download(**kwargs: object) -> str:
+        calls.update(kwargs)
+        snapshot.mkdir()
+        return str(snapshot)
+
+    monkeypatch.setattr(checkpoint_module, "get_diffusion_model_index", fake_index)
+    monkeypatch.setattr(checkpoint_module, "download_weights_from_hf_specific", fake_download)
+
+    result = resolve_minimax_h3_model_root(
+        "FastVideo/FastVideo-FastH3-8-Step-V2",
+        "release-revision",
+        "fl2va",
+    )
+
+    assert result == str(snapshot / "text_encoder")
+    assert calls == {
+        "model_name_or_path": "FastVideo/FastVideo-FastH3-8-Step-V2",
+        "cache_dir": None,
+        "allow_patterns": ["text_encoder/**"],
+        "revision": "release-revision",
+        "require_all": True,
     }
-    base_config = {
-        "num_layers": 1,
-        "num_attention_heads": 2,
-        "attention_head_dim": 2,
-        "hidden_size": 4,
-        "ffn_hidden_size": 3,
-        "rope_inv_freq_len": 2,
-        "rope_theta": 10000.0,
-    }
-    (source / "transformer").mkdir(parents=True)
-    (source / "transformer" / "config.json").write_text(json.dumps(source_config), encoding="utf-8")
-    (source / "fastvideo_inference.json").write_text(
-        json.dumps(
-            {
-                "model_id": FASTH3_V2_MODEL_ID,
-                "schema_version": "fasth3-inference-contract-v1",
-                "dmd_denoising_steps": [999, 874, 749, 624, 500, 375, 250, 125],
-                "transformer_forwards": 8,
-                "video_scheduler_shift": 10.0,
-                "audio_scheduler_shift": 3.0,
-                "guidance_scale": 1.0,
-                "attention_backend": "VIDEO_SPARSE_ATTN_H3",
-                "vsa_sparsity": 0.8,
-                "vsa_tile_size": 64,
-                "task": "t2av",
-            }
-        ),
+
+
+def test_native_local_model_root_keeps_partition_layout(tmp_path):
+    root = tmp_path / "MiniMax-H3"
+    (root / "FL2VA" / "text_encoder").mkdir(parents=True)
+    (root / "FL2VA" / "text_encoder" / "config.json").write_text("{}", encoding="utf-8")
+
+    assert is_minimax_h3_modular(str(root)) is False
+    assert resolve_minimax_h3_model_root(str(root), None, "fl2va") == str(root / "FL2VA" / "text_encoder")
+
+
+def test_diffusion_resolver_returns_local_modular_root_without_partition_files(tmp_path):
+    root = tmp_path / "FastH3"
+    root.mkdir()
+    (root / "modular_model_index.json").write_text(
+        json.dumps({"_class_name": "MiniMaxH3ModularPipeline"}),
         encoding="utf-8",
     )
 
-    q = torch.arange(16, dtype=torch.float32).reshape(4, 4)
-    k = q + 100
-    v = q + 200
-    mlp = torch.arange(24, 48, dtype=torch.float32).reshape(6, 4)
-    gate = torch.arange(16, dtype=torch.float32).reshape(4, 4) + 300
-    rope = 1.0 / (10000.0 ** (torch.arange(0, 4, 2, dtype=torch.float32) / 4))
-    source_tensors = {
-        "transformer_blocks.0.attn.to_q.weight": q,
-        "transformer_blocks.0.attn.to_k.weight": k,
-        "transformer_blocks.0.attn.to_v.weight": v,
-        "transformer_blocks.0.ff.net.0.proj.weight": mlp,
-        "transformer_blocks.0.attn.to_gate_compress.weight": gate,
-    }
-    _write_indexed_safetensors(
-        source / "transformer",
-        "diffusion_pytorch_model.safetensors.index.json",
-        source_tensors,
+    assert resolve_minimax_h3_diffusion_model_path(str(root), None, "fl2va") == str(root)
+    assert not (root / "FL2VA").exists()
+    assert not (root / "Ref2VA").exists()
+
+
+def test_diffusion_resolver_hub_modular_downloads_transformer_contract_only(monkeypatch, tmp_path):
+    from vllm_omni.diffusion.models.minimax_h3 import pipeline_minimax_h3 as pipeline_module
+
+    snapshot = tmp_path / "modular-snapshot"
+    calls: dict[str, object] = {}
+
+    def fake_modular(_model: str, _revision: str | None = None) -> bool:
+        return True
+
+    def fake_download(**kwargs: object) -> str:
+        calls.update(kwargs)
+        snapshot.mkdir()
+        return str(snapshot)
+
+    monkeypatch.setattr(pipeline_module, "is_minimax_h3_modular", fake_modular)
+    monkeypatch.setattr(pipeline_module, "download_weights_from_hf_specific", fake_download)
+
+    result = resolve_minimax_h3_diffusion_model_path(
+        "FastVideo/FastVideo-FastH3-8-Step-V2", "release-revision", "fl2va"
     )
 
-    base_tensors = {
-        "blocks.0.attn.qkv_proj.weight": torch.zeros(12, 4),
-        "blocks.0.mlp.fc1.weight": torch.zeros(6, 4),
-        "rope.inv_freq": rope,
+    assert result == str(snapshot)
+    assert calls == {
+        "model_name_or_path": "FastVideo/FastVideo-FastH3-8-Step-V2",
+        "cache_dir": None,
+        "allow_patterns": [
+            "modular_model_index.json",
+            "fastvideo_inference.json",
+            "provenance.json",
+            "transformer/**",
+        ],
+        "revision": "release-revision",
+        "require_all": True,
     }
-    _write_indexed_safetensors(base_partition / "transformer", "model.safetensors.index.json", base_tensors)
-    (base_partition / "transformer" / "config.json").write_text(json.dumps(base_config), encoding="utf-8")
-    (base_partition / "model_index.json").write_text(
-        json.dumps(
-            {
-                "_class_name": "MiniMaxH3Pipeline",
-                "_minimax_h3": {
-                    "partition": "fl2va",
-                    "tasks": ["t2va"],
-                    "base_schedule": None,
-                },
-            }
-        ),
-        encoding="utf-8",
+    patterns = calls["allow_patterns"]
+    assert isinstance(patterns, list)
+    assert all("video_vae" not in pattern and "audio_vae" not in pattern for pattern in patterns)
+
+
+def test_diffusers_arch_config_normalizes_all_aliases():
+    arch = MiniMaxH3DiTArchConfig.from_mapping(
+        {
+            "num_refiner_layers": 3,
+            "ffn_dim": 12,
+            "in_channels": 4,
+            "audio_in_channels": 6,
+            "freq_dim": 8,
+            "time_embed_hidden_dim": 10,
+            "rope_freq_dim": 5,
+            "patch_size": [1, 2, 2],
+        }
     )
-    for component in ("text_encoder", "tokenizer", "processor", "video_vae", "audio_vae"):
-        (base_partition / component).mkdir(parents=True)
 
-    return source, base, source_tensors, base_tensors
+    assert arch.token_refiner_num_layers == 3
+    assert arch.ffn_hidden_size == 12
+    assert arch.latents_dim == 4
+    assert arch.audio_latents_dim == 6
+    assert arch.timestep_input_dim == 8
+    assert arch.time_embed_hidden_size == 10
+    assert arch.rope_inv_freq_len == 5
+    assert arch.patch_size == (1, 2, 2)
 
 
-def test_converter_publishes_native_weights_release_metadata_and_frozen_links(tmp_path):
-    source, base, source_tensors, base_tensors = _make_converter_fixture(tmp_path)
-    output = tmp_path / "converted"
+class _WeightTarget(nn.Module):
+    def __init__(self, shape: tuple[int, ...], loader: Callable[..., None]) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.zeros(shape))
+        self.weight.weight_loader = loader
 
-    assert prepare_checkpoint(source, base, output) == output
-    partition = output / "FL2VA"
-    assert output.is_dir()
-    assert partition.is_dir()
 
-    for component in ("text_encoder", "tokenizer", "processor", "video_vae", "audio_vae"):
-        link = partition / component
-        assert link.is_symlink()
-        assert link.resolve() == (base / "FL2VA" / component).resolve()
+class _PipelineLoadTransformer(nn.Module):
+    def __init__(self, loaded: set[str]) -> None:
+        super().__init__()
+        self.arch = MiniMaxH3DiTArchConfig(num_layers=1)
+        self._loaded = loaded
 
-    release = json.loads((partition / "model_index.json").read_text(encoding="utf-8"))["_minimax_h3"]
-    assert FastH3CheckpointSpec.from_metadata(release) is not None
-    assert json.loads((output / "model_index.json").read_text(encoding="utf-8"))["_minimax_h3"] == release
-    conversion = json.loads((output / "conversion.json").read_text(encoding="utf-8"))
-    assert conversion["source_tensors"] == len(source_tensors)
-    assert conversion["native_tensors"] == len(base_tensors) + 1  # one gate injection
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        list(weights)
+        return self._loaded
 
-    weight_index = json.loads((partition / "transformer" / "model.safetensors.index.json").read_text(encoding="utf-8"))
-    with safe_open(partition / "transformer" / "model-00001.safetensors", framework="pt", device="cpu") as shard:
-        qkv = shard.get_tensor("blocks.0.attn.qkv_proj.weight")
-        fc1 = shard.get_tensor("blocks.0.mlp.fc1.weight")
-        loaded_gate = shard.get_tensor("blocks.0.attn.to_gate_compress.weight")
-        loaded_rope = shard.get_tensor("rope.inv_freq")
-    expected_qkv = torch.stack(
+    def post_load_weights(self) -> None:
+        pass
+
+
+def test_pipeline_load_weights_rejects_missing_fast_h3_compression_gate():
+    from vllm_omni.diffusion.models.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
+
+    pipeline = object.__new__(MiniMaxH3Pipeline)
+    nn.Module.__init__(pipeline)
+    pipeline.transformer = _PipelineLoadTransformer({"blocks.0.attn.qkv_proj.weight"})
+    pipeline.video_vae = None
+    pipeline.audio_vae = None
+    pipeline._fasth3 = None
+    pipeline._fasth3_checkpoint = FastH3CheckpointSpec.from_metadata(_fastvideo_metadata())
+
+    with pytest.raises(ValueError, match="missing compression gates"):
+        pipeline.load_weights([("transformer.blocks.0.attn.qkv_proj.weight", torch.zeros(1))])
+
+
+def _load_fixture(
+    *, diffusers_weights: bool
+) -> tuple[MiniMaxH3DiTModel, list[tuple[str | None, torch.Tensor]], list[tuple[int, torch.Tensor]]]:
+    model = object.__new__(MiniMaxH3DiTModel)
+    nn.Module.__init__(model)
+    model.arch = MiniMaxH3DiTArchConfig(
+        num_layers=1,
+        hidden_size=3,
+        num_attention_heads=2,
+        attention_head_dim=2,
+        ffn_hidden_size=6,
+        rope_inv_freq_len=2,
+    )
+    model._diffusers_weights = diffusers_weights
+    model._rope_theta = 10000.0
+    qkv_calls: list[tuple[str | None, torch.Tensor]] = []
+    fc1_calls: list[tuple[int, torch.Tensor]] = []
+
+    def qkv_loader(param: nn.Parameter, loaded_weight: torch.Tensor, shard_id: str | None = None) -> None:
+        if shard_id is None:
+            assert loaded_weight.shape == (12, 3)
+            param.data.copy_(loaded_weight)
+            qkv_calls.append((None, loaded_weight.clone()))
+            return
+        assert loaded_weight.shape == (4, 3)
+        assert shard_id in {"q", "k", "v"}
+        offset = {"q": 0, "k": 4, "v": 8}[shard_id]
+        param.data[offset : offset + 4].copy_(loaded_weight)
+        qkv_calls.append((shard_id, loaded_weight.clone()))
+
+    def fc1_loader(param: nn.Parameter, loaded_weight: torch.Tensor, shard_id: int) -> None:
+        assert loaded_weight.shape == (3, 3)
+        param.data[shard_id * 3 : (shard_id + 1) * 3].copy_(loaded_weight)
+        fc1_calls.append((shard_id, loaded_weight.clone()))
+
+    model.blocks = nn.ModuleList([nn.Module()])
+    model.blocks[0].attn = nn.Module()
+    model.blocks[0].attn.qkv_proj = _WeightTarget((12, 3), qkv_loader)
+    model.blocks[0].mlp = nn.Module()
+    model.blocks[0].mlp.fc1 = _WeightTarget((6, 3), fc1_loader)
+    model.rope = nn.Module()
+    model.rope.register_buffer("inv_freq", torch.zeros(2))
+    return model, qkv_calls, fc1_calls
+
+
+def test_diffusers_load_weights_uses_shape_aware_qkv_and_mlp_slices():
+    model, qkv_calls, fc1_calls = _load_fixture(diffusers_weights=True)
+    q = torch.arange(12, dtype=torch.float32).reshape(4, 3) + 10
+    k = torch.arange(12, dtype=torch.float32).reshape(4, 3) + 100
+    v = torch.arange(12, dtype=torch.float32).reshape(4, 3) + 200
+    mlp = torch.arange(18, dtype=torch.float32).reshape(6, 3) + 300
+
+    loaded = model.load_weights(
         [
-            source_tensors["transformer_blocks.0.attn.to_q.weight"][0],
-            source_tensors["transformer_blocks.0.attn.to_q.weight"][1],
-            source_tensors["transformer_blocks.0.attn.to_k.weight"][0],
-            source_tensors["transformer_blocks.0.attn.to_k.weight"][1],
-            source_tensors["transformer_blocks.0.attn.to_v.weight"][0],
-            source_tensors["transformer_blocks.0.attn.to_v.weight"][1],
-            source_tensors["transformer_blocks.0.attn.to_q.weight"][2],
-            source_tensors["transformer_blocks.0.attn.to_q.weight"][3],
-            source_tensors["transformer_blocks.0.attn.to_k.weight"][2],
-            source_tensors["transformer_blocks.0.attn.to_k.weight"][3],
-            source_tensors["transformer_blocks.0.attn.to_v.weight"][2],
-            source_tensors["transformer_blocks.0.attn.to_v.weight"][3],
+            ("transformer_blocks.0.attn.to_q.weight", q),
+            ("transformer_blocks.0.attn.to_k.weight", k),
+            ("transformer_blocks.0.attn.to_v.weight", v),
+            ("transformer_blocks.0.ff.net.0.proj.weight", mlp),
         ]
     )
-    torch.testing.assert_close(qkv, expected_qkv)
-    torch.testing.assert_close(
-        fc1,
-        torch.cat(
-            (
-                source_tensors["transformer_blocks.0.ff.net.0.proj.weight"][3:],
-                source_tensors["transformer_blocks.0.ff.net.0.proj.weight"][:3],
-            )
-        ),
-    )
-    torch.testing.assert_close(loaded_gate, source_tensors["transformer_blocks.0.attn.to_gate_compress.weight"])
-    torch.testing.assert_close(loaded_rope, base_tensors["rope.inv_freq"])
-    assert set(weight_index["weight_map"]) == {
+
+    assert loaded == {
         "blocks.0.attn.qkv_proj.weight",
         "blocks.0.mlp.fc1.weight",
-        "blocks.0.attn.to_gate_compress.weight",
         "rope.inv_freq",
     }
-
-
-def test_converter_rejects_bad_contract_before_publishing_output(tmp_path):
-    source, base, _, _ = _make_converter_fixture(tmp_path)
-    contract_path = source / "fastvideo_inference.json"
-    contract = json.loads(contract_path.read_text(encoding="utf-8"))
-    contract["video_scheduler_shift"] = 12.0
-    contract_path.write_text(json.dumps(contract), encoding="utf-8")
-    output = tmp_path / "bad-contract-output"
-
-    with pytest.raises(ValueError, match="video_scheduler_shift"):
-        prepare_checkpoint(source, base, output)
-    assert not output.exists()
-
-
-def test_converter_rejects_bad_gate_shape_before_publishing_output(tmp_path):
-    source, base, _, _ = _make_converter_fixture(tmp_path)
-    bad_gate = torch.zeros(3, 4)
-    source_tensors = {
-        "transformer_blocks.0.attn.to_q.weight": torch.zeros(4, 4),
-        "transformer_blocks.0.attn.to_k.weight": torch.zeros(4, 4),
-        "transformer_blocks.0.attn.to_v.weight": torch.zeros(4, 4),
-        "transformer_blocks.0.ff.net.0.proj.weight": torch.zeros(6, 4),
-        "transformer_blocks.0.attn.to_gate_compress.weight": bad_gate,
-    }
-    _write_indexed_safetensors(
-        source / "transformer",
-        "diffusion_pytorch_model.safetensors.index.json",
-        source_tensors,
+    assert [shard_id for shard_id, _ in qkv_calls] == ["q", "k", "v"]
+    assert [shard_id for shard_id, _ in fc1_calls] == [0, 1]
+    torch.testing.assert_close(model.blocks[0].attn.qkv_proj.weight, torch.cat((q, k, v)))
+    torch.testing.assert_close(model.blocks[0].mlp.fc1.weight, torch.cat((mlp[3:], mlp[:3])))
+    torch.testing.assert_close(
+        model.rope.inv_freq,
+        1.0 / (10000.0 ** (torch.arange(0, 4, 2, dtype=torch.float32) / 4)),
+        rtol=0,
+        atol=0,
     )
-    output = tmp_path / "bad-shape-output"
-
-    with pytest.raises(ValueError, match="shape mismatch"):
-        prepare_checkpoint(source, base, output)
-    assert not output.exists()
 
 
-def test_resolve_sigma_positions_uses_the_nine_node_native_schedule():
+def test_native_load_weights_keeps_grouped_qkv_and_gate_first_layouts():
+    model, qkv_calls, fc1_calls = _load_fixture(diffusers_weights=False)
+    grouped_qkv = torch.arange(36, dtype=torch.float32).reshape(12, 3)
+    fc1 = torch.arange(18, dtype=torch.float32).reshape(6, 3)
+
+    loaded = model.load_weights(
+        [
+            ("blocks.0.attn.qkv_proj.weight", grouped_qkv),
+            ("blocks.0.mlp.fc1.weight", fc1),
+        ]
+    )
+
+    expected_qkv = torch.cat(
+        (
+            grouped_qkv[:2],
+            grouped_qkv[6:8],
+            grouped_qkv[2:4],
+            grouped_qkv[8:10],
+            grouped_qkv[4:6],
+            grouped_qkv[10:],
+        )
+    )
+    assert loaded == {"blocks.0.attn.qkv_proj.weight", "blocks.0.mlp.fc1.weight"}
+    assert [shard_id for shard_id, _ in qkv_calls] == [None]
+    assert [shard_id for shard_id, _ in fc1_calls] == [0, 1]
+    torch.testing.assert_close(model.blocks[0].attn.qkv_proj.weight, expected_qkv)
+    torch.testing.assert_close(model.blocks[0].mlp.fc1.weight, fc1)
+    assert torch.equal(model.rope.inv_freq, torch.zeros(2))
+
+
+def test_diffusers_load_weights_rejects_unknown_name():
+    model, _, _ = _load_fixture(diffusers_weights=True)
+
+    with pytest.raises(ValueError, match="unsupported Diffusers H3 weight"):
+        model.load_weights([("transformer_blocks.0.attn.not_a_projection.weight", torch.zeros(4, 3))])
+
+
+def test_diffusers_load_weights_rejects_duplicate_source_name():
+    model, _, _ = _load_fixture(diffusers_weights=True)
+    weight = torch.zeros(4, 3)
+
+    with pytest.raises(ValueError, match="duplicate Diffusers H3 weight"):
+        model.load_weights(
+            [
+                ("transformer_blocks.0.attn.to_q.weight", weight),
+                ("transformer_blocks.0.attn.to_q.weight", weight),
+            ]
+        )
+
+
+def test_diffusers_load_weights_rejects_incomplete_qkv_group():
+    model, _, _ = _load_fixture(diffusers_weights=True)
+
+    with pytest.raises(ValueError, match="incomplete Diffusers H3 QKV"):
+        model.load_weights(
+            [
+                ("transformer_blocks.0.attn.to_q.weight", torch.zeros(4, 3)),
+                ("transformer_blocks.0.attn.to_k.weight", torch.zeros(4, 3)),
+            ]
+        )
+
+
+def test_diffusers_load_weights_rejects_missing_compression_gate_parameter():
+    model, _, _ = _load_fixture(diffusers_weights=True)
+
+    with pytest.raises(ValueError, match="has no model parameter"):
+        model.load_weights([("transformer_blocks.0.attn.to_gate_compress.weight", torch.zeros(4, 3))])
+
+
+def test_resolve_sigma_positions_uses_release_metadata_schedule():
     from vllm_omni.diffusion.models.minimax_h3 import MiniMaxH3Pipeline
 
     pipeline = object.__new__(MiniMaxH3Pipeline)
-    torch.nn.Module.__init__(pipeline)
+    nn.Module.__init__(pipeline)
     pipeline._fasth3 = None
     pipeline._lora_sigma_schedules = {}
+    spec = FastH3CheckpointSpec.from_metadata(_fastvideo_metadata())
     pipeline._base_schedule_by_partition = {
-        "fl2va": DMD2SigmaSchedule.from_metadata(_v2_release()),
+        "fl2va": DMD2SigmaSchedule.from_metadata(spec.release_metadata()),
     }
 
     positions, steps = pipeline._resolve_sigma_positions("t2va", _sampling())

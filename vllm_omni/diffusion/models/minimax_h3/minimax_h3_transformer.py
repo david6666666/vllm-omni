@@ -55,6 +55,8 @@ from vllm_omni.diffusion.layers.rope import RotaryEmbedding
 from vllm_omni.diffusion.models.host_weight_contract import FinalLayoutModelContract
 from vllm_omni.platforms import current_omni_platform
 
+from .fasth3 import _resolve_native_target
+
 if TYPE_CHECKING:
     from vllm.model_executor.layers.quantization.base_config import (
         QuantizationConfig,
@@ -118,6 +120,18 @@ class MiniMaxH3DiTArchConfig:
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any]) -> MiniMaxH3DiTArchConfig:
+        # The modular Diffusers checkpoint uses these spellings for the same
+        # architecture. Normalize before constructing the existing native DiT.
+        aliases = {
+            "num_refiner_layers": "token_refiner_num_layers",
+            "ffn_dim": "ffn_hidden_size",
+            "in_channels": "latents_dim",
+            "audio_in_channels": "audio_latents_dim",
+            "freq_dim": "timestep_input_dim",
+            "time_embed_hidden_dim": "time_embed_hidden_size",
+            "rope_freq_dim": "rope_inv_freq_len",
+        }
+        config = {aliases.get(name, name): value for name, value in config.items()}
         fields = cls.__dataclass_fields__
         values = {name: config[name] for name in fields if name in config}
         if "patch_size" in values:
@@ -1132,6 +1146,8 @@ class MiniMaxH3DiTModel(nn.Module):
         super().__init__()
         tf_config = od_config.tf_model_config
         config_mapping = tf_config.to_dict() if hasattr(tf_config, "to_dict") else dict(tf_config)
+        self._diffusers_weights = config_mapping.get("_class_name") == "MiniMaxH3Transformer3DModel"
+        self._rope_theta = float(config_mapping.get("rope_theta", 10000.0))
         arch = MiniMaxH3DiTArchConfig.from_mapping(config_mapping)
         self.arch = arch
         self.od_config = od_config
@@ -1297,17 +1313,37 @@ class MiniMaxH3DiTModel(nn.Module):
         self,
         weights: Iterable[tuple[str, torch.Tensor]],
     ) -> set[str]:
-        """Load exact H3 checkpoint names with logical TP-aware loaders."""
+        """Load native or Diffusers H3 weights with the existing TP-aware loaders."""
         params = dict(self.named_parameters())
         params.update(dict(self.named_buffers()))
         loaded: set[str] = set()
+        diffusers_weights = getattr(self, "_diffusers_weights", False)
+        qkv_parts: dict[str, set[str]] = {}
+        source_names: set[str] = set()
         for name, loaded_weight in weights:
+            layout = "plain"
+            if diffusers_weights:
+                if name in source_names:
+                    raise ValueError(f"duplicate Diffusers H3 weight: {name}")
+                source_names.add(name)
+                module, _, kind = name.rpartition(".")
+                target = _resolve_native_target(module)
+                if target is None or kind not in {"weight", "bias"}:
+                    raise ValueError(f"unsupported Diffusers H3 weight: {name}")
+                name, layout = f"{target[0]}.{kind}", target[1]
             param = params.get(name)
             if param is None:
+                if diffusers_weights:
+                    raise ValueError(f"Diffusers H3 weight has no model parameter: {name}")
                 logger.warning("Skipping MiniMax H3 weight not present in model: %s", name)
                 continue
             weight_loader = getattr(param, "weight_loader", default_weight_loader)
-            if name.endswith(".attn.qkv_proj.weight"):
+            if layout in {"q", "k", "v"}:
+                # vLLM can load each projection directly into its packed QKV
+                # parameter, including TP slicing and online quantization.
+                weight_loader(param, loaded_weight, layout)
+                qkv_parts.setdefault(name, set()).add(layout)
+            elif name.endswith(".attn.qkv_proj.weight"):
                 # Transform checkpoint layout before entering vLLM's loader so
                 # online FP8 can keep ``online_process_loader`` outermost.
                 loaded_weight = _reorder_grouped_qkv_to_qkv(
@@ -1323,12 +1359,26 @@ class MiniMaxH3DiTModel(nn.Module):
                         "MiniMax H3 fc1 checkpoint rows must split evenly into "
                         f"gate/up matrices, got {tuple(loaded_weight.shape)}"
                     )
-                gate, up = loaded_weight.chunk(2, dim=0)
+                first, second = loaded_weight.chunk(2, dim=0)
+                gate, up = (second, first) if layout == "swap_halves" else (first, second)
                 weight_loader(param, gate, 0)
                 weight_loader(param, up, 1)
             else:
                 weight_loader(param, loaded_weight)
             loaded.add(name)
+        if diffusers_weights:
+            for name, parts in qkv_parts.items():
+                if parts != {"q", "k", "v"}:
+                    raise ValueError(f"incomplete Diffusers H3 QKV group {name}: {sorted(parts)}")
+            # Diffusers reconstructs RoPE from config instead of storing this
+            # native checkpoint buffer. Compute on CPU for identical values.
+            freq_dim = self.arch.rope_inv_freq_len
+            rope = 1.0 / (
+                self._rope_theta
+                ** (torch.arange(0, 2 * freq_dim, 2, dtype=torch.float32, device="cpu") / (2 * freq_dim))
+            )
+            default_weight_loader(params["rope.inv_freq"], rope)
+            loaded.add("rope.inv_freq")
         return loaded
 
     @staticmethod
