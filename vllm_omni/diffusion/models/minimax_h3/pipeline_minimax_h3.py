@@ -2090,7 +2090,10 @@ class MiniMaxH3Pipeline(
         if has_native_lora:
             self._validate_native_sampling(sampling, task=task)
         if self._fasth3_checkpoint is not None:
-            self._fasth3_checkpoint.check_request(sampling)
+            self._fasth3_checkpoint.check_request(
+                sampling,
+                step_execution=bool(getattr(self.od_config, "step_execution", False)),
+            )
         if self._fasth3 is not None:
             self._fasth3.check_request(
                 sampling,

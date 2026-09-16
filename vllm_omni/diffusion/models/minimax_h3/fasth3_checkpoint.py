@@ -105,7 +105,15 @@ class FastH3CheckpointSpec:
         if any(int(getattr(parallel, key, 1) or 1) != 1 for key in ("ring_degree", "allgather_degree")):
             raise ValueError("FastH3 V2 supports local attention or pure Ulysses sequence parallelism")
 
-    def check_request(self, sampling: OmniDiffusionSamplingParams) -> None:
+    def check_request(self, sampling: OmniDiffusionSamplingParams, *, step_execution: bool = False) -> None:
+        if step_execution:
+            # StepScheduler admits requests before the pipeline hook runs and
+            # derives its lifetime from these fields.  The pinned schedule must
+            # therefore be explicit and cannot be overridden by custom arrays.
+            if sampling.num_inference_steps != FASTH3_V2_BASE_SCHEDULE.num_inference_steps:
+                raise OmniClientError("FastH3 V2 step execution requires num_inference_steps=8")
+            if sampling.timesteps is not None or sampling.sigmas is not None:
+                raise OmniClientError("FastH3 V2 step execution does not support custom timesteps or sigmas")
         if sampling.lora_request is not None:
             raise OmniClientError("FastH3 V2 does not support per-request LoRA adapters")
         steps = sampling.num_inference_steps

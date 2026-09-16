@@ -59,6 +59,8 @@ def _sampling(
     guidance_scale: float | None = 1.0,
     extra_args: dict[str, object] | None = None,
     lora_request: LoRARequest | None = None,
+    timesteps: torch.Tensor | None = None,
+    sigmas: list[float] | None = None,
 ) -> OmniDiffusionSamplingParams:
     return OmniDiffusionSamplingParams(
         # Keep the string form to exercise malformed client input validation.
@@ -66,6 +68,8 @@ def _sampling(
         guidance_scale=guidance_scale,
         extra_args=extra_args or {},
         lora_request=lora_request,
+        timesteps=timesteps,
+        sigmas=sigmas,
     )
 
 
@@ -229,6 +233,25 @@ def test_v2_request_contract_accepts_omitted_steps_and_default_shifts():
     spec = FastH3CheckpointSpec.from_metadata(_fastvideo_metadata())
     spec.check_request(_sampling(num_inference_steps=None))
     spec.check_request(_sampling(extra_args={"flow_shift": 10, "audio_flow_shift": 3}, guidance_scale=1))
+
+
+@pytest.mark.parametrize(
+    "sampling",
+    [
+        _sampling(num_inference_steps=None),
+        _sampling(timesteps=torch.tensor([0.9, 0.5, 0.0])),
+        _sampling(sigmas=[1.0, 0.5, 0.0]),
+    ],
+)
+def test_v2_step_execution_requires_pinned_count_and_schedule(sampling):
+    spec = FastH3CheckpointSpec.from_metadata(_fastvideo_metadata())
+    with pytest.raises(OmniClientError, match="step execution"):
+        spec.check_request(sampling, step_execution=True)
+
+
+def test_v2_step_execution_accepts_only_explicit_pinned_count():
+    spec = FastH3CheckpointSpec.from_metadata(_fastvideo_metadata())
+    spec.check_request(_sampling(num_inference_steps=8), step_execution=True)
 
 
 @pytest.mark.parametrize(
