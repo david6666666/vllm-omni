@@ -9,6 +9,8 @@ from vllm_omni.model_executor.model_loader.weight_utils import (
     download_weights_from_hf_specific,
 )
 
+_FASTH3_MODULAR_MODEL_PREFIX = "FastVideo/"
+
 MINIMAX_H3_ENCODER_DOWNLOAD_PATTERNS = {
     partition: [
         f"{subdir}/text_encoder/**",
@@ -21,6 +23,17 @@ MINIMAX_H3_ENCODER_DOWNLOAD_PATTERNS["combined"] = MINIMAX_H3_ENCODER_DOWNLOAD_P
 
 
 def is_minimax_h3_modular(model: str, revision: str | None = None) -> bool:
+    path = Path(model)
+    if path.is_dir():
+        # Native MiniMax-H3 snapshots can advertise the Diffusers modular
+        # class in ``model_index.json`` while retaining the legacy FL2VA /
+        # Ref2VA layout.  FastH3 modular releases carry this marker file.
+        return (path / "modular_model_index.json").is_file() or (path / "fastvideo_inference.json").is_file()
+    # The FastVideo release is the modular checkpoint handled by this
+    # resolver.  Do not classify the native MiniMax-H3 Hub repository from
+    # its class name alone; its partition files are still required here.
+    if not model.startswith(_FASTH3_MODULAR_MODEL_PREFIX):
+        return False
     index = get_diffusion_model_index(model, revision=revision) or {}
     return index.get("_class_name") == "MiniMaxH3ModularPipeline"
 

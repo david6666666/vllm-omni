@@ -380,6 +380,18 @@ def test_modular_hub_model_root_downloads_only_text_encoder(monkeypatch, tmp_pat
     }
 
 
+def test_native_hub_model_with_modular_class_keeps_partition_layout(monkeypatch):
+    from vllm_omni.model_executor.models.minimax_h3 import checkpoint as checkpoint_module
+
+    monkeypatch.setattr(
+        checkpoint_module,
+        "get_diffusion_model_index",
+        lambda _model, *, revision=None: {"_class_name": "MiniMaxH3ModularPipeline"},
+    )
+
+    assert checkpoint_module.is_minimax_h3_modular("MiniMaxAI/MiniMax-H3") is False
+
+
 def test_native_local_model_root_keeps_partition_layout(tmp_path):
     root = tmp_path / "MiniMax-H3"
     (root / "FL2VA" / "text_encoder").mkdir(parents=True)
