@@ -1145,11 +1145,22 @@ class MiniMaxH3DiTModel(nn.Module):
         self,
         od_config: OmniDiffusionConfig,
         quant_config: QuantizationConfig | None = None,
+        *,
+        diffusers_weights: bool | None = None,
     ) -> None:
         super().__init__()
         tf_config = od_config.tf_model_config
         config_mapping = tf_config.to_dict() if hasattr(tf_config, "to_dict") else dict(tf_config)
-        self._diffusers_weights = config_mapping.get("_class_name") == "MiniMaxH3Transformer3DModel"
+        # The native MiniMax-H3 Hub snapshot advertises the Diffusers
+        # transformer class in its root config, while its FL2VA/Ref2VA
+        # components still contain native weights.  The pipeline has already
+        # resolved the actual source format, so let it override the
+        # class-name heuristic.  Keep the heuristic for standalone callers.
+        self._diffusers_weights = (
+            config_mapping.get("_class_name") == "MiniMaxH3Transformer3DModel"
+            if diffusers_weights is None
+            else diffusers_weights
+        )
         self._rope_theta = float(config_mapping.get("rope_theta", 10000.0))
         arch = MiniMaxH3DiTArchConfig.from_mapping(config_mapping)
         self.arch = arch

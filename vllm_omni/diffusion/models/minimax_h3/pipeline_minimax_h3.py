@@ -898,6 +898,7 @@ class MiniMaxH3Pipeline(
         self.transformer = MiniMaxH3DiTModel(
             od_config,
             quant_config=transformer_quant_config,
+            diffusers_weights=modular,
         )
         if self._fasth3_checkpoint is not None:
             self.transformer.enable_vsa_gates(sparsity=self._fasth3_checkpoint.vsa_sparsity)
@@ -908,6 +909,7 @@ class MiniMaxH3Pipeline(
             self.transformers_ref = MiniMaxH3DiTModel(
                 od_config,
                 quant_config=transformer_quant_config,
+                diffusers_weights=modular,
             )
 
         self._fasth3 = resolve_fasth3_fusion(od_config, self.transformer)
