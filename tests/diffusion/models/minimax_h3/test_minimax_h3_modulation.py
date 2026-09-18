@@ -216,9 +216,9 @@ def test_hopper_fused_modulation_matches_pytorch_reference() -> None:
     normalized = reference_residual.float()
     variance = normalized.pow(2).mean(-1, keepdim=True)
     normalized = (weight.float() * (normalized * torch.rsqrt(variance + eps))).to(torch.bfloat16)
-    reference_modulated = (
-        normalized * (1.0 + scale.index_select(0, indices)) + shift.index_select(0, indices)
-    ).to(torch.bfloat16)
+    reference_modulated = (normalized * (1.0 + scale.index_select(0, indices)) + shift.index_select(0, indices)).to(
+        torch.bfloat16
+    )
 
     actual_residual, actual_modulated = indexed_gate_rms_norm_scale_shift(
         residual,
