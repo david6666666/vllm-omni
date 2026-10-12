@@ -101,10 +101,8 @@ requirements fail explicitly at initialization when opted in. No rank-local
 fallback is attempted after collectives have started.
 
 Eligible equal BF16 Q/K/V tensors then share one exchange; other layouts
-retain the separate exchanges. The model-specific
-`extras.qwen21_auto_symmem_ulysses: true` is also an explicit opt-in, restricted
-to B300/CUDA PyTorch 2.13, BF16 eager strict Ulysses, Ring1/AllGather1.
-It defaults to false and requires the same build prerequisites.
+retain the separate exchanges. Backend selection uses the common parallel
+configuration; it does not depend on a model name or a hardware-name heuristic.
 
 Shared kernels live under `vllm_omni/diffusion/layers/`: pointwise fusion
 preserves BF16 intermediate roundings; full head128 Q/K norm/RoPE additionally

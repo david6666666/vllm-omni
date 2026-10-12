@@ -134,6 +134,35 @@ def test_rms_norm_fastpath_handles_attention_block_4d_input(dtype: torch.dtype) 
 
 
 @torch.no_grad()
+@pytest.mark.parametrize("dtype", ALL_DTYPES)
+@pytest.mark.parametrize("layout", ["contiguous", "frame_major", "attention_4d"])
+@pytest.mark.parametrize("silu", [False, True])
+@pytest.mark.parametrize("decline_kernel", [False, True])
+def test_shared_norm_preserves_pending_bias_and_fallback(monkeypatch, dtype, layout, silu, decline_kernel):
+    """Wan's deferred conv bias must be added exactly once through the shared helper."""
+    torch.manual_seed(7)
+    images = layout == "attention_4d"
+    shape = (2, 32, 7, 9) if images else (1, 32, 3, 7, 9)
+    norm = _make_norm(32, dtype, images=images)
+    x = torch.randn(shape, device="cuda", dtype=dtype)
+    if layout == "frame_major":
+        x = x.permute(0, 2, 1, 3, 4).contiguous().permute(0, 2, 1, 3, 4)
+    bias = torch.randn(32, device="cuda", dtype=dtype) * 0.1
+    expected = _reference_rms_norm(norm, x + bias.view(1, -1, *([1] * (x.dim() - 2))))
+    if silu:
+        expected = F.silu(expected)
+
+    if decline_kernel:
+        monkeypatch.setattr(rn, "rms_norm_scale", lambda *args, **kwargs: None)
+    actual = fp.rms_norm_fastpath(norm, x, silu=silu, bias=bias)
+
+    assert actual is not None
+    assert actual.dtype == expected.dtype
+    assert actual.stride() == expected.stride()
+    assert _bits_equal(actual, expected)
+
+
+@torch.no_grad()
 @pytest.mark.parametrize("dtype", LOW_PRECISION)
 def test_fused_silu_epilogue_matches_silu_of_reference(dtype: torch.dtype) -> None:
     device = torch.device("cuda")
