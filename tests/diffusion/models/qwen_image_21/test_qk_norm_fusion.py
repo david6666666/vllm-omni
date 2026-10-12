@@ -44,6 +44,9 @@ def test_strided_qkv_matches_original_rms_and_complex_rope(sequence):
         )
 
     result = qk_rotary(q, k, nq.weight, nk.weight, freqs, 1e-6)
+    if torch.get_device_module(q.device).get_device_capability(q.device) != (10, 3):
+        assert result is None
+        return
     assert result is not None
     torch.testing.assert_close(result[0], reference(q, nq), rtol=0, atol=0)
     torch.testing.assert_close(result[1], reference(k, nk), rtol=0, atol=0)

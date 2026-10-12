@@ -5,8 +5,7 @@
 import torch
 from vllm.triton_utils import HAS_TRITON, tl, tldevice, triton
 
-_EXACT_CUDA_STACK = torch.version.hip is None and str(torch.__version__).startswith("2.13.")
-
+from vllm_omni.diffusion.layers.exact_bf16_pointwise import supports_exact_rope
 
 if HAS_TRITON:
 
@@ -90,7 +89,6 @@ def qk_rotary(
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
     if (
         not HAS_TRITON
-        or not _EXACT_CUDA_STACK
         or q.device.type != "cuda"
         or q.dtype != torch.bfloat16
         or q.ndim != 4
@@ -115,6 +113,8 @@ def qk_rotary(
         or torch.compiler.is_compiling()
         or torch.is_grad_enabled()
     ):
+        return None
+    if not supports_exact_rope(q.device):
         return None
 
     oq = torch.empty(q.shape, device=q.device, dtype=q.dtype)

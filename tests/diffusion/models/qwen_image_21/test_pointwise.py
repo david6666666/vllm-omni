@@ -5,6 +5,7 @@ import pytest
 import torch
 
 from vllm_omni.diffusion.layers.exact_bf16_pointwise import residual, rotary, silu_mul
+from vllm_omni.diffusion.models.qwen_image_21.qwen_image_21_transformer import _apply_qwen_image21_rotary_emb
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion]
 
@@ -45,7 +46,17 @@ def test_production_shapes_preserve_rounding(sequence):
         .flatten(3)
         .to(query.dtype)
     )
-    torch.testing.assert_close(rotary(query, freqs), expected, rtol=0, atol=0)
+    result = rotary(query, freqs)
+    if (
+        torch.version.hip is None
+        and str(torch.__version__).startswith("2.13.")
+        and torch.get_device_module(query.device).get_device_capability(query.device) == (10, 3)
+    ):
+        assert result is not None
+        torch.testing.assert_close(result, expected, rtol=0, atol=0)
+    else:
+        assert result is None
+    torch.testing.assert_close(_apply_qwen_image21_rotary_emb(query, freqs), expected, rtol=0, atol=0)
 
 
 @pytest.mark.cuda

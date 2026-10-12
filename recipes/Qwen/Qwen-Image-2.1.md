@@ -105,9 +105,10 @@ retain the separate exchanges. Backend selection uses the common parallel
 configuration; it does not depend on a model name or a hardware-name heuristic.
 
 Shared kernels live under `vllm_omni/diffusion/layers/`: pointwise fusion
-preserves BF16 intermediate roundings; full head128 Q/K norm/RoPE additionally
-requires CUDA/PyTorch 2.13 and matches ATen's reduction and complex FMA order.
-Unsupported cases retain reference arithmetic. The channel-first VAE norm
+preserves BF16 intermediate roundings. Both standalone RoPE and full head128
+Q/K norm/RoPE require SM103 with CUDA/PyTorch 2.13, where the reduction and
+complex FMA order were validated. Other architectures, including SM90, retain
+the reference normalization and complex RoPE arithmetic. The channel-first VAE norm
 helper and epilogue are shared with Wan; Wan's channels-last policy stays in
 its own adapter.
 

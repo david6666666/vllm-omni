@@ -23,6 +23,20 @@ def eligible(*values: torch.Tensor) -> bool:
     )
 
 
+def supports_exact_rope(device: torch.device) -> bool:
+    """Qualify the complex-multiply arithmetic on the input tensor's device.
+
+    SM90 does not match this FMA order exactly. Only SM103 with CUDA PyTorch
+    2.13 has been validated; other architectures/stacks keep the ATen path.
+    """
+    return (
+        device.type == "cuda"
+        and torch.version.hip is None
+        and str(torch.__version__).startswith("2.13.")
+        and torch.get_device_module(device).get_device_capability(device) == (10, 3)
+    )
+
+
 if HAS_TRITON:
 
     @triton.jit
@@ -124,6 +138,8 @@ def rotary(x: torch.Tensor, freqs: torch.Tensor) -> torch.Tensor | None:
         or x.numel() == 0
         or torch.compiler.is_compiling()
     ):
+        return None
+    if not supports_exact_rope(x.device):
         return None
     output = torch.empty(x.shape, device=x.device, dtype=x.dtype)
     real_freqs = torch.view_as_real(freqs)
