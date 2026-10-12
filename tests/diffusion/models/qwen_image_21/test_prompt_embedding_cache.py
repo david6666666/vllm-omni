@@ -19,7 +19,7 @@ def pipeline():
     nn.Module.__init__(result)
     result.text_encoder = Mock(spec=nn.Module, dtype=torch.float32, training=False)
     result.processor = object()
-    result.od_config = Mock(spec=OmniDiffusionConfig, lora_config=None, enable_cpu_offload=False)
+    result.od_config = OmniDiffusionConfig()
     result.device = torch.device("cpu")
     result.prompt_template_t2i = "{}"
     result._drop_idx = 0
@@ -66,6 +66,51 @@ def test_edit_batch_and_training_bypass_and_invalidate(pipeline):
     pipeline.text_encoder.training = False
     pipeline.encode_prompt("A")
     assert pipeline._get_qwen_prompt_embeds.call_count == 6
+
+
+@pytest.mark.parametrize(
+    "offload_kwargs",
+    [
+        pytest.param({"enable_cpu_offload": True}, id="legacy-module"),
+        pytest.param({"enable_layerwise_offload": True}, id="legacy-layer"),
+        pytest.param({"enable_distributed_layerwise_offload": True}, id="legacy-distributed-layer"),
+        pytest.param(
+            {"diffusion_offload_config": {"mode": "module", "components": ["dit", "text_encoder"]}},
+            id="module",
+        ),
+        pytest.param(
+            {"diffusion_offload_config": {"mode": "layer", "components": ["text_encoder"]}},
+            id="layer",
+        ),
+        pytest.param(
+            {
+                "diffusion_offload_config": {
+                    "mode": "layer",
+                    "components": ["text_encoder"],
+                    "layer_options": {"text_encoder": {"weight_transfer": "allgather"}},
+                }
+            },
+            id="distributed-layer",
+        ),
+    ],
+)
+@torch.no_grad()
+def test_offload_bypasses_and_invalidates_prompt_cache(pipeline, offload_kwargs):
+    pipeline.encode_prompt("A")
+    pipeline.encode_prompt("A")
+    assert pipeline._get_qwen_prompt_embeds.call_count == 1
+    assert pipeline._prompt_embedding_cache
+
+    pipeline.od_config = OmniDiffusionConfig(**offload_kwargs)
+    for _ in range(2):
+        pipeline.encode_prompt("A")
+        assert not pipeline._prompt_embedding_cache
+    assert pipeline._get_qwen_prompt_embeds.call_count == 3
+
+    pipeline.od_config = OmniDiffusionConfig()
+    pipeline.encode_prompt("A")
+    pipeline.encode_prompt("A")
+    assert pipeline._get_qwen_prompt_embeds.call_count == 4
 
 
 @torch.no_grad()

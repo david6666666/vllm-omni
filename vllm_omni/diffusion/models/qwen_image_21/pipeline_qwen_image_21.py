@@ -48,6 +48,7 @@ from vllm_omni.diffusion.models.qwen_image_21.qwen_image_21_transformer import (
 )
 from vllm_omni.diffusion.models.qwen_image_21.request_cache import QwenImage21KVCache
 from vllm_omni.diffusion.models.utils import create_transformers_model
+from vllm_omni.diffusion.offloader.config import offload_enabled
 from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import DiffusionPipelineProfilerMixin
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.utils.prompt_utils import (
@@ -739,7 +740,7 @@ class QwenImage21Pipeline(
             and not torch.is_grad_enabled()
             and not self.text_encoder.training
             and not getattr(self.od_config, "lora_config", None)
-            and not getattr(self.od_config, "enable_cpu_offload", False)
+            and not offload_enabled(self.od_config)
         )
         cache = getattr(self, "_prompt_embedding_cache", None)
         if cache is None or not cacheable:
