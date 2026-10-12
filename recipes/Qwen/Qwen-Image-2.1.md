@@ -80,6 +80,70 @@ curl http://localhost:8091/v1/images/generations \
   }'
 ```
 
+### Four-GPU BF16 eager inference
+
+Start a four-GPU server with the checkpoint's native eight-step schedule:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 vllm serve Qwen/Qwen-Image-2.1-Turbo \
+  --omni --enforce-eager --dtype bfloat16 --num-gpus 4 \
+  --tensor-parallel-size 1 --usp 4 --ring 1 --cfg-parallel-size 1 \
+  --vae-patch-parallel-size 1 --max-num-seqs 1 \
+  --diffusion-attention-backend FLASH_ATTN --port 8098
+```
+
+The default communication backend remains the reference all-to-all. On a
+qualified CUDA installation, opt into symmetric-memory exchange with
+`--ulysses-a2a-permute`. This requires a working CUDA compiler/toolkit and
+NCCL 2.28 or later with symmetric-memory device support, including the wheel
+library/header layout required by the current extension builder. Missing
+requirements fail explicitly at initialization when opted in. No rank-local
+fallback is attempted after collectives have started.
+
+Eligible equal BF16 Q/K/V tensors then share one exchange; other layouts
+retain the separate exchanges. The model-specific
+`extras.qwen21_auto_symmem_ulysses: true` is also an explicit opt-in, restricted
+to B300/CUDA PyTorch 2.13, BF16 eager strict Ulysses, Ring1/AllGather1.
+It defaults to false and requires the same build prerequisites.
+
+Shared kernels live under `vllm_omni/diffusion/layers/`: pointwise fusion
+preserves BF16 intermediate roundings; full head128 Q/K norm/RoPE additionally
+requires CUDA/PyTorch 2.13 and matches ATen's reduction and complex FMA order.
+Unsupported cases retain reference arithmetic. The channel-first VAE norm
+helper and epilogue are shared with Wan; Wan's channels-last policy stays in
+its own adapter.
+
+Exact pure-T2I text conditioning is bounded by 16 entries and 16 MiB.
+Image conditioning, batched prompts, training/gradients, LoRA and CPU offload
+bypass and invalidate this cache. Geometry follows the request's KV lifetime,
+with weak ownership and denoise-finally cleanup that preserves decode graphs.
+Generated images and sampled latents are never reused by these optimizations.
+
+Reproduce serial full-response image E2E with the in-repository, model-neutral
+client. Create `requests.jsonl` with one image API body per line; for example:
+
+```json
+{"model":"Qwen/Qwen-Image-2.1-Turbo","prompt":"A ceramic teapot on a wooden table","seed":42,"n":1,"size":"1280x704","response_format":"b64_json","output_format":"png","output_compression":100,"true_cfg_scale":1.0,"sigmas":[1.0,0.978453,0.95418,0.926626,0.89508,0.845148,0.704534,0.414568]}
+```
+
+```bash
+python benchmarks/diffusion/image_e2e.py \
+  --base-url http://127.0.0.1:8098 --requests requests.jsonl \
+  --warmup-rounds 2 --repetitions 3 --output image-benchmark/result.json
+```
+
+The output directory must be new. Warmup seeds add10000, then11000 to the
+specified seeds; all requests run the full supplied schedule. The client saves
+the first request and every timed PNG, individual timings and group means.
+The timer covers POST through the complete JSON/base64 response download;
+parsing and writes are outside it. Reserve idle GPUs and record source/model
+revisions, environment, server argv, readiness and device ownership separately.
+For a fresh A/B claim, use the same inputs, runtime, devices and declared
+configuration on both sides, alternate fresh server runs, and report all
+samples/ranges with full-resolution RGB/alpha accuracy checks. Warmed repeated
+prompts measure exact conditioning reuse; cold/unseen prompts need separate
+validation. Profile separately and do not count diagnostic times as E2E.
+
 ## Offline Inference
 
 ### Text-to-image

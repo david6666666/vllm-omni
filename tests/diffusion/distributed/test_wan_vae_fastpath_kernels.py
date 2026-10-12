@@ -29,9 +29,9 @@ from vllm_omni.diffusion.distributed.autoencoders.wan_vae_fastpath import (
     install_wan_vae_fastpath,
 )
 from vllm_omni.diffusion.distributed.autoencoders.wan_vae_fastpath import triton_data_movement as dm
-from vllm_omni.diffusion.distributed.autoencoders.wan_vae_fastpath import triton_rms_norm as rn
 from vllm_omni.diffusion.distributed.autoencoders.wan_vae_fastpath import triton_rms_norm_cl as cl
 from vllm_omni.diffusion.distributed.autoencoders.wan_vae_fastpath import triton_upsample as up
+from vllm_omni.diffusion.layers import vae_norm_epilogue as rn
 
 pytestmark = [
     pytest.mark.usefixtures("unpatched_wan_rms_norm"),
