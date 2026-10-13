@@ -33,6 +33,8 @@ from diffusers.models.modeling_utils import ModelMixin
 from diffusers.utils import logging
 from diffusers.utils.accelerate_utils import apply_forward_hook
 
+from vllm_omni.diffusion.layers.vae_rms_norm import kernels_allowed, rms_norm_fastpath
+
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 CACHE_T = 2
@@ -229,11 +231,9 @@ class QwenImage21RMS_norm(nn.Module):
         self.bias = nn.Parameter(torch.zeros(shape)) if bias else 0.0
 
     def forward(self, x):
-        if x.is_cuda and not torch.is_grad_enabled() and not torch.compiler.is_compiling():
+        if kernels_allowed(x):
             # This VAE uses the same F.normalize + rounded scale/gamma/bias
             # contract as Wan. Reuse its exact reduction and fused epilogue.
-            from vllm_omni.diffusion.layers.vae_rms_norm import rms_norm_fastpath
-
             output = rms_norm_fastpath(self, x)
             if output is not None:
                 return output

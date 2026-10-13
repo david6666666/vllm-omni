@@ -11,8 +11,10 @@ import torch
 from torch import nn
 
 from vllm_omni.diffusion.models.qwen_image_21.cfg_parallel import QwenImage21CFGParallelMixin
-from vllm_omni.diffusion.models.qwen_image_21.qwen_image_21_transformer import QwenImage21Transformer2DModel
-from vllm_omni.diffusion.models.qwen_image_21.request_cache import QwenImage21KVCache
+from vllm_omni.diffusion.models.qwen_image_21.qwen_image_21_transformer import (
+    QwenImage21KVCache,
+    QwenImage21Transformer2DModel,
+)
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu, pytest.mark.diffusion]
 

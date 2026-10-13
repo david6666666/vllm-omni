@@ -38,13 +38,21 @@ from vllm_omni.diffusion.layers.exact_bf16_pointwise import eligible as pointwis
 from vllm_omni.diffusion.layers.exact_bf16_pointwise import residual, rotary, silu_mul
 from vllm_omni.diffusion.layers.exact_bf16_qk_norm_rope import qk_rotary
 from vllm_omni.diffusion.models.qwen_image_21.decode_graph import QwenImage21DecodeGraphManager
-from vllm_omni.diffusion.models.qwen_image_21.request_cache import QwenImage21KVCache
 from vllm_omni.diffusion.offloader.config import OffloadStrategy, resolve_offload_strategy
 
 if TYPE_CHECKING:
     from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
 
 logger = init_logger(__name__)
+
+
+class QwenImage21KVCache(list[dict[str, dict[str, torch.Tensor]]]):
+    """Request prefix cache supporting weakrefs used by this transformer's geometry reuse.
+
+    Plain lists cannot be weak-referenced. This subclass lets dropping a request
+    release its geometry without retaining prefix tensors on the transformer.
+    """
+
 
 _FP8_E4M3_MAX = torch.finfo(torch.float8_e4m3fn).max
 

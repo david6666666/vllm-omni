@@ -52,6 +52,7 @@ from diffusers.models.autoencoders.autoencoder_kl_wan import (
 )
 from vllm.logger import init_logger
 
+from vllm_omni.diffusion.layers.vae_rms_norm import kernels_allowed as _kernels_allowed
 from vllm_omni.diffusion.layers.vae_rms_norm import rms_norm_fastpath as shared_rms_norm_fastpath
 
 from . import triton_data_movement as dm
@@ -107,10 +108,6 @@ def _has_forward_hooks(*modules: nn.Module | None) -> bool:
     if nn.modules.module._global_forward_pre_hooks or nn.modules.module._global_forward_hooks:
         return True
     return any(m is not None and (m._forward_pre_hooks or m._forward_hooks) for m in modules)
-
-
-def _kernels_allowed(x: torch.Tensor) -> bool:
-    return x.is_cuda and not torch.is_grad_enabled() and not torch.compiler.is_compiling()
 
 
 # --------------------------------------------------------------------------- #

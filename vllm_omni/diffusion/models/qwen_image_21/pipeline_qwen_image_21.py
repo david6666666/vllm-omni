@@ -44,9 +44,9 @@ from vllm_omni.diffusion.models.qwen_image.pipeline_qwen_image_edit import (
 )
 from vllm_omni.diffusion.models.qwen_image_21.cfg_parallel import QwenImage21CFGParallelMixin
 from vllm_omni.diffusion.models.qwen_image_21.qwen_image_21_transformer import (
+    QwenImage21KVCache,
     QwenImage21Transformer2DModel,
 )
-from vllm_omni.diffusion.models.qwen_image_21.request_cache import QwenImage21KVCache
 from vllm_omni.diffusion.models.utils import create_transformers_model
 from vllm_omni.diffusion.offloader.config import offload_enabled
 from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import DiffusionPipelineProfilerMixin

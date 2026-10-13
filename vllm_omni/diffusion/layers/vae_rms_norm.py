@@ -18,7 +18,8 @@ from vllm_omni.diffusion.layers import vae_norm_epilogue as rn
 _NORM_DTYPES = (torch.float16, torch.bfloat16, torch.float32)
 
 
-def _kernels_allowed(x: torch.Tensor) -> bool:
+def kernels_allowed(x: torch.Tensor) -> bool:
+    """Allow eager CUDA kernels only when autograd and compilation are inactive."""
     return x.is_cuda and not torch.is_grad_enabled() and not torch.compiler.is_compiling()
 
 
@@ -90,7 +91,7 @@ def rms_norm_fastpath(
     # the low-precision tensor once instead of materializing an fp32 copy.
     denom = torch.linalg.vector_norm(x, dim=1, keepdim=True, dtype=torch.float32).clamp_min_(1e-12)
 
-    if _kernels_allowed(x):
+    if kernels_allowed(x):
         rows = _as_rows(x, denom)
         if rows is not None:
             x_rows, denom_rows, restore = rows

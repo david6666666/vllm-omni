@@ -63,6 +63,10 @@ if HAS_TRITON:
         wb = tl.load(weight_ptr + lane * 4 + 1).to(tl.float32)
         wc = tl.load(weight_ptr + lane * 4 + 2).to(tl.float32)
         wd = tl.load(weight_ptr + lane * 4 + 3).to(tl.float32)
+        # Eager RMSNorm materializes BF16 after normalization and again after
+        # multiplying by the BF16 weight. Each BF16 cast reproduces that rounding;
+        # widening back to FP32 preserves the rounded value for the next opmath
+        # operation (weight multiplication, then complex-FP32 RoPE).
         a = ((a * rrms).to(tl.bfloat16).to(tl.float32) * wa[None, :]).to(tl.bfloat16).to(tl.float32)
         b = ((b * rrms).to(tl.bfloat16).to(tl.float32) * wb[None, :]).to(tl.bfloat16).to(tl.float32)
         c = ((c * rrms).to(tl.bfloat16).to(tl.float32) * wc[None, :]).to(tl.bfloat16).to(tl.float32)
