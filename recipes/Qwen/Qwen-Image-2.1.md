@@ -118,30 +118,24 @@ bypass and invalidate this cache. Geometry follows the request's KV lifetime,
 with weak ownership and denoise-finally cleanup that preserves decode graphs.
 Generated images and sampled latents are never reused by these optimizations.
 
-Reproduce serial full-response image E2E with the in-repository, model-neutral
-client. Create `requests.jsonl` with one image API body per line; for example:
-
-```json
-{"model":"Qwen/Qwen-Image-2.1-Turbo","prompt":"A ceramic teapot on a wooden table","seed":42,"n":1,"size":"1280x704","response_format":"b64_json","output_format":"png","output_compression":100,"true_cfg_scale":1.0,"sigmas":[1.0,0.978453,0.95418,0.926626,0.89508,0.845148,0.704534,0.414568]}
-```
+After the server reports ready, send a full eight-step image request:
 
 ```bash
-python benchmarks/diffusion/image_e2e.py \
-  --base-url http://127.0.0.1:8098 --requests requests.jsonl \
-  --warmup-rounds 2 --repetitions 3 --output image-benchmark/result.json
+curl --fail --silent --show-error http://127.0.0.1:8098/health
+curl --fail --silent --show-error \
+  http://127.0.0.1:8098/v1/images/generations \
+  -H 'Content-Type: application/json' \
+  --data-binary @- > qwen-image-response.json <<'JSON'
+{"model":"Qwen/Qwen-Image-2.1-Turbo","prompt":"A ceramic teapot on a wooden table","seed":42,"n":1,"size":"1280x704","response_format":"b64_json","output_format":"png","output_compression":100,"true_cfg_scale":1.0,"sigmas":[1.0,0.978453,0.95418,0.926626,0.89508,0.845148,0.704534,0.414568]}
+JSON
 ```
 
-The output directory must be new. Warmup seeds add10000, then11000 to the
-specified seeds; all requests run the full supplied schedule. The client saves
-the first request and every timed PNG, individual timings and group means.
-The timer covers POST through the complete JSON/base64 response download;
-parsing and writes are outside it. Reserve idle GPUs and record source/model
-revisions, environment, server argv, readiness and device ownership separately.
-For a fresh A/B claim, use the same inputs, runtime, devices and declared
-configuration on both sides, alternate fresh server runs, and report all
-samples/ranges with full-resolution RGB/alpha accuracy checks. Warmed repeated
-prompts measure exact conditioning reuse; cold/unseen prompts need separate
-validation. Profile separately and do not count diagnostic times as E2E.
+The response contains a base64-encoded PNG in `data[0].b64_json`. This request
+checks generation; it does not measure latency. For performance comparisons,
+freeze the benchmark and accuracy checks independently of the optimization,
+use identical inputs and declared configurations, and compare native RGB and
+alpha outputs. Report cold/unseen prompts separately from warmed repeated
+prompts, which can reuse exact text conditioning.
 
 ## Offline Inference
 
