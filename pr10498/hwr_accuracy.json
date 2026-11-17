@@ -1,0 +1,53 @@
+{
+ "HWR warm (fix) vs HWR cold (canonical load)": {
+  "frames": [
+   124,
+   124
+  ],
+  "identical_frames": 124,
+  "psnr_mean": Infinity,
+  "psnr_min": Infinity,
+  "ssim_mean": 1.0,
+  "ssim_min": 1.0,
+  "audio_samples": [
+   165600,
+   165600
+  ],
+  "audio_max_abs_diff": 0.03679851070046425,
+  "audio_snr_db": 20.12636730385662
+ },
+ "HWR warm (fix) vs DLO ordinary load (main)": {
+  "frames": [
+   124,
+   124
+  ],
+  "identical_frames": 124,
+  "psnr_mean": Infinity,
+  "psnr_min": Infinity,
+  "ssim_mean": 1.0,
+  "ssim_min": 1.0,
+  "audio_samples": [
+   165600,
+   165600
+  ],
+  "audio_max_abs_diff": 0.04197114519774914,
+  "audio_snr_db": 20.123229321700705
+ },
+ "HWR warm (fix) vs resident (no offload)": {
+  "frames": [
+   124,
+   124
+  ],
+  "identical_frames": 0,
+  "psnr_mean": 19.556053243628387,
+  "psnr_min": 18.32685103090196,
+  "ssim_mean": 0.7603263320587776,
+  "ssim_min": 0.730921145154366,
+  "audio_samples": [
+   165600,
+   165600
+  ],
+  "audio_max_abs_diff": 0.08593932539224625,
+  "audio_snr_db": 12.87146645755067
+ }
+}

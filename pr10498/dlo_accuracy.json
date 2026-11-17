@@ -1,0 +1,53 @@
+{
+ "fix+DLO vs main+DLO": {
+  "frames": [
+   124,
+   124
+  ],
+  "identical_frames": 124,
+  "psnr_mean": Infinity,
+  "psnr_min": Infinity,
+  "ssim_mean": 1.0,
+  "ssim_min": 1.0,
+  "audio_samples": [
+   165600,
+   165600
+  ],
+  "audio_max_abs_diff": 0.03608892858028412,
+  "audio_snr_db": 20.935898549156228
+ },
+ "fix+DLO vs resident": {
+  "frames": [
+   124,
+   124
+  ],
+  "identical_frames": 0,
+  "psnr_mean": 19.556053243628387,
+  "psnr_min": 18.32685103090196,
+  "ssim_mean": 0.7603263320587776,
+  "ssim_min": 0.730921145154366,
+  "audio_samples": [
+   165600,
+   165600
+  ],
+  "audio_max_abs_diff": 0.08642064779996872,
+  "audio_snr_db": 12.865981626841279
+ },
+ "resident run1 vs run2": {
+  "frames": [
+   124,
+   124
+  ],
+  "identical_frames": 124,
+  "psnr_mean": Infinity,
+  "psnr_min": Infinity,
+  "ssim_mean": 1.0,
+  "ssim_min": 1.0,
+  "audio_samples": [
+   165600,
+   165600
+  ],
+  "audio_max_abs_diff": 0.059078723192214966,
+  "audio_snr_db": 19.170004508828548
+ }
+}

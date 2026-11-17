@@ -1,0 +1,15 @@
+trust-remote-code: true
+enforce-eager: true
+num-gpus: 1
+task-type: ref2va
+vae-use-tiling: true
+diffusion-attention-config:
+  default:
+    backend: FASTVIDEO_VSA
+    fastvideo_vsa_provider: triton
+default-sampling-params:
+  "0":
+    num_inference_steps: 8
+    guidance_scale: 1
+init-timeout: 3600
+stage-init-timeout: 3600

@@ -1,0 +1,19 @@
+trust-remote-code: true
+enforce-eager: true
+num-gpus: 1
+task-type: ref2va
+vae-use-tiling: true
+enable-distributed-layerwise-offload: true
+dlo-no-use-allgather: true
+diffusion-attention-config:
+  default:
+    backend: FASTVIDEO_VSA
+    fastvideo_vsa_provider: triton
+default-sampling-params:
+  "0":
+    num_inference_steps: 8
+    guidance_scale: 1
+init-timeout: 3600
+stage-init-timeout: 3600
+host-weight-runtime-mode: preferred
+host-weight-runtime-root: /tmp/jingyu-agent-chenweiqing_91047-hwr10441
